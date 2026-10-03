@@ -53,9 +53,8 @@ API-Key-Checker/
 │   ├── scheduler.py         # 定时验证调度器
 │   └── mcp_server.py        # MCP Server（SSE）
 ├── plugins/                 # 内置插件源码
-│   └── llm_api_key/
-│       ├── manifest.json
-│       └── plugin.py
+│   ├── llm_api_key/         # LLM 对话模型 API Key 验证
+│   └── api_service/         # 抓取/搜索/Agent 平台 API 验证
 ├── frontend/                # Vue 3 前端
 │   ├── src/
 │   │   ├── views/

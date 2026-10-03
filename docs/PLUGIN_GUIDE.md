@@ -228,26 +228,32 @@ print(result)
 
 ---
 
-## 内置插件：LLM API Key
+## 内置插件
 
-### 支持厂商与验证方式
+项目内置两个插件，随应用分发，位于 `<app>/plugins/` 下：
 
-| 厂商 | credential_type | 验证端点 | 验证方式 |
-|------|----------------|----------|----------|
-| OpenAI | `llm_api_key` | `GET /v1/models` | Bearer Token |
-| Anthropic | `llm_api_key` | `GET /v1/models` | `x-api-key` Header |
-| 字节豆包 | `llm_api_key` | `GET /v1/models` | Bearer Token（兼容 OpenAI） |
-| 阿里通义 | `llm_api_key` | `GET /v1/models` | Bearer Token（兼容 OpenAI） |
-| 百度文心 | `llm_api_key` | `POST /oauth/2.0/token` | API Key + Secret Key |
+### LLM API Key（`credential_type: llm_api_key`）
 
-### 厂商预设 Base URL
+验证 LLM 对话模型 API Key，支持 18 家厂商，采用协议驱动架构：
 
-```json
-{
-  "openai":    "https://api.openai.com/v1",
-  "anthropic": "https://api.anthropic.com/v1",
-  "doubao":    "https://ark.cn-beijing.volces.com/api/v3",
-  "tongyi":    "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  "wenxin":    "https://aip.baidubce.com"
-}
-```
+| 协议 | 验证方式 | 覆盖厂商 |
+|------|----------|----------|
+| openai_models | `GET {base}/models`，Bearer | OpenAI、DeepSeek、MiniMax、Moonshot、硅基流动、阿里百炼、华为 MaaS、字节豆包、阿里通义、各类 OpenAI 兼容中转 |
+| anthropic_models | `GET {base}/models`，`x-api-key` | Anthropic、各类 Anthropic 兼容中转 |
+| openai_chat | `POST {base}/chat/completions`（识别欠费） | NVIDIA NIM、智谱 GLM |
+| anthropic_chat | `POST {base}/v1/messages`（识别欠费） | 智谱 GLM (Anthropic) |
+| openrouter | `GET {base}/auth/key` | OpenRouter |
+| gemini | `GET {base}/models?key=` | Google Gemini |
+| wenxin | `POST {base}/oauth/2.0/token` | 百度文心 |
+
+余额查询（best-effort）：DeepSeek `/user/balance`、Moonshot `/users/me/balance`，负余额自动判定为「账户欠费」。
+
+### API 服务（`credential_type: api_service`）
+
+验证非 LLM 的第三方 API 服务 Key：
+
+| 服务 | 验证端点 | 验证方式 |
+|------|----------|----------|
+| Firecrawl | `POST /v1/scrape` | Bearer Token（网页抓取） |
+| Tavily | `POST /search` | Bearer Token（搜索） |
+| 字节扣子 Coze | `GET /v1/workspaces` | Bearer Token（Agent 平台） |
