@@ -137,6 +137,13 @@ def call_verify(module: Any, data: dict) -> VerifyResult:
         result = module.verify(data)
         if isinstance(result, VerifyResult):
             return result
+        # 兼容插件自定义的 VerifyResult dataclass（鸭子类型）
+        if hasattr(result, "status"):
+            return VerifyResult(
+                status=getattr(result, "status", "error"),
+                message=getattr(result, "message", ""),
+                account_info=getattr(result, "account_info", None),
+            )
         # 兼容直接返回 dict 的插件
         if isinstance(result, dict):
             return VerifyResult(**result)

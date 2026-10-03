@@ -1,0 +1,39 @@
+{
+  "name": "LLM API Key",
+  "version": "1.0.0",
+  "credential_type": "llm_api_key",
+  "author": "Credential Vault",
+  "description": "验证 LLM API Key 有效性，支持 OpenAI、Anthropic、字节豆包、阿里通义、百度文心",
+  "icon": "🤖",
+  "fields": [
+    {
+      "key": "vendor",
+      "label": "厂商",
+      "type": "select",
+      "required": true,
+      "options": ["openai", "anthropic", "doubao", "tongyi", "wenxin"],
+      "default": "openai"
+    },
+    {
+      "key": "base_url",
+      "label": "Base URL",
+      "type": "url",
+      "required": false,
+      "placeholder": "留空使用厂商默认地址"
+    },
+    {
+      "key": "api_key",
+      "label": "API Key",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "sk-..."
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}
