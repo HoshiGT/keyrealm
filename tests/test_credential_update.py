@@ -96,6 +96,43 @@ def test_update_credential_allows_changing_secret():
         f"新密钥未生效: {full['data'].get('api_key')!r}"
 
 
+def test_update_credential_group_id_none_ungroups():
+    """显式传 group_id=None 应取消分组（而非被当作“不修改”）"""
+    group = db.create_group("temp-group", "")
+    cred = api.create_credential(
+        name="grouped-secret", credential_type="llm_api_key",
+        data={"vendor": "openai", "api_key": "sk-g", "notes": ""},
+        group_id=group["id"], auto_verify=False,
+    )
+    assert db.get_credential(cred["id"])["group_id"] == group["id"]
+
+    # 模拟前端清空分组：group_id 传 None
+    api.update_credential(cred["id"], group_id=None)
+
+    assert db.get_credential(cred["id"])["group_id"] is None, \
+        "group_id=None 未取消分组"
+
+    db.delete_credential(cred["id"])
+    db.delete_group(group["id"])
+
+
+def test_update_credential_group_id_omitted_keeps_group():
+    """省略 group_id（哨兵默认值）应保持原分组不变"""
+    group = db.create_group("temp-group-2", "")
+    cred = api.create_credential(
+        name="keep-group", credential_type="llm_api_key",
+        data={"vendor": "openai", "api_key": "sk-k", "notes": ""},
+        group_id=group["id"], auto_verify=False,
+    )
+    # 只改 name，不传 group_id
+    api.update_credential(cred["id"], name="renamed")
+    assert db.get_credential(cred["id"])["group_id"] == group["id"], \
+        "省略 group_id 时不应修改分组"
+
+    db.delete_credential(cred["id"])
+    db.delete_group(group["id"])
+
+
 if __name__ == "__main__":
     setup_module()
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

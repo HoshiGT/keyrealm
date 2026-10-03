@@ -30,6 +30,9 @@ from .crypto import (
 _master_key: Optional[bytes] = None
 _key_lock = threading.Lock()
 
+# 哨兵：区分“未提供该参数”与“显式传 None（如清除分组）”
+_UNSET = object()
+
 # pywebview window 引用（由 main.py 注入）
 _window = None
 
@@ -232,7 +235,7 @@ def create_credential(
 def update_credential(
     credential_id: int,
     name: Optional[str] = None,
-    group_id: Optional[int] = None,
+    group_id: Optional[int] = _UNSET,
     data: Optional[dict] = None,
     auto_verify: bool = False,
 ) -> dict:
@@ -243,7 +246,8 @@ def update_credential(
     kwargs: dict[str, Any] = {}
     if name is not None:
         kwargs["name"] = name
-    if group_id is not None:
+    # 显式传 None = 取消分组；省略（_UNSET）= 不修改分组
+    if group_id is not _UNSET:
         kwargs["group_id"] = group_id
     if data is not None:
         cred = db.get_credential(credential_id)
