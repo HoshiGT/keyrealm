@@ -37,22 +37,70 @@ cd frontend && npm install && npm run build && cd ..
 python main.py
 ```
 
+## 打包为可执行文件
+
+打包为单文件可执行程序（Windows 为 `CredentialVault.exe`），输出到 `release/`。
+**PyInstaller 不能跨平台编译，要得到 Windows exe 必须在 Windows 上执行构建。**
+
+```bash
+# 1) 安装打包工具（在应用所用 Python 环境中）
+pip install pyinstaller
+
+# 2) 构建前端 + 打包（一条命令）
+python scripts/build.py --frontend
+
+# 常用选项
+#   --frontend            先执行 npm run build 再打包
+#   --console             保留控制台窗口（调试用）
+#   --smoke               构建后运行 --print-paths 校验冻结路径（隐含 --console）
+```
+
+构建完成后 `release/` 结构：
+
+```
+release/
+├── CredentialVault.exe    # 单文件可执行程序（后端代码 + frontend/dist 已内置）
+├── plugins/               # 外部可改插件目录（不进 exe，可直接编辑，改完重启生效）
+│   ├── llm_api_key/
+│   └── api_service/
+└── data/                  # 首次运行时自动创建（数据库、已装插件、主密码校验）
+```
+
+打包边界：
+
+| 内容 | 是否进 exe | 说明 |
+|------|-----------|------|
+| 后端代码、`frontend/dist` | ✅ 内置 | 只读资源，运行时从临时解压目录读取 |
+| `plugins/` | ❌ 外部 | 用户可改，放 exe 同级；启动时引导复制进 `data/installed_plugins/` |
+| `data/` | ❌ 外部 | 运行时可写，放 exe 同级，保证数据持久化 |
+
+`release/` 是自包含、可便携分发的目录，且**不被 git 追踪**（`CredentialVault.spec` 与
+`scripts/build.py` 作为构建配置保留在版本库中）。
+
+> Windows 运行前提：需已安装 WebView2 Runtime（Windows 10/11 通常已内置）。
+
+
 ## 项目结构
 
 ```
 API-Key-Checker/
 ├── main.py                  # 应用入口
 ├── requirements.txt
+├── CredentialVault.spec     # PyInstaller 打包规格
 ├── backend/
 │   ├── api.py               # pywebview JS-API 桥接层
 │   ├── crypto.py            # AES-256-GCM 加密/解密
 │   ├── database.py          # SQLite 数据访问层
 │   ├── models.py            # 数据模型（Pydantic）
+│   ├── paths.py             # 冻结感知路径解析（打包/开发统一）
 │   ├── plugin_base.py       # 插件接口定义
 │   ├── plugin_manager.py    # 插件安装/加载/管理
 │   ├── scheduler.py         # 定时验证调度器
+│   ├── tray.py              # 系统托盘
 │   └── mcp_server.py        # MCP Server（SSE）
-├── plugins/                 # 内置插件源码
+├── scripts/
+│   └── build.py             # 打包构建脚本（输出到 release/）
+├── plugins/                 # 内置插件源码（打包时作为外部目录，不进 exe）
 │   ├── llm_api_key/         # LLM 对话模型 API Key 验证
 │   └── api_service/         # 抓取/搜索/Agent 平台 API 验证
 ├── frontend/                # Vue 3 前端
@@ -61,6 +109,7 @@ API-Key-Checker/
 │   │   ├── components/
 │   │   └── stores/
 │   └── vite.config.js
+├── release/                 # 打包产物（gitignored，构建时生成）
 └── docs/                    # 项目文档
     ├── ARCHITECTURE.md
     ├── PLUGIN_GUIDE.md

@@ -16,6 +16,7 @@ if str(BASE_DIR) not in sys.path:
 import webview  # pywebview
 
 from backend import api, database as db, mcp_server, plugin_manager, scheduler, tray
+from backend.paths import app_dir, is_frozen, resource_dir
 
 
 class VaultApi:
@@ -157,12 +158,16 @@ _quitting = False
 
 
 def _get_frontend_path() -> str:
-    """返回前端 dist/index.html 路径"""
-    dist = BASE_DIR / "frontend" / "dist" / "index.html"
+    """返回前端 dist/index.html 路径。
+
+    frontend/dist 随包分发（只读），冻结后从 _MEIPASS 取；开发时从项目根取。
+    """
+    root = resource_dir()
+    dist = root / "frontend" / "dist" / "index.html"
     if dist.exists():
         return str(dist)
     # 开发模式：Vite dev server
-    return str(BASE_DIR / "frontend" / "index.html")
+    return str(root / "frontend" / "index.html")
 
 
 def _on_closing():
@@ -247,4 +252,15 @@ def main():
 
 
 if __name__ == "__main__":
+    # 调试/构建校验：打印冻结后解析到的各关键路径后退出（不创建窗口）。
+    # 用于确认打包产物中 frontend/dist 随包、data/plugins 落在 exe 同级。
+    if "--print-paths" in sys.argv:
+        print(f"frozen           : {is_frozen()}")
+        print(f"resource_dir     : {resource_dir()}")
+        print(f"app_dir          : {app_dir()}")
+        print(f"frontend_index   : {_get_frontend_path()}")
+        print(f"db_path          : {db.DB_PATH}")
+        print(f"builtin_plugins  : {plugin_manager.BUILTIN_PLUGINS_DIR}")
+        print(f"installed_plugins: {plugin_manager.PLUGINS_DIR}")
+        sys.exit(0)
     main()

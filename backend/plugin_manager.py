@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import database as db
+from .paths import app_dir
 from .plugin_base import (
     PluginManifest,
     VerifyResult,
@@ -21,8 +22,10 @@ from .plugin_base import (
     load_plugin_module,
 )
 
-# 已安装插件目录
-BASE_DIR = Path(__file__).parent.parent
+# 应用根目录：开发时=项目根；冻结后=exe 同级目录
+# plugins/（内置插件，用户可改）与 data/installed_plugins/（运行时安装）都在此目录下，
+# 均不打包进 exe，随 exe 同级以外部目录形式提供。
+BASE_DIR = app_dir()
 PLUGINS_DIR = BASE_DIR / "data" / "installed_plugins"
 BUILTIN_PLUGINS_DIR = BASE_DIR / "plugins"
 

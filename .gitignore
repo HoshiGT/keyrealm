@@ -9,6 +9,9 @@ venv/
 .venv/
 env/
 
+# 打包产物（PyInstaller 输出，不入库；CredentialVault.spec 与 scripts/build.py 是构建配置，保留追踪）
+release/
+
 # Node / Frontend
 frontend/node_modules/
 frontend/dist/

@@ -1,6 +1,7 @@
 """
 SQLite 数据访问层
-数据库位置：./data/credentials.db（项目目录内）
+数据库位置：<app_dir>/data/credentials.db
+（开发时 app_dir=项目根；打包冻结后 app_dir=exe 同级目录，保证可写持久化）
 """
 from __future__ import annotations
 
@@ -9,11 +10,12 @@ import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional, Union
 
-# 项目根目录（main.py 所在目录）
-BASE_DIR = Path(__file__).parent.parent
+from .paths import app_dir
+
+# 应用根目录：开发时=项目根；冻结后=exe 同级目录（保证可写、可持久化）
+BASE_DIR = app_dir()
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "credentials.db"
 
