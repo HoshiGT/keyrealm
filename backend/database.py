@@ -1,0 +1,627 @@
+"""
+SQLite 数据访问层
+数据库位置：./data/credentials.db（项目目录内）
+"""
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+# 项目根目录（main.py 所在目录）
+BASE_DIR = Path(__file__).parent.parent
+DATA_DIR = BASE_DIR / "data"
+DB_PATH = DATA_DIR / "credentials.db"
+
+SCHEMA_VERSION = 1
+
+_lock = threading.Lock()
+_conn: Optional[sqlite3.Connection] = None
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def get_conn() -> sqlite3.Connection:
+    global _conn
+    if _conn is None:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        _conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        _conn.row_factory = sqlite3.Row
+        _conn.execute("PRAGMA journal_mode=WAL")
+        _conn.execute("PRAGMA foreign_keys=ON")
+    return _conn
+
+
+def init_db():
+    """初始化数据库表结构"""
+    conn = get_conn()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key         TEXT PRIMARY KEY,
+            value       TEXT NOT NULL,
+            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS groups (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL UNIQUE,
+            description TEXT DEFAULT '',
+            color       TEXT DEFAULT '#409EFF',
+            sort_order  INTEGER DEFAULT 0,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS credentials (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            name             TEXT NOT NULL,
+            credential_type  TEXT NOT NULL,
+            group_id         INTEGER,
+            data_encrypted   TEXT NOT NULL,
+            data_plain       TEXT DEFAULT '{}',
+            status           TEXT DEFAULT 'unknown',
+            status_detail    TEXT DEFAULT '{}',
+            last_verified_at TIMESTAMP,
+            created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_credentials_type   ON credentials(credential_type);
+        CREATE INDEX IF NOT EXISTS idx_credentials_group  ON credentials(group_id);
+        CREATE INDEX IF NOT EXISTS idx_credentials_status ON credentials(status);
+
+        CREATE TABLE IF NOT EXISTS verification_history (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            credential_id  INTEGER NOT NULL,
+            status         TEXT NOT NULL,
+            result_data    TEXT DEFAULT '{}',
+            error_message  TEXT DEFAULT '',
+            trigger_type   TEXT DEFAULT 'manual',
+            duration_ms    INTEGER DEFAULT 0,
+            verified_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (credential_id) REFERENCES credentials(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_vhistory_credential ON verification_history(credential_id);
+
+        CREATE TABLE IF NOT EXISTS plugins (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT NOT NULL,
+            version         TEXT NOT NULL,
+            author          TEXT DEFAULT '',
+            description     TEXT DEFAULT '',
+            credential_type TEXT NOT NULL UNIQUE,
+            icon            TEXT DEFAULT '🔑',
+            fields_schema   TEXT NOT NULL,
+            plugin_path     TEXT NOT NULL,
+            is_builtin      INTEGER DEFAULT 0,
+            enabled         INTEGER DEFAULT 1,
+            installed_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS mcp_permissions (
+            tool_name   TEXT PRIMARY KEY,
+            enabled     INTEGER DEFAULT 0,
+            description TEXT DEFAULT '',
+            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS mcp_tokens (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT NOT NULL,
+            token_hash    TEXT NOT NULL UNIQUE,
+            token_prefix  TEXT NOT NULL,
+            tools_allowed TEXT DEFAULT '[]',
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_used_at  TIMESTAMP,
+            expires_at    TIMESTAMP,
+            revoked       INTEGER DEFAULT 0,
+            revoked_at    TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mcp_tokens_hash ON mcp_tokens(token_hash);
+
+        CREATE TABLE IF NOT EXISTS schedules (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT NOT NULL,
+            trigger_type  TEXT NOT NULL,
+            trigger_args  TEXT NOT NULL,
+            target_scope  TEXT DEFAULT 'all',
+            target_id     INTEGER,
+            enabled       INTEGER DEFAULT 1,
+            last_run_at   TIMESTAMP,
+            next_run_at   TIMESTAMP,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    conn.commit()
+    _seed_mcp_permissions(conn)
+    _set_schema_version(conn)
+
+
+def _seed_mcp_permissions(conn: sqlite3.Connection):
+    defaults = [
+        ("vault_list_credentials",  1, "列出凭据（不含敏感字段明文）"),
+        ("vault_get_credential",    0, "获取单条凭据详情（掩码）"),
+        ("vault_create_credential", 0, "创建凭据"),
+        ("vault_update_credential", 0, "修改凭据"),
+        ("vault_delete_credential", 0, "删除凭据"),
+        ("vault_verify_credential", 1, "触发验证"),
+        ("vault_batch_verify",      0, "批量验证"),
+        ("vault_list_groups",       1, "列出分组"),
+        ("vault_create_group",      0, "创建分组"),
+        ("vault_list_plugins",      1, "列出插件"),
+        ("vault_install_plugin",    0, "安装插件"),
+        ("vault_get_secret",        0, "获取解密后的敏感字段（高危）"),
+    ]
+    for tool, enabled, desc in defaults:
+        conn.execute(
+            "INSERT OR IGNORE INTO mcp_permissions (tool_name, enabled, description) VALUES (?,?,?)",
+            (tool, enabled, desc),
+        )
+    conn.commit()
+
+
+def _set_schema_version(conn: sqlite3.Connection):
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('schema_version', ?, ?)",
+        (str(SCHEMA_VERSION), _now()),
+    )
+    conn.commit()
+
+
+# ── settings ──────────────────────────────────────────────
+
+def get_setting(key: str, default: str = "") -> str:
+    with _lock:
+        row = get_conn().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str):
+    with _lock:
+        get_conn().execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?,?,?)",
+            (key, value, _now()),
+        )
+        get_conn().commit()
+
+
+# ── groups ────────────────────────────────────────────────
+
+def list_groups() -> list[dict]:
+    with _lock:
+        rows = get_conn().execute("""
+            SELECT g.*, COUNT(c.id) as credential_count
+            FROM groups g
+            LEFT JOIN credentials c ON c.group_id = g.id
+            GROUP BY g.id
+            ORDER BY g.sort_order, g.name
+        """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def create_group(name: str, description: str = "", color: str = "#409EFF") -> dict:
+    with _lock:
+        conn = get_conn()
+        cur = conn.execute(
+            "INSERT INTO groups (name, description, color, created_at) VALUES (?,?,?,?)",
+            (name, description, color, _now()),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM groups WHERE id=?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def update_group(group_id: int, **kwargs) -> Optional[dict]:
+    allowed = {"name", "description", "color", "sort_order"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not fields:
+        return None
+    sets = ", ".join(f"{k}=?" for k in fields)
+    vals = list(fields.values()) + [group_id]
+    with _lock:
+        conn = get_conn()
+        conn.execute(f"UPDATE groups SET {sets} WHERE id=?", vals)
+        conn.commit()
+        row = conn.execute("SELECT * FROM groups WHERE id=?", (group_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def delete_group(group_id: int):
+    with _lock:
+        conn = get_conn()
+        conn.execute("DELETE FROM groups WHERE id=?", (group_id,))
+        conn.commit()
+
+
+# ── credentials ───────────────────────────────────────────
+
+def list_credentials(
+    group_id: Optional[int] = None,
+    credential_type: Optional[str] = None,
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+) -> list[dict]:
+    sql = """
+        SELECT c.*, g.name as group_name
+        FROM credentials c
+        LEFT JOIN groups g ON g.id = c.group_id
+        WHERE 1=1
+    """
+    params: list = []
+    if group_id is not None:
+        sql += " AND c.group_id=?"
+        params.append(group_id)
+    if credential_type:
+        sql += " AND c.credential_type=?"
+        params.append(credential_type)
+    if status:
+        sql += " AND c.status=?"
+        params.append(status)
+    if search:
+        sql += " AND (c.name LIKE ? OR c.data_plain LIKE ?)"
+        params += [f"%{search}%", f"%{search}%"]
+    sql += " ORDER BY c.updated_at DESC"
+    with _lock:
+        rows = get_conn().execute(sql, params).fetchall()
+    results = []
+    for r in rows:
+        d = dict(r)
+        d["data_plain"] = json.loads(d.get("data_plain") or "{}")
+        d["status_detail"] = json.loads(d.get("status_detail") or "{}")
+        results.append(d)
+    return results
+
+
+def get_credential(cred_id: int) -> Optional[dict]:
+    with _lock:
+        row = get_conn().execute("""
+            SELECT c.*, g.name as group_name
+            FROM credentials c
+            LEFT JOIN groups g ON g.id = c.group_id
+            WHERE c.id=?
+        """, (cred_id,)).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["data_plain"] = json.loads(d.get("data_plain") or "{}")
+    d["status_detail"] = json.loads(d.get("status_detail") or "{}")
+    return d
+
+
+def create_credential(
+    name: str,
+    credential_type: str,
+    data_encrypted: str,
+    data_plain: dict,
+    group_id: Optional[int] = None,
+) -> dict:
+    with _lock:
+        conn = get_conn()
+        cur = conn.execute(
+            """INSERT INTO credentials
+               (name, credential_type, group_id, data_encrypted, data_plain, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (name, credential_type, group_id, data_encrypted,
+             json.dumps(data_plain, ensure_ascii=False), _now(), _now()),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM credentials WHERE id=?", (cur.lastrowid,)).fetchone()
+    d = dict(row)
+    d["data_plain"] = json.loads(d.get("data_plain") or "{}")
+    return d
+
+
+def update_credential(cred_id: int, **kwargs) -> Optional[dict]:
+    allowed = {"name", "group_id", "data_encrypted", "data_plain", "status", "status_detail", "last_verified_at"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if "data_plain" in fields and isinstance(fields["data_plain"], dict):
+        fields["data_plain"] = json.dumps(fields["data_plain"], ensure_ascii=False)
+    if "status_detail" in fields and isinstance(fields["status_detail"], dict):
+        fields["status_detail"] = json.dumps(fields["status_detail"], ensure_ascii=False)
+    if not fields:
+        return None
+    fields["updated_at"] = _now()
+    sets = ", ".join(f"{k}=?" for k in fields)
+    vals = list(fields.values()) + [cred_id]
+    with _lock:
+        conn = get_conn()
+        conn.execute(f"UPDATE credentials SET {sets} WHERE id=?", vals)
+        conn.commit()
+    return get_credential(cred_id)
+
+
+def delete_credential(cred_id: int):
+    with _lock:
+        conn = get_conn()
+        conn.execute("DELETE FROM credentials WHERE id=?", (cred_id,))
+        conn.commit()
+
+
+def get_dashboard_stats() -> dict:
+    with _lock:
+        conn = get_conn()
+        rows = conn.execute(
+            "SELECT status, COUNT(*) as cnt FROM credentials GROUP BY status"
+        ).fetchall()
+        recent = conn.execute("""
+            SELECT vh.*, c.name as credential_name
+            FROM verification_history vh
+            JOIN credentials c ON c.id = vh.credential_id
+            ORDER BY vh.verified_at DESC LIMIT 10
+        """).fetchall()
+    counts = {r["status"]: r["cnt"] for r in rows}
+    total = sum(counts.values())
+    return {
+        "total": total,
+        "valid": counts.get("valid", 0),
+        "invalid": counts.get("invalid", 0),
+        "unknown": counts.get("unknown", 0),
+        "error": counts.get("error", 0),
+        "recent_activity": [dict(r) for r in recent],
+    }
+
+
+# ── verification_history ──────────────────────────────────
+
+def add_verification_record(
+    credential_id: int,
+    status: str,
+    result_data: dict = None,
+    error_message: str = "",
+    trigger_type: str = "manual",
+    duration_ms: int = 0,
+):
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            """INSERT INTO verification_history
+               (credential_id, status, result_data, error_message, trigger_type, duration_ms, verified_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (credential_id, status,
+             json.dumps(result_data or {}, ensure_ascii=False),
+             error_message, trigger_type, duration_ms, _now()),
+        )
+        conn.commit()
+
+
+def get_verification_history(credential_id: int, limit: int = 20) -> list[dict]:
+    with _lock:
+        rows = get_conn().execute(
+            "SELECT * FROM verification_history WHERE credential_id=? ORDER BY verified_at DESC LIMIT ?",
+            (credential_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── plugins ───────────────────────────────────────────────
+
+def list_plugins(enabled_only: bool = False) -> list[dict]:
+    sql = "SELECT * FROM plugins"
+    if enabled_only:
+        sql += " WHERE enabled=1"
+    sql += " ORDER BY is_builtin DESC, name"
+    with _lock:
+        rows = get_conn().execute(sql).fetchall()
+    results = []
+    for r in rows:
+        d = dict(r)
+        d["fields_schema"] = json.loads(d.get("fields_schema") or "[]")
+        results.append(d)
+    return results
+
+
+def get_plugin_by_type(credential_type: str) -> Optional[dict]:
+    with _lock:
+        row = get_conn().execute(
+            "SELECT * FROM plugins WHERE credential_type=? AND enabled=1",
+            (credential_type,),
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["fields_schema"] = json.loads(d.get("fields_schema") or "[]")
+    return d
+
+
+def upsert_plugin(
+    name: str, version: str, credential_type: str, fields_schema: list,
+    plugin_path: str, author: str = "", description: str = "",
+    icon: str = "🔑", is_builtin: bool = False,
+):
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            """INSERT INTO plugins (name, version, author, description, credential_type,
+                                    icon, fields_schema, plugin_path, is_builtin, enabled, installed_at)
+               VALUES (?,?,?,?,?,?,?,?,?,1,?)
+               ON CONFLICT(credential_type) DO UPDATE SET
+                 name=excluded.name, version=excluded.version,
+                 author=excluded.author, description=excluded.description,
+                 icon=excluded.icon, fields_schema=excluded.fields_schema,
+                 plugin_path=excluded.plugin_path""",
+            (name, version, author, description, credential_type, icon,
+             json.dumps(fields_schema, ensure_ascii=False), plugin_path,
+             int(is_builtin), _now()),
+        )
+        conn.commit()
+
+
+def set_plugin_enabled(credential_type: str, enabled: bool):
+    with _lock:
+        conn = get_conn()
+        conn.execute("UPDATE plugins SET enabled=? WHERE credential_type=?",
+                     (int(enabled), credential_type))
+        conn.commit()
+
+
+def delete_plugin_record(credential_type: str):
+    with _lock:
+        conn = get_conn()
+        conn.execute("DELETE FROM plugins WHERE credential_type=?", (credential_type,))
+        conn.commit()
+
+
+# ── mcp_permissions ───────────────────────────────────────
+
+def list_mcp_permissions() -> list[dict]:
+    with _lock:
+        rows = get_conn().execute("SELECT * FROM mcp_permissions ORDER BY tool_name").fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_mcp_permission(tool_name: str, enabled: bool):
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "UPDATE mcp_permissions SET enabled=?, updated_at=? WHERE tool_name=?",
+            (int(enabled), _now(), tool_name),
+        )
+        conn.commit()
+
+
+def is_tool_enabled(tool_name: str) -> bool:
+    with _lock:
+        row = get_conn().execute(
+            "SELECT enabled FROM mcp_permissions WHERE tool_name=?", (tool_name,)
+        ).fetchone()
+    return bool(row and row["enabled"])
+
+
+# ── mcp_tokens ────────────────────────────────────────────
+
+def list_mcp_tokens() -> list[dict]:
+    with _lock:
+        rows = get_conn().execute(
+            "SELECT * FROM mcp_tokens WHERE revoked=0 ORDER BY created_at DESC"
+        ).fetchall()
+    results = []
+    for r in rows:
+        d = dict(r)
+        d["tools_allowed"] = json.loads(d.get("tools_allowed") or "[]")
+        results.append(d)
+    return results
+
+
+def create_mcp_token(
+    name: str, token_hash: str, token_prefix: str,
+    tools_allowed: list[str] = None, expires_at: Optional[str] = None,
+) -> dict:
+    with _lock:
+        conn = get_conn()
+        cur = conn.execute(
+            """INSERT INTO mcp_tokens (name, token_hash, token_prefix, tools_allowed, created_at, expires_at)
+               VALUES (?,?,?,?,?,?)""",
+            (name, token_hash, token_prefix,
+             json.dumps(tools_allowed or [], ensure_ascii=False), _now(), expires_at),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM mcp_tokens WHERE id=?", (cur.lastrowid,)).fetchone()
+    d = dict(row)
+    d["tools_allowed"] = json.loads(d.get("tools_allowed") or "[]")
+    return d
+
+
+def get_token_by_hash(token_hash: str) -> Optional[dict]:
+    with _lock:
+        row = get_conn().execute(
+            "SELECT * FROM mcp_tokens WHERE token_hash=? AND revoked=0", (token_hash,)
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["tools_allowed"] = json.loads(d.get("tools_allowed") or "[]")
+    return d
+
+
+def touch_token(token_hash: str):
+    with _lock:
+        conn = get_conn()
+        conn.execute("UPDATE mcp_tokens SET last_used_at=? WHERE token_hash=?", (_now(), token_hash))
+        conn.commit()
+
+
+def revoke_mcp_token(token_id: int):
+    with _lock:
+        conn = get_conn()
+        conn.execute("UPDATE mcp_tokens SET revoked=1, revoked_at=? WHERE id=?", (_now(), token_id))
+        conn.commit()
+
+
+def update_token_scope(token_id: int, tools_allowed: list[str]):
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "UPDATE mcp_tokens SET tools_allowed=? WHERE id=?",
+            (json.dumps(tools_allowed, ensure_ascii=False), token_id),
+        )
+        conn.commit()
+
+
+def count_active_tokens() -> int:
+    with _lock:
+        row = get_conn().execute(
+            "SELECT COUNT(*) as cnt FROM mcp_tokens WHERE revoked=0 AND (expires_at IS NULL OR expires_at > ?)",
+            (_now(),),
+        ).fetchone()
+    return row["cnt"] if row else 0
+
+
+# ── schedules ─────────────────────────────────────────────
+
+def list_schedules() -> list[dict]:
+    with _lock:
+        rows = get_conn().execute("SELECT * FROM schedules ORDER BY created_at").fetchall()
+    results = []
+    for r in rows:
+        d = dict(r)
+        d["trigger_args"] = json.loads(d.get("trigger_args") or "{}")
+        results.append(d)
+    return results
+
+
+def create_schedule(
+    name: str, trigger_type: str, trigger_args: dict,
+    target_scope: str = "all", target_id: Optional[int] = None,
+) -> dict:
+    with _lock:
+        conn = get_conn()
+        cur = conn.execute(
+            """INSERT INTO schedules (name, trigger_type, trigger_args, target_scope, target_id, created_at)
+               VALUES (?,?,?,?,?,?)""",
+            (name, trigger_type, json.dumps(trigger_args), target_scope, target_id, _now()),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM schedules WHERE id=?", (cur.lastrowid,)).fetchone()
+    d = dict(row)
+    d["trigger_args"] = json.loads(d.get("trigger_args") or "{}")
+    return d
+
+
+def update_schedule(schedule_id: int, **kwargs):
+    allowed = {"name", "trigger_type", "trigger_args", "target_scope", "target_id", "enabled", "last_run_at", "next_run_at"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if "trigger_args" in fields and isinstance(fields["trigger_args"], dict):
+        fields["trigger_args"] = json.dumps(fields["trigger_args"])
+    if not fields:
+        return
+    sets = ", ".join(f"{k}=?" for k in fields)
+    vals = list(fields.values()) + [schedule_id]
+    with _lock:
+        conn = get_conn()
+        conn.execute(f"UPDATE schedules SET {sets} WHERE id=?", vals)
+        conn.commit()
+
+
+def delete_schedule(schedule_id: int):
+    with _lock:
+        conn = get_conn()
+        conn.execute("DELETE FROM schedules WHERE id=?", (schedule_id,))
+        conn.commit()
