@@ -59,11 +59,12 @@ python scripts/build.py --frontend
 
 ```
 release/
-├── CredentialVault.exe    # 单文件可执行程序（后端代码 + frontend/dist 已内置）
-├── plugins/               # 外部可改插件目录（不进 exe，可直接编辑，改完重启生效）
+├── CredentialVault.exe        # 单文件可执行程序（后端代码 + frontend/dist 已内置）
+├── credential-vault-src.zip   # 源码归档（由 scripts/pack_source.py 生成，见下）
+├── plugins/                   # 外部可改插件目录（不进 exe，可直接编辑，改完重启生效）
 │   ├── llm_api_key/
 │   └── api_service/
-└── data/                  # 首次运行时自动创建（数据库、已装插件、主密码校验）
+└── data/                      # 首次运行时自动创建（数据库、已装插件、主密码校验）
 ```
 
 打包边界：
@@ -75,9 +76,24 @@ release/
 | `data/` | ❌ 外部 | 运行时可写，放 exe 同级，保证数据持久化 |
 
 `release/` 是自包含、可便携分发的目录，且**不被 git 追踪**（`CredentialVault.spec` 与
-`scripts/build.py` 作为构建配置保留在版本库中）。
+`scripts/*.py` 作为构建配置保留在版本库中）。
 
 > Windows 运行前提：需已安装 WebView2 Runtime（Windows 10/11 通常已内置）。
+
+### 打包源码归档
+
+需要把源码本身打成压缩包（分发、备份、迁移到 Windows 构建机）时，用：
+
+```bash
+python scripts/pack_source.py     # 生成/覆盖 release/credential-vault-src.zip
+```
+
+- 打包范围 = **当前工作树源码**（git 已追踪文件 + 未被 `.gitignore` 忽略的新增文件），
+  改完源码直接跑即可，无需先 commit。
+- 自动排除 `.venv` / `node_modules` / `data/`（含真实密钥）/ `release` / `dist` /
+  `build` / `frontend/dist` / `__pycache__`，不含符号链接。
+- 内置安全校验：一旦发现 `real_keys` / `*.db` / `master.key` 会被打包即中止。
+- 纯 Python `zipfile` 实现，跨平台（Windows 上无需系统 `zip` 命令）。
 
 
 ## 项目结构
@@ -99,7 +115,8 @@ API-Key-Checker/
 │   ├── tray.py              # 系统托盘
 │   └── mcp_server.py        # MCP Server（SSE）
 ├── scripts/
-│   └── build.py             # 打包构建脚本（输出到 release/）
+│   ├── build.py             # 可执行文件打包脚本（输出到 release/）
+│   └── pack_source.py       # 源码归档脚本（生成 release/credential-vault-src.zip）
 ├── plugins/                 # 内置插件源码（打包时作为外部目录，不进 exe）
 │   ├── llm_api_key/         # LLM 对话模型 API Key 验证
 │   └── api_service/         # 抓取/搜索/Agent 平台 API 验证

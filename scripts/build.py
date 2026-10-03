@@ -105,21 +105,25 @@ def assemble_release() -> Path:
     if not built.exists():
         sys.exit(f"未找到构建产物：{built}")
 
-    # 清空并重建 release/，保证每次都是干净结果
-    if RELEASE.exists():
-        shutil.rmtree(RELEASE)
-    RELEASE.mkdir(parents=True)
+    # 不整体清空 release/：保留其中已存在的 data/（运行时数据）与
+    # credential-vault-src.zip（源码归档）等无关文件，只替换本脚本负责的 exe 与 plugins/。
+    RELEASE.mkdir(parents=True, exist_ok=True)
 
     exe_dest = RELEASE / EXE_NAME
+    if exe_dest.exists():
+        exe_dest.unlink()
     shutil.copy2(built, exe_dest)
 
     # 外部可改插件目录：复制源码形式的 plugins/（manifest.json + plugin.py）
     # 排除 __pycache__/*.pyc，避免把构建机的字节码带进分发包
     src_plugins = ROOT / "plugins"
+    dest_plugins = RELEASE / "plugins"
+    if dest_plugins.exists():
+        shutil.rmtree(dest_plugins)
     if src_plugins.exists():
         shutil.copytree(
             src_plugins,
-            RELEASE / "plugins",
+            dest_plugins,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
     else:
