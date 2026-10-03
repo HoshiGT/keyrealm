@@ -1,0 +1,39 @@
+{
+  "name": "API 服务",
+  "version": "1.0.0",
+  "credential_type": "api_service",
+  "author": "Credential Vault",
+  "description": "验证第三方 API 服务 Key，支持 Firecrawl（网页抓取）、Tavily（搜索）、字节扣子 Coze（Agent 平台）",
+  "icon": "🔌",
+  "fields": [
+    {
+      "key": "vendor",
+      "label": "服务",
+      "type": "select",
+      "required": true,
+      "options": ["firecrawl", "tavily", "coze"],
+      "default": "firecrawl"
+    },
+    {
+      "key": "base_url",
+      "label": "Base URL",
+      "type": "url",
+      "required": false,
+      "placeholder": "留空使用默认地址"
+    },
+    {
+      "key": "api_key",
+      "label": "API Key",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "fc-... / tvly-... / sat_..."
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

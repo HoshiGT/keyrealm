@@ -1,8 +1,8 @@
-"""LLM / 抓取 / 搜索类 API Key 验证插件（协议驱动）。
+"""LLM 对话模型 API Key 验证插件（协议驱动）。
 
 支持 OpenAI、Anthropic、DeepSeek、OpenRouter、Gemini、MiniMax、NVIDIA NIM、
-Moonshot、硅基流动、阿里百炼、华为 MaaS、字节扣子、智谱 GLM、Firecrawl、
-Tavily、字节豆包、阿里通义、百度文心，以及各类 OpenAI/Anthropic 兼容中转。
+Moonshot、硅基流动、阿里百炼、华为 MaaS、智谱 GLM、字节豆包、阿里通义、
+百度文心，以及各类 OpenAI/Anthropic 兼容中转。
 
 插件完全独立，不导入 backend 包，可脱离主程序单独运行。
 """
@@ -57,9 +57,6 @@ _INSUFFICIENT_BALANCE_KEYWORDS = (
 #   anthropic_chat      POST {base}/v1/messages（识别欠费）
 #   openrouter          GET {base}/auth/key（返回 key 信息与用量）
 #   gemini              GET {base}/models?key=
-#   firecrawl           POST {base}/v1/scrape
-#   tavily              POST {base}/search
-#   coze                GET {base}/v1/workspaces
 #   wenxin              POST {base}/oauth/2.0/token
 VENDOR_CONFIGS = {
     "openai": {
@@ -122,11 +119,6 @@ VENDOR_CONFIGS = {
         "default_base_url": "https://api-ap-southeast-1.modelarts-maas.com/v2",
         "protocol": "openai_models",
     },
-    "coze": {
-        "name": "字节扣子 Coze",
-        "default_base_url": "https://api.coze.cn",
-        "protocol": "coze",
-    },
     "glm": {
         "name": "智谱 GLM",
         "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
@@ -138,16 +130,6 @@ VENDOR_CONFIGS = {
         "default_base_url": "https://open.bigmodel.cn/api/anthropic",
         "protocol": "anthropic_chat",
         "chat_model": "claude-sonnet-4",
-    },
-    "firecrawl": {
-        "name": "Firecrawl",
-        "default_base_url": "https://api.firecrawl.dev",
-        "protocol": "firecrawl",
-    },
-    "tavily": {
-        "name": "Tavily",
-        "default_base_url": "https://api.tavily.com",
-        "protocol": "tavily",
     },
     "doubao": {
         "name": "字节豆包",
@@ -297,65 +279,6 @@ def _verify_gemini(base_url: str, api_key: str) -> VerifyResult:
         return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
     if status == 429:
         return VerifyResult(status="valid", message="凭证有效，但触发速率限制 (HTTP 429)")
-    return _unconfirmed(status, _body_snippet(resp))
-
-
-def _verify_firecrawl(base_url: str, api_key: str) -> VerifyResult:
-    url = base_url.rstrip("/") + "/v1/scrape"
-    with _client() as client:
-        resp = client.post(
-            url,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"url": "https://example.com"},
-        )
-    status = resp.status_code
-    payload = _safe_json(resp)
-    if status == 200:
-        if isinstance(payload, dict) and payload.get("success"):
-            return VerifyResult(status="valid", message="凭证有效")
-        return VerifyResult(status="error", message=f"响应异常: {_body_snippet(resp)}")
-    if status in (401, 403):
-        return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
-    if status == 402:
-        return VerifyResult(status="invalid", message="账户欠费或无可用额度 (HTTP 402)")
-    return _unconfirmed(status, _body_snippet(resp))
-
-
-def _verify_tavily(base_url: str, api_key: str) -> VerifyResult:
-    url = base_url.rstrip("/") + "/search"
-    with _client() as client:
-        resp = client.post(
-            url,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"query": "hello", "max_results": 1},
-        )
-    status = resp.status_code
-    payload = _safe_json(resp)
-    if status == 200:
-        # Tavily 正常返回 results 字段
-        return VerifyResult(status="valid", message="凭证有效")
-    if status in (401, 403):
-        return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
-    if status == 429:
-        return VerifyResult(status="valid", message="凭证有效，但触发速率限制 (HTTP 429)")
-    return _unconfirmed(status, _body_snippet(resp))
-
-
-def _verify_coze(base_url: str, api_key: str) -> VerifyResult:
-    url = base_url.rstrip("/") + "/v1/workspaces"
-    with _client() as client:
-        resp = client.get(url, headers={"Authorization": f"Bearer {api_key}"})
-    status = resp.status_code
-    payload = _safe_json(resp)
-    if status == 200:
-        info: dict[str, Any] = {}
-        if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
-            total = payload["data"].get("total_count")
-            if total is not None:
-                info["workspace_count"] = total
-        return VerifyResult(status="valid", message="凭证有效", account_info=info or None)
-    if status in (401, 403):
-        return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
     return _unconfirmed(status, _body_snippet(resp))
 
 
@@ -529,12 +452,6 @@ def _dispatch(protocol: str, config: dict, base_url: str, api_key: str) -> Verif
         return _verify_openrouter(base_url, api_key)
     if protocol == "gemini":
         return _verify_gemini(base_url, api_key)
-    if protocol == "firecrawl":
-        return _verify_firecrawl(base_url, api_key)
-    if protocol == "tavily":
-        return _verify_tavily(base_url, api_key)
-    if protocol == "coze":
-        return _verify_coze(base_url, api_key)
     if protocol == "wenxin":
         return _verify_wenxin(base_url, api_key)
     return VerifyResult(status="error", message=f"未知协议: {protocol}")

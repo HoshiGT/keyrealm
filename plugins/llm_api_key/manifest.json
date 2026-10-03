@@ -3,7 +3,7 @@
   "version": "2.0.0",
   "credential_type": "llm_api_key",
   "author": "Credential Vault",
-  "description": "验证 LLM / 抓取 / 搜索类 API Key 有效性，支持 OpenAI、Anthropic、DeepSeek、OpenRouter、Gemini、MiniMax、NVIDIA NIM、Moonshot、硅基流动、阿里百炼、华为 MaaS、字节扣子、智谱 GLM、Firecrawl、Tavily 及各类 OpenAI/Anthropic 兼容中转",
+  "description": "验证 LLM 对话模型 API Key 有效性，支持 OpenAI、Anthropic、DeepSeek、OpenRouter、Gemini、MiniMax、NVIDIA NIM、Moonshot、硅基流动、阿里百炼、华为 MaaS、智谱 GLM、字节豆包、阿里通义、百度文心及各类 OpenAI/Anthropic 兼容中转",
   "icon": "🤖",
   "fields": [
     {
@@ -23,11 +23,8 @@
         "siliconflow",
         "dashscope",
         "huawei_maas",
-        "coze",
         "glm",
         "glm_anthropic",
-        "firecrawl",
-        "tavily",
         "doubao",
         "tongyi",
         "wenxin",
