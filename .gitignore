@@ -12,6 +12,10 @@ env/
 # 打包产物（PyInstaller 输出，不入库；CredentialVault.spec 与 scripts/build.py 是构建配置，保留追踪）
 release/
 
+# 交付/中间产物目录（源码归档等，不入库）
+delivery/
+tmp/
+
 # Node / Frontend
 frontend/node_modules/
 frontend/dist/
