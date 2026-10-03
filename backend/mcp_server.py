@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 import uvicorn
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -32,7 +32,7 @@ _current_token_var: ContextVar[Optional[dict]] = ContextVar("_current_token", de
 
 _server_thread: Optional[threading.Thread] = None
 _uvicorn_server: Optional[uvicorn.Server] = None
-_mcp_app: Optional[FastMCP] = None
+_mcp_app: Optional[MCPServer] = None
 _running = False
 _port = 8765
 
@@ -111,8 +111,8 @@ def _require_perm(tool_name: str) -> None:
 
 # ── MCP 工具定义 ──────────────────────────────────────────
 
-def _build_mcp_app() -> FastMCP:
-    mcp = FastMCP(
+def _build_mcp_app() -> MCPServer:
+    mcp = MCPServer(
         "CredentialVault",
         instructions="Credential Vault MCP Server — 管理、验证 LLM API Key 及其他凭据",
     )
@@ -344,8 +344,8 @@ def _build_mcp_app() -> FastMCP:
 
 # ── SSE 服务启动 ──────────────────────────────────────────
 
-def _make_asgi_app(mcp: FastMCP):
-    """将 FastMCP 的 SSE app 包装上 Bearer 鉴权中间件"""
+def _make_asgi_app(mcp: MCPServer):
+    """将 MCPServer 的 SSE app 包装上 Bearer 鉴权中间件"""
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
