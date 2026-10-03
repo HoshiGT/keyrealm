@@ -161,7 +161,14 @@ export const useVaultStore = defineStore('vault', {
     // ── 插件 ──────────────────────────────────────────────
     async fetchPlugins() {
       const items = await api.listPlugins()
-      this.plugins = Array.isArray(items) ? items : []
+      // 后端 enabled/is_builtin 源自 SQLite INTEGER(0/1)，此处归一为布尔。
+      // 否则 el-switch 内部 [activeValue,inactiveValue].includes(0) 判为“非法值”，
+      // 会在组件创建时自动 emit 一次 change(false)，导致未点击却弹出“已停用”。
+      this.plugins = (Array.isArray(items) ? items : []).map((plugin) => ({
+        ...plugin,
+        enabled: !!plugin.enabled,
+        is_builtin: !!plugin.is_builtin,
+      }))
       return this.plugins
     },
 
