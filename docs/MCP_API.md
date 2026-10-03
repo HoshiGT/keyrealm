@@ -6,31 +6,98 @@
 |------|----|
 | 传输协议 | SSE（Server-Sent Events） |
 | 默认地址 | `http://localhost:8765/sse` |
-| 随应用启动 | 是 |
-| 权限控制 | 按工具粒度，默认只读工具开启，写操作需手动授权 |
+| 随应用启动 | 是（窗口最小化到托盘后持续运行） |
+| 鉴权方式 | Bearer Token（必须） |
+| 权限控制 | 双层：全局工具开关 + Token 级 tools_allowed |
 
-### Claude Desktop 配置示例
+---
+
+## Token 鉴权
+
+### 获取 Token
+
+在应用 **MCP 设置 → 访问令牌** 页点击"生成新 Token"，设置名称和工具范围后，系统生成形如：
+
+```
+cv_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7
+```
+
+> ⚠️ Token 明文**仅在创建时展示一次**，数据库中只存 SHA-256 哈希。请立即复制到 Agent 配置中。
+
+### 请求头格式
+
+所有 SSE 连接必须在 HTTP Header 中携带 Token：
+
+```
+Authorization: Bearer cv_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7
+```
+
+### 鉴权失败响应
+
+```json
+// 401 Unauthorized — Token 无效、已吊销或已过期
+{
+  "error": "unauthorized",
+  "message": "Invalid or expired token"
+}
+
+// 403 Forbidden — Token 有效但无权调用该工具
+{
+  "error": "permission_denied",
+  "message": "Token does not have access to vault_create_credential"
+}
+```
+
+### Token 管理
+
+| 操作 | 说明 |
+|------|------|
+| 生成 | 设置名称、工具范围（可选）、过期时间（可选） |
+| 查看 | 列表展示前缀（`cv_a3f2...`）、名称、最后使用时间 |
+| 吊销 | 立即失效，Agent 下次请求返回 401 |
+| 修改范围 | 更新 tools_allowed，无需重新生成 Token |
+
+---
+
+## 客户端配置示例
+
+### Claude Desktop
 
 ```json
 {
   "mcpServers": {
     "credential-vault": {
-      "url": "http://localhost:8765/sse"
+      "url": "http://localhost:8765/sse",
+      "headers": {
+        "Authorization": "Bearer cv_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7"
+      }
     }
   }
 }
 ```
 
-### Cursor 配置示例
+### Cursor
 
 ```json
 {
   "mcpServers": {
     "credential-vault": {
-      "url": "http://localhost:8765/sse"
+      "url": "http://localhost:8765/sse",
+      "headers": {
+        "Authorization": "Bearer cv_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7"
+      }
     }
   }
 }
+```
+
+### Claude Code（CLI）
+
+```bash
+claude mcp add credential-vault \
+  --transport sse \
+  --url http://localhost:8765/sse \
+  --header "Authorization: Bearer cv_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7"
 ```
 
 ---
@@ -293,31 +360,47 @@
 
 ## 权限管理
 
-### 权限状态查询
+### 双层权限模型
 
-前端 **MCP 设置** 页展示所有工具的开关状态，用户可逐一控制。
+```
+工具调用请求
+    │
+    ▼ 第一层：Token.tools_allowed（Token 级范围）
+    │   空数组 [] = 继承全局；非空 = 只允许列表内工具
+    │
+    ▼ 第二层：mcp_permissions 表（全局工具开关）
+    │   enabled=0 → 拒绝，无论 Token 如何配置
+    │
+    ▼ 两层均通过 → 执行工具
+```
 
 ### 权限粒度
 
-| 权限级别 | 工具 | 说明 |
+| 权限级别 | 工具 | 默认 |
 |----------|------|------|
-| 只读（默认开启） | `list_*`, `verify_credential` | 不暴露敏感数据，可安全开启 |
-| 写操作（默认关闭） | `create_*`, `update_*`, `delete_*`, `batch_verify`, `install_plugin` | 修改数据，需用户信任 Agent 后开启 |
-| 高危（默认关闭） | `vault_get_secret` | 返回明文密钥，开启前需二次确认 |
+| 只读 | `vault_list_credentials`, `vault_verify_credential`, `vault_list_groups`, `vault_list_plugins` | ✅ 开启 |
+| 写操作 | `vault_get_credential`, `vault_create_*`, `vault_update_*`, `vault_delete_*`, `vault_batch_verify`, `vault_install_plugin` | ❌ 关闭 |
+| 高危 | `vault_get_secret` | ❌ 关闭（需二次确认） |
 
 ### 未授权调用响应
 
 ```json
-{
-  "error": "permission_denied",
-  "message": "工具 vault_create_credential 未授权，请在应用 MCP 设置中开启"
-}
+// Token 无效
+{"error": "unauthorized", "message": "Invalid or expired token"}
+
+// 全局工具未开启
+{"error": "permission_denied", "message": "工具 vault_create_credential 全局未启用，请在 MCP 设置中开启"}
+
+// Token 范围不含该工具
+{"error": "permission_denied", "message": "当前 Token 无权调用 vault_create_credential"}
 ```
 
 ---
 
 ## MCP Server 启动/停止
 
-MCP Server 随主应用自动启动，监听端口可在 **设置 → MCP** 中修改（默认 8765）。
+MCP Server 随主应用自动启动，窗口最小化到托盘后**持续运行**，Agent 可随时连接。
 
-若端口被占用，应用启动时会自动尝试 8766、8767，并在界面提示实际端口。
+监听端口可在 **MCP 设置** 中修改（默认 8765）。若端口被占用，应用启动时自动尝试 8766、8767，并在界面和托盘提示实际端口。
+
+**真正退出**（停止 MCP Server）只能通过托盘右键菜单"退出"操作。

@@ -234,7 +234,19 @@ App.vue
 │  服务状态：🟢 运行中   地址：http://localhost:8765/sse      │
 │  端口：[ 8765 ]   [ 重启 MCP Server ]                       │
 │                                                             │
-│  ── 工具权限 ──                                             │
+│  ── 访问令牌 ──                          [ + 生成新 Token ] │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ Claude Desktop        cv_a3f2...   全部工具          │   │
+│  │ 最后使用：2分钟前       创建：2026-10-01             │   │
+│  │                              [ 修改范围 ] [ 吊销 ]   │   │
+│  ├─────────────────────────────────────────────────────┤   │
+│  │ Cursor（只读）        cv_b7e1...   只读工具          │   │
+│  │ 最后使用：1小时前       创建：2026-10-02             │   │
+│  │                              [ 修改范围 ] [ 吊销 ]   │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ── 全局工具权限 ──                                         │
 │                                                             │
 │  只读工具（建议开启）                                        │
 │  ✅ vault_list_credentials    列出凭据                      │
@@ -254,17 +266,61 @@ App.vue
 │  ⚠️ 高危工具                                                │
 │  ⬜ vault_get_secret          获取明文密钥（需二次确认）     │
 │                                                             │
-│  Claude Desktop 配置（点击复制）                             │
+│  ── 客户端配置（点击复制）──                                │
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │ {                                                   │   │
 │  │   "mcpServers": {                                   │   │
 │  │     "credential-vault": {                           │   │
-│  │       "url": "http://localhost:8765/sse"            │   │
+│  │       "url": "http://localhost:8765/sse",           │   │
+│  │       "headers": {                                  │   │
+│  │         "Authorization": "Bearer cv_<your_token>"   │   │
+│  │       }                                             │   │
 │  │     }                                               │   │
 │  │   }                                                 │   │
 │  │ }                                                   │   │
 │  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
+```
+
+**生成 Token 弹窗**：
+
+```
+┌─────────────────────────────────────┐
+│  生成新 Token                  [×]  │
+│                                     │
+│  Token 名称 *                       │
+│  ┌─────────────────────────────┐   │
+│  │  Claude Desktop              │   │
+│  └─────────────────────────────┘   │
+│                                     │
+│  工具范围                           │
+│  ○ 继承全局权限（推荐）             │
+│  ● 自定义范围                       │
+│  ┌─────────────────────────────┐   │
+│  │ ☑ vault_list_credentials    │   │
+│  │ ☑ vault_verify_credential   │   │
+│  │ ☑ vault_list_groups         │   │
+│  │ ☐ vault_create_credential   │   │
+│  │ ☐ vault_get_secret  ⚠️      │   │
+│  └─────────────────────────────┘   │
+│                                     │
+│  过期时间                           │
+│  ○ 永不过期  ● 30天  ○ 90天  ○ 自定义 │
+│                                     │
+│       [ 取消 ]   [ 生成 ]           │
+└─────────────────────────────────────┘
+
+生成后（仅展示一次）：
+┌─────────────────────────────────────┐
+│  ✅ Token 已生成               [×]  │
+│                                     │
+│  ⚠️ 请立即复制，关闭后无法再次查看  │
+│  ┌─────────────────────────────┐   │
+│  │ cv_a3f2b1c9d8e7f6a5b4c3...  │ 📋 │
+│  └─────────────────────────────┘   │
+│                                     │
+│            [ 我已保存，关闭 ]       │
+└─────────────────────────────────────┘
 ```
 
 ### 8. 系统设置（Settings）
@@ -290,13 +346,63 @@ App.vue
 │  └─────────────────────────────────────────────────────┘   │
 │                                                             │
 │  ── 数据 ──                                                 │
-│  数据库位置：C:\Users\xxx\AppData\Roaming\CredentialVault\   │
+│  数据库位置：./data/credentials.db（项目目录内）             │
 │  [ 导出备份（JSON） ]  [ 导入备份 ]                         │
 │                                                             │
 │  ── 关于 ──                                                 │
 │  Credential Vault v0.1.0                                    │
 │  Python 3.11 | pywebview 5.1 | Vue 3.4                     │
 └─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 系统托盘行为
+
+应用支持最小化到系统托盘后台运行，MCP Server 和定时调度器持续工作。
+
+### 窗口关闭行为
+
+| 操作 | 结果 |
+|------|------|
+| 点击窗口 `×` | 隐藏窗口，最小化到托盘（不退出） |
+| 托盘菜单"显示主窗口" | 恢复窗口显示 |
+| 托盘菜单"锁定" | 清除内存密钥，下次显示窗口时需重新输入主密码 |
+| 托盘菜单"退出" | 停止所有后台服务，真正退出进程 |
+
+### 首次最小化提示
+
+第一次点击 `×` 时弹出气泡通知：
+
+```
+Credential Vault
+已最小化到托盘，MCP 服务持续运行。
+右键托盘图标可退出。
+```
+
+### 托盘图标状态
+
+| 图标 | 含义 |
+|------|------|
+| 🟢 | MCP 运行中，有活跃 Token 连接 |
+| 🔵 | MCP 运行中，无活跃连接 |
+| 🔴 | MCP 已停止或出错 |
+| ⚪ | 应用未解锁（主密码未输入） |
+
+### 前端与托盘的交互
+
+前端通过 `window.pywebview.api` 控制托盘行为：
+
+```javascript
+// 最小化到托盘（前端调用，如用户点击"最小化"按钮）
+await window.pywebview.api.minimize_to_tray()
+
+// 锁定应用（清除内存密钥）
+await window.pywebview.api.lock_vault()
+
+// 查询托盘/MCP 状态
+const status = await window.pywebview.api.get_tray_status()
+// → { mcp_running: true, port: 8765, active_tokens: 2, locked: false }
 ```
 
 ---
@@ -338,13 +444,38 @@ App.vue
 
 ```javascript
 {
+  // 服务状态
   serverStatus: 'stopped',  // running | stopped | error
   port: 8765,
+  
+  // 全局工具权限
   permissions: {},           // { tool_name: bool }
   
+  // Token 管理
+  tokens: [],               // [{ id, name, token_prefix, tools_allowed, created_at, last_used_at, expires_at, revoked }]
+  
+  // 操作
   fetchPermissions(),
   togglePermission(toolName, enabled),
+  fetchTokens(),
+  createToken({ name, tools_allowed, expires_days }),  // 返回明文 token（仅一次）
+  revokeToken(id),
+  updateTokenScope(id, tools_allowed),
   restartServer(),
+}
+```
+
+### `useTrayStore`（托盘状态）
+
+```javascript
+{
+  mcpRunning: false,
+  activeTokens: 0,
+  isLocked: false,
+  
+  fetchStatus(),            // 调用 api.get_tray_status()
+  minimizeToTray(),
+  lockVault(),
 }
 ```
 
