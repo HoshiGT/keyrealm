@@ -8,7 +8,7 @@ import json
 import os
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from . import database as db
 from . import mcp_server
@@ -426,15 +426,17 @@ def create_schedule(
     trigger_type: str,
     trigger_args: dict,
     target_scope: str = "all",
-    target_id: Optional[int] = None,
+    target_id: Optional[Union[int, str]] = None,
 ) -> dict:
     sched = db.create_schedule(name, trigger_type, trigger_args, target_scope, target_id)
     scheduler.reload_schedules()
     return sched
 
 
-def update_schedule(schedule_id: int, **kwargs) -> dict:
-    db.update_schedule(schedule_id, **kwargs)
+def update_schedule(schedule_id: int, payload: dict = None) -> dict:
+    # pywebview 桥接仅支持位置参数，前端以 (id, payload_dict) 形式调用，
+    # 因此这里接收字典再解包，而非使用 **kwargs（JS 无法触达）。
+    db.update_schedule(schedule_id, **(payload or {}))
     scheduler.reload_schedules()
     return db.list_schedules()
 

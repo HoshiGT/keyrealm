@@ -10,7 +10,7 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 # 项目根目录（main.py 所在目录）
 BASE_DIR = Path(__file__).parent.parent
@@ -589,7 +589,7 @@ def list_schedules() -> list[dict]:
 
 def create_schedule(
     name: str, trigger_type: str, trigger_args: dict,
-    target_scope: str = "all", target_id: Optional[int] = None,
+    target_scope: str = "all", target_id: Optional[Union[int, str]] = None,
 ) -> dict:
     with _lock:
         conn = get_conn()

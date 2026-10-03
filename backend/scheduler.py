@@ -139,10 +139,12 @@ def _run_schedule(schedule: dict):
     """执行定时任务"""
     scope = schedule.get("target_scope", "all")
     target_id = schedule.get("target_id")
+    # target_id 是多态字段：scope=="group" 时为分组 ID（int），
+    # scope=="type" 时为凭据类型名（str，前端直接存入 target_id）。
     batch_verify(
         scope=scope,
         group_id=target_id if scope == "group" else None,
-        credential_type=schedule.get("credential_type") if scope == "type" else None,
+        credential_type=target_id if scope == "type" else None,
         trigger_type="schedule",
     )
     db.update_schedule(schedule["id"], last_run_at=datetime.now(timezone.utc).isoformat())

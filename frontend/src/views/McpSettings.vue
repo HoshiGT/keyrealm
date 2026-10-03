@@ -38,9 +38,33 @@ async function toggleServer() {
   }
 }
 
+// 高危工具：开启前需二次确认
+const SENSITIVE_TOOLS = new Set([
+  'vault_get_secret',
+  'vault_create_credential',
+  'vault_update_credential',
+  'vault_delete_credential',
+  'vault_install_plugin',
+])
+
 async function togglePermission(toolName, enabled) {
+  // 开启高危工具时要求确认，避免误点导致 Agent 获得敏感能力
+  if (enabled && SENSITIVE_TOOLS.has(toolName)) {
+    try {
+      await ElMessageBox.confirm(
+        `「${toolName}」是高危工具，开启后持有有效 Token 的 Agent 均可调用。确认开启？`,
+        '开启高危工具',
+        { type: 'warning', confirmButtonText: '确认开启', cancelButtonText: '取消' },
+      )
+    } catch {
+      // 用户取消：回滚开关显示
+      await mcpStore.fetchPermissions()
+      return
+    }
+  }
   try {
     await mcpStore.setPermission(toolName, enabled)
+    ElMessage.success(enabled ? `已开启 ${toolName}` : `已关闭 ${toolName}`)
   } catch (err) {
     ElMessage.error(err.message || '设置失败')
     await mcpStore.fetchPermissions()
@@ -146,6 +170,15 @@ async function copyClientConfig() {
         <el-table-column prop="tool_name" label="工具名" min-width="200">
           <template #default="{ row }">
             <code class="mono">{{ row.tool_name }}</code>
+            <el-tag
+              v-if="SENSITIVE_TOOLS.has(row.tool_name)"
+              type="danger"
+              size="small"
+              effect="plain"
+              class="ml-6"
+            >
+              高危
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="description" label="说明" min-width="240" />
@@ -284,6 +317,10 @@ async function copyClientConfig() {
 
 .mt-12 {
   margin-top: 12px;
+}
+
+.ml-6 {
+  margin-left: 6px;
 }
 
 .mb-12 {

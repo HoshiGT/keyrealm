@@ -1,7 +1,7 @@
 """Pydantic 数据模型"""
 from __future__ import annotations
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 from pydantic import BaseModel, Field
 
 
@@ -145,7 +145,8 @@ class Schedule(BaseModel):
     trigger_type: str          # interval / cron
     trigger_args: dict
     target_scope: str = "all"  # all / group / type
-    target_id: Optional[int] = None
+    # 多态：scope=="group" 时为分组 ID(int)，scope=="type" 时为凭据类型名(str)
+    target_id: Optional[Union[int, str]] = None
     enabled: bool = True
     last_run_at: Optional[datetime] = None
     next_run_at: Optional[datetime] = None
@@ -157,7 +158,7 @@ class ScheduleCreate(BaseModel):
     trigger_type: str
     trigger_args: dict
     target_scope: str = "all"
-    target_id: Optional[int] = None
+    target_id: Optional[Union[int, str]] = None
 
 
 # ── 应用状态 ──────────────────────────────────────────────
