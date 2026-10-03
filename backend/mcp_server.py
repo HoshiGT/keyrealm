@@ -8,6 +8,7 @@ import asyncio
 import json
 import threading
 import time
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -25,6 +26,9 @@ from .crypto import decrypt_dict, hash_token
 # 由 api.py 注入
 _get_key_cb = None
 _event_cb = None
+
+# 每个请求的 token 记录，通过 ContextVar 在 ASGI → asyncio.to_thread 链中传播
+_current_token_var: ContextVar[Optional[dict]] = ContextVar("_current_token", default=None)
 
 _server_thread: Optional[threading.Thread] = None
 _uvicorn_server: Optional[uvicorn.Server] = None
@@ -80,8 +84,9 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         # 更新最后使用时间（异步，不阻塞）
         threading.Thread(target=db.touch_token, args=(token_hash,), daemon=True).start()
 
-        # 将 token 记录注入 request.state
+        # 将 token 记录注入 request.state 与 ContextVar（工具内通过 ContextVar 读取）
         request.state.mcp_token = record
+        _current_token_var.set(record)
         return await call_next(request)
 
 
@@ -97,6 +102,13 @@ def _check_permission(tool_name: str, token_record: dict) -> bool:
     return True
 
 
+def _require_perm(tool_name: str) -> None:
+    """工具内调用：校验当前请求的 Token 是否有权调用该工具，无权则抛出 PermissionError"""
+    record = _current_token_var.get()
+    if record is None or not _check_permission(tool_name, record):
+        raise PermissionError(f"权限不足：{tool_name} 未授权")
+
+
 # ── MCP 工具定义 ──────────────────────────────────────────
 
 def _build_mcp_app() -> FastMCP:
@@ -104,14 +116,6 @@ def _build_mcp_app() -> FastMCP:
         "CredentialVault",
         instructions="Credential Vault MCP Server — 管理、验证 LLM API Key 及其他凭据",
     )
-
-    # 用于在工具内获取当前请求的 token 记录
-    _current_token: threading.local = threading.local()
-
-    def _require_perm(tool_name: str):
-        record = getattr(_current_token, "record", None)
-        if record is None or not _check_permission(tool_name, record):
-            raise PermissionError(f"权限不足：{tool_name} 未授权")
 
     # ── vault_list_credentials ────────────────────────────
     @mcp.tool()
@@ -122,6 +126,7 @@ def _build_mcp_app() -> FastMCP:
         search: Optional[str] = None,
     ) -> list[dict]:
         """列出凭据（不含敏感字段明文）"""
+        _require_perm("vault_list_credentials")
         creds = db.list_credentials(group_id=group_id, credential_type=credential_type,
                                      status=status, search=search)
         return [
@@ -141,6 +146,7 @@ def _build_mcp_app() -> FastMCP:
     @mcp.tool()
     def vault_get_credential(credential_id: int) -> dict:
         """获取单条凭据详情（敏感字段掩码）"""
+        _require_perm("vault_get_credential")
         c = db.get_credential(credential_id)
         if not c:
             return {"error": "not_found"}
@@ -168,6 +174,7 @@ def _build_mcp_app() -> FastMCP:
         auto_verify: bool = True,
     ) -> dict:
         """创建凭据"""
+        _require_perm("vault_create_credential")
         from .crypto import encrypt_dict
 
         key = _get_key()
@@ -214,6 +221,7 @@ def _build_mcp_app() -> FastMCP:
         data: Optional[dict] = None,
     ) -> dict:
         """修改凭据"""
+        _require_perm("vault_update_credential")
         from .crypto import encrypt_dict
 
         key = _get_key()
@@ -246,6 +254,7 @@ def _build_mcp_app() -> FastMCP:
     @mcp.tool()
     def vault_delete_credential(credential_id: int) -> dict:
         """删除凭据"""
+        _require_perm("vault_delete_credential")
         db.delete_credential(credential_id)
         _push_event("vault:credentials_changed", {})
         return {"ok": True}
@@ -254,6 +263,7 @@ def _build_mcp_app() -> FastMCP:
     @mcp.tool()
     def vault_verify_credential(credential_id: int) -> dict:
         """触发验证单条凭据"""
+        _require_perm("vault_verify_credential")
         key = _get_key()
         if key is None:
             return {"error": "vault_locked"}
@@ -268,6 +278,7 @@ def _build_mcp_app() -> FastMCP:
         credential_type: Optional[str] = None,
     ) -> dict:
         """批量验证（异步执行，进度通过事件推送）"""
+        _require_perm("vault_batch_verify")
         key = _get_key()
         if key is None:
             return {"error": "vault_locked"}
@@ -280,12 +291,14 @@ def _build_mcp_app() -> FastMCP:
     @mcp.tool()
     def vault_list_groups() -> list[dict]:
         """列出分组"""
+        _require_perm("vault_list_groups")
         return db.list_groups()
 
     # ── vault_create_group ────────────────────────────────
     @mcp.tool()
     def vault_create_group(name: str, description: str = "", color: str = "#409EFF") -> dict:
         """创建分组"""
+        _require_perm("vault_create_group")
         group = db.create_group(name, description, color)
         _push_event("vault:credentials_changed", {})
         return {"ok": True, "group": group}
@@ -294,12 +307,14 @@ def _build_mcp_app() -> FastMCP:
     @mcp.tool()
     def vault_list_plugins() -> list[dict]:
         """列出已安装插件"""
+        _require_perm("vault_list_plugins")
         return plugin_manager.list_installed_plugins()
 
     # ── vault_install_plugin ──────────────────────────────
     @mcp.tool()
     def vault_install_plugin(zip_path: str) -> dict:
         """安装插件（.zip 路径）"""
+        _require_perm("vault_install_plugin")
         ok, msg = plugin_manager.install_from_zip(zip_path)
         if ok:
             _push_event("vault:plugin_installed", {"message": msg})
@@ -309,6 +324,7 @@ def _build_mcp_app() -> FastMCP:
     @mcp.tool()
     def vault_get_secret(credential_id: int, field: Optional[str] = None) -> dict:
         """获取解密后的敏感字段（高危操作）"""
+        _require_perm("vault_get_secret")
         key = _get_key()
         if key is None:
             return {"error": "vault_locked"}
