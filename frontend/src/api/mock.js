@@ -15,6 +15,20 @@ const delay = (ms = LATENCY) => new Promise((resolve) => setTimeout(resolve, ms)
 const iso = (date = new Date()) => date.toISOString()
 const daysAgo = (n) => iso(new Date(Date.now() - n * 86_400_000))
 const minutesAgo = (n) => iso(new Date(Date.now() - n * 60_000))
+const minutesDate = (n) => new Date(Date.now() - n * 60_000)
+
+const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+const LOG_LEVEL_VALUES = { DEBUG: 10, INFO: 20, WARNING: 30, ERROR: 40, CRITICAL: 50 }
+const MOCK_LOG_FILE = '<开发模式>/data/logs/credential_vault.log'
+
+/** 生成一行与后端格式一致的日志文本：YYYY-MM-DD HH:MM:SS [LEVEL] name: message */
+function logLine(level, name, message, date = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0')
+  const ts =
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  return `${ts} [${level}] ${name}: ${message}`
+}
 
 function emit(name, detail) {
   window.dispatchEvent(new CustomEvent(name, { detail }))
@@ -128,6 +142,14 @@ function createState() {
       { id: 1, name: '每日全量验证', trigger_type: 'cron', trigger_args: { hour: 2, minute: 0 }, target_scope: 'all', target_id: null, enabled: true, last_run_at: daysAgo(1), next_run_at: daysAgo(-1), created_at: daysAgo(20) },
       { id: 2, name: '工作分组巡检', trigger_type: 'interval', trigger_args: { hours: 6 }, target_scope: 'group', target_id: 1, enabled: false, last_run_at: null, next_run_at: null, created_at: daysAgo(10) },
     ],
+    logLevel: 'INFO',
+    logs: [
+      { level: 'INFO', text: logLine('INFO', 'main', '应用启动（frozen=False，日志级别=INFO，数据目录=…）', minutesDate(32)) },
+      { level: 'DEBUG', text: logLine('DEBUG', 'backend.scheduler', '调度器已启动，加载 2 个计划', minutesDate(32)) },
+      { level: 'INFO', text: logLine('INFO', 'backend.plugin_manager', '内置插件 llm_api_key 加载成功', minutesDate(30)) },
+      { level: 'WARNING', text: logLine('WARNING', 'backend.api', '事件推送失败 vault:mcp_status: window not ready', minutesDate(14)) },
+      { level: 'ERROR', text: logLine('ERROR', 'backend.scheduler', '加载计划失败 id=2: 触发器参数无效', minutesDate(6)) },
+    ],
     sequence: 1000,
   }
 }
@@ -161,6 +183,10 @@ export function createMockApi() {
       const error = new Error('保险库已锁定')
       throw error
     }
+  }
+
+  const mockLog = (name, level, message) => {
+    state.logs.push({ level, text: logLine(level, name, message) })
   }
 
   return {
@@ -600,6 +626,42 @@ export function createMockApi() {
     async minimize_to_tray() {
       await delay(40)
       return { ok: true }
+    },
+
+    // ── 日志 ──────────────────────────────────────────────
+    async get_log_config() {
+      await delay(40)
+      return { level: state.logLevel, levels: clone(LOG_LEVELS), log_file: MOCK_LOG_FILE }
+    },
+
+    async set_log_level(level) {
+      await delay(80)
+      const next = String(level || '').trim().toUpperCase()
+      if (!LOG_LEVELS.includes(next)) {
+        return { ok: false, message: `无效日志级别：${level || '(空)'}` }
+      }
+      state.logLevel = next
+      mockLog('backend.api', 'INFO', `日志级别已设置为 ${next}`)
+      return { ok: true, level: next }
+    },
+
+    async get_logs(limit = 200, level = '') {
+      await delay(80)
+      const max = Math.max(1, Math.min(Number(limit) || 200, 2000))
+      const threshold = String(level || '').trim().toUpperCase()
+      const filtered =
+        threshold && LOG_LEVELS.includes(threshold)
+          ? state.logs.filter((entry) => LOG_LEVEL_VALUES[entry.level] >= LOG_LEVEL_VALUES[threshold])
+          : state.logs
+      const entries = filtered.slice(-max).map((entry) => entry.text)
+      return { ok: true, entries, count: entries.length, log_file: MOCK_LOG_FILE }
+    },
+
+    async clear_logs() {
+      await delay(60)
+      state.logs.length = 0
+      mockLog('backend.api', 'INFO', '日志已清空')
+      return { ok: true, message: '日志已清空' }
     },
   }
 }

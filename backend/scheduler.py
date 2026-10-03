@@ -14,7 +14,10 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from . import database as db
+from . import logger
 from . import plugin_manager
+
+_log = logger.get_logger(__name__)
 
 _scheduler: Optional[BackgroundScheduler] = None
 _executor = ThreadPoolExecutor(max_workers=10)
@@ -36,7 +39,7 @@ def _push_event(event_name: str, detail: dict):
         try:
             _event_callback(event_name, detail)
         except Exception as e:
-            print(f"[scheduler] 事件推送失败: {e}")
+            _log.warning("事件推送失败: %s", e)
 
 
 def _get_key() -> Optional[bytes]:
@@ -182,7 +185,7 @@ def start_scheduler():
             if job and job.next_run_time:
                 db.update_schedule(sched["id"], next_run_at=job.next_run_time.isoformat())
         except Exception as e:
-            print(f"[scheduler] 加载计划失败 id={sched['id']}: {e}")
+            _log.error("加载计划失败 id=%s: %s", sched["id"], e)
 
 
 def stop_scheduler():
@@ -215,4 +218,4 @@ def reload_schedules():
             if job and job.next_run_time:
                 db.update_schedule(sched["id"], next_run_at=job.next_run_time.isoformat())
         except Exception as e:
-            print(f"[scheduler] 重载计划失败 id={sched['id']}: {e}")
+            _log.error("重载计划失败 id=%s: %s", sched["id"], e)

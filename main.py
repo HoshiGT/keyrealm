@@ -15,7 +15,7 @@ if str(BASE_DIR) not in sys.path:
 
 import webview  # pywebview
 
-from backend import api, database as db, mcp_server, plugin_manager, scheduler, tray
+from backend import api, database as db, logger, mcp_server, plugin_manager, scheduler, tray
 from backend.paths import app_dir, is_frozen, resource_dir
 
 
@@ -150,6 +150,19 @@ class VaultApi:
     def get_tray_status(self):
         return api.get_tray_status_api()
 
+    # ── Logging ───────────────────────────────────────────
+    def get_log_config(self):
+        return api.get_log_config()
+
+    def set_log_level(self, level: str):
+        return api.set_log_level(level)
+
+    def get_logs(self, limit: int = 200, level: str = ""):
+        return api.get_logs(limit, level)
+
+    def clear_logs(self):
+        return api.clear_logs()
+
 
 # ── 窗口与托盘 ────────────────────────────────────────────
 
@@ -194,6 +207,7 @@ def _lock_vault():
 
 def _quit_app():
     global _quitting
+    logger.get_logger("main").info("用户请求退出应用")
     _quitting = True
     scheduler.stop_scheduler()
     mcp_server.stop_server()
@@ -205,8 +219,19 @@ def _quit_app():
 def main():
     global _window
 
+    # 尽早初始化日志（默认级别），待数据库就绪后再按用户持久化的级别调整
+    logger.setup_logging()
+    log = logger.get_logger("main")
+
     # 初始化数据库
     db.init_db()
+
+    # 应用用户在「设置」中选择的日志级别（持久化于 settings 表）
+    persisted = db.get_setting("log_level", "").strip().upper()
+    if persisted in logger.LEVELS:
+        logger.set_level(persisted)
+    log.info("应用启动（frozen=%s，日志级别=%s，数据目录=%s）",
+             is_frozen(), logger.get_level(), app_dir())
 
     # 安装内置插件
     plugin_manager.install_builtin_plugins()
@@ -249,6 +274,7 @@ def main():
 
     # 启动 pywebview（阻塞主线程）
     webview.start(debug=False)
+    log.info("应用退出")
 
 
 if __name__ == "__main__":

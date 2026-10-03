@@ -186,6 +186,12 @@ export const api = {
   // ── 托盘 ────────────────────────────────────────────────
   getTrayStatus: () => call('get_tray_status'),
   minimizeToTray: () => call('minimize_to_tray'),
+
+  // ── 日志 ────────────────────────────────────────────────
+  getLogConfig: () => call('get_log_config'),
+  setLogLevel: (level) => call('set_log_level', level),
+  getLogs: (limit = 200, level = '') => call('get_logs', limit, level),
+  clearLogs: () => call('clear_logs'),
 }
 
 export default api

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import database as db
+from . import logger
 from .paths import app_dir
 from .plugin_base import (
     PluginManifest,
@@ -21,6 +22,8 @@ from .plugin_base import (
     load_manifest,
     load_plugin_module,
 )
+
+_log = logger.get_logger(__name__)
 
 # 应用根目录：开发时=项目根；冻结后=exe 同级目录
 # plugins/（内置插件，用户可改）与 data/installed_plugins/（运行时安装）都在此目录下，
@@ -68,7 +71,7 @@ def install_builtin_plugins():
             )
             load_plugin(manifest.credential_type)
         except Exception as e:
-            print(f"[plugin_manager] 内置插件安装失败 {plugin_dir.name}: {e}")
+            _log.error("内置插件安装失败 %s: %s", plugin_dir.name, e)
 
 
 def install_from_zip(zip_path: str) -> tuple[bool, str]:
@@ -187,7 +190,7 @@ def load_plugin(credential_type: str) -> Optional[Any]:
         _loaded_modules[credential_type] = module
         return module
     except Exception as e:
-        print(f"[plugin_manager] 加载插件失败 {credential_type}: {e}")
+        _log.error("加载插件失败 %s: %s", credential_type, e)
         return None
 
 

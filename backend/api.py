@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Union
 
 from . import database as db
+from . import logger
 from . import mcp_server
 from . import plugin_manager
 from . import scheduler
@@ -35,6 +36,9 @@ _UNSET = object()
 
 # pywebview window 引用（由 main.py 注入）
 _window = None
+
+# 本模块 logger
+_log = logger.get_logger(__name__)
 
 
 def set_window(window):
@@ -62,7 +66,7 @@ def push_event(event_name: str, detail: Any = None):
         js = f"window.dispatchEvent(new CustomEvent('{event_name}', {{detail: {payload}}}));"
         _window.evaluate_js(js)
     except Exception as e:
-        print(f"[api] 事件推送失败 {event_name}: {e}")
+        _log.warning("事件推送失败 %s: %s", event_name, e)
 
 
 def get_tray_status() -> dict:
@@ -155,7 +159,7 @@ def change_master_password(old_password: str, new_password: str) -> dict:
             new_encrypted = encrypt_dict(new_key, data)
             db.update_credential(cred["id"], data_encrypted=new_encrypted)
         except Exception as e:
-            print(f"[api] 重新加密失败 cred_id={cred['id']}: {e}")
+            _log.error("重新加密失败 cred_id=%s: %s", cred["id"], e)
 
     new_verify = create_verify_token(new_key)
     db.set_setting("salt", new_salt.hex())
@@ -489,9 +493,56 @@ def minimize_to_tray() -> dict:
             _window.hide()
             tray.show_first_minimize_bubble()
         except Exception as e:
-            print(f"[api] 隐藏窗口失败: {e}")
+            _log.warning("隐藏窗口失败: %s", e)
     return {"ok": True}
 
 
 def get_tray_status_api() -> dict:
     return get_tray_status()
+
+
+# ── Logging ───────────────────────────────────────────────
+
+def get_log_config() -> dict:
+    """返回当前日志级别、可选级别列表与日志文件路径。"""
+    return {
+        "level": logger.get_level(),
+        "levels": logger.LEVELS,
+        "log_file": logger.log_file_path(),
+    }
+
+
+def set_log_level(level: str) -> dict:
+    """设置日志级别：立即生效并持久化到 settings（下次启动恢复）。"""
+    level = (level or "").strip().upper()
+    if level not in logger.LEVELS:
+        return {"ok": False, "message": f"无效日志级别：{level or '(空)'}"}
+    logger.set_level(level)
+    db.set_setting("log_level", level)
+    _log.info("日志级别已设置为 %s", level)
+    return {"ok": True, "level": level}
+
+
+def get_logs(limit: int = 200, level: str = "") -> dict:
+    """读取日志文件末尾若干条记录，可按最低级别过滤。"""
+    try:
+        limit = max(1, min(int(limit or 200), 2000))
+    except (TypeError, ValueError):
+        limit = 200
+    level = (level or "").strip().upper()
+    if level and level not in logger.LEVELS:
+        level = ""
+    entries = logger.read_logs(limit, level or None)
+    return {
+        "ok": True,
+        "entries": entries,
+        "count": len(entries),
+        "log_file": logger.log_file_path(),
+    }
+
+
+def clear_logs() -> dict:
+    """清空日志文件与轮转备份。"""
+    logger.clear_logs()
+    _log.info("日志已清空")
+    return {"ok": True, "message": "日志已清空"}

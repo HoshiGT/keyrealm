@@ -372,8 +372,98 @@ async function removeSchedule(row) {
   }
 }
 
-/* ── 关于 ───────────────────────────────────────────── */
+/* ── 日志 ───────────────────────────────────────────── */
 
+const LOG_LIMITS = [
+  { label: '最近 100 条', value: 100 },
+  { label: '最近 200 条', value: 200 },
+  { label: '最近 500 条', value: 500 },
+  { label: '最近 1000 条', value: 1000 },
+]
+
+const logConfig = ref({ level: 'INFO', levels: ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], log_file: '' })
+const selectedLevel = ref('INFO')
+const levelSaving = ref(false)
+
+const logs = ref([])
+const logsLoading = ref(false)
+const logFilterLevel = ref('')
+const logLimit = ref(200)
+
+const logFilterOptions = computed(() => [
+  { label: '全部级别', value: '' },
+  ...logConfig.value.levels.map((level) => ({ label: `${level} 及以上`, value: level })),
+])
+
+const logCount = computed(() => logs.value.length)
+
+function logLineClass(entry) {
+  const match = /\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]/.exec(entry)
+  return match ? `lvl-${match[1].toLowerCase()}` : ''
+}
+
+async function loadLogConfig() {
+  try {
+    const config = await api.getLogConfig()
+    logConfig.value = {
+      level: config.level || 'INFO',
+      levels: Array.isArray(config.levels) && config.levels.length ? config.levels : logConfig.value.levels,
+      log_file: config.log_file || '',
+    }
+    selectedLevel.value = logConfig.value.level
+  } catch (err) {
+    ElMessage.error(err.message || '加载日志配置失败')
+  }
+}
+
+async function applyLogLevel() {
+  levelSaving.value = true
+  try {
+    await api.setLogLevel(selectedLevel.value)
+    logConfig.value.level = selectedLevel.value
+    ElMessage.success(`日志级别已设置为 ${selectedLevel.value}`)
+    await loadLogs()
+  } catch (err) {
+    ElMessage.error(err.message || '设置日志级别失败')
+  } finally {
+    levelSaving.value = false
+  }
+}
+
+async function loadLogs() {
+  logsLoading.value = true
+  try {
+    const result = await api.getLogs(logLimit.value, logFilterLevel.value)
+    logs.value = Array.isArray(result.entries) ? result.entries : []
+    if (result.log_file) logConfig.value.log_file = result.log_file
+  } catch (err) {
+    ElMessage.error(err.message || '加载日志失败')
+  } finally {
+    logsLoading.value = false
+  }
+}
+
+async function clearLogs() {
+  try {
+    await ElMessageBox.confirm('确定清空全部日志吗？此操作不可撤销。', '清空日志', {
+      type: 'warning',
+      confirmButtonText: '清空',
+      cancelButtonText: '取消',
+      confirmButtonClass: 'el-button--danger',
+    })
+  } catch {
+    return
+  }
+  try {
+    await api.clearLogs()
+    ElMessage.success('日志已清空')
+    await loadLogs()
+  } catch (err) {
+    ElMessage.error(err.message || '清空日志失败')
+  }
+}
+
+/* ── 关于 ───────────────────────────────────────────── */
 const isDesktop = computed(() => typeof window !== 'undefined' && !!window.pywebview)
 const runtimeLabel = computed(() => (isDesktop.value ? '桌面端（pywebview）' : '浏览器预览（开发模式）'))
 const mcpLabel = computed(() => (appStore.tray.mcp_running ? `运行中 · 端口 ${appStore.tray.mcp_port}` : '已停止'))
@@ -381,6 +471,8 @@ const mcpLabel = computed(() => (appStore.tray.mcp_running ? `运行中 · 端�
 onMounted(async () => {
   await Promise.all([
     loadSchedules(),
+    loadLogConfig(),
+    loadLogs(),
     vaultStore.fetchGroups().catch(() => {}),
     vaultStore.fetchPlugins().catch(() => {}),
     appStore.refreshTray().catch(() => {}),
@@ -486,6 +578,70 @@ onMounted(async () => {
           </template>
         </el-table-column>
       </el-table>
+    </el-card>
+
+    <el-card shadow="never">
+      <template #header><span>日志</span></template>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">日志级别</div>
+          <div class="setting-desc">
+            记录到日志文件的最低级别。级别越低越详细（DEBUG 最详细，CRITICAL 最精简）。
+            设置立即生效并持久化，下次启动自动恢复。
+          </div>
+        </div>
+        <div class="inline-row">
+          <el-select v-model="selectedLevel" class="level-select">
+            <el-option v-for="level in logConfig.levels" :key="level" :label="level" :value="level" />
+          </el-select>
+          <el-button
+            type="primary"
+            :loading="levelSaving"
+            :disabled="selectedLevel === logConfig.level"
+            @click="applyLogLevel"
+          >
+            应用
+          </el-button>
+        </div>
+      </div>
+
+      <el-divider />
+
+      <div class="log-toolbar">
+        <el-select v-model="logFilterLevel" class="level-select" @change="loadLogs">
+          <el-option
+            v-for="option in logFilterOptions"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </el-select>
+        <el-select v-model="logLimit" class="limit-select" @change="loadLogs">
+          <el-option
+            v-for="option in LOG_LIMITS"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </el-select>
+        <div class="spacer" />
+        <span class="log-count">共 {{ logCount }} 条</span>
+        <el-button :icon="Refresh" :loading="logsLoading" @click="loadLogs">刷新</el-button>
+        <el-button type="danger" plain :icon="Delete" @click="clearLogs">清空</el-button>
+      </div>
+
+      <div v-loading="logsLoading" class="log-viewer">
+        <pre v-if="logs.length" class="log-content"><span
+          v-for="(entry, index) in logs"
+          :key="index"
+          class="log-line"
+          :class="logLineClass(entry)"
+        >{{ entry }}</span></pre>
+        <el-empty v-else description="暂无日志" :image-size="60" />
+      </div>
+
+      <div v-if="logConfig.log_file" class="log-path text-muted">日志文件：{{ logConfig.log_file }}</div>
     </el-card>
 
     <el-card shadow="never">
@@ -776,5 +932,71 @@ onMounted(async () => {
   color: var(--el-text-color-secondary);
   width: 32px;
   text-align: right;
+}
+
+.level-select {
+  width: 150px;
+}
+
+.limit-select {
+  width: 150px;
+}
+
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.log-count {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.log-viewer {
+  max-height: 360px;
+  overflow: auto;
+  background: var(--el-fill-color-dark);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.log-content {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--el-text-color-primary);
+}
+
+.log-line {
+  display: block;
+}
+
+.log-line.lvl-debug {
+  color: var(--el-text-color-secondary);
+}
+
+.log-line.lvl-warning {
+  color: var(--el-color-warning);
+}
+
+.log-line.lvl-error {
+  color: var(--el-color-danger);
+}
+
+.log-line.lvl-critical {
+  color: var(--el-color-danger);
+  font-weight: 600;
+}
+
+.log-path {
+  margin-top: 10px;
+  font-size: 12px;
+  word-break: break-all;
 }
 </style>
