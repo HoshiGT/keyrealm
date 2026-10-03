@@ -336,5 +336,5 @@ AI Agent（Claude Desktop / Cursor）
 
 - **新凭据类型**：编写 `.zip` 插件，无需修改主程序
 - **新 MCP 工具**：在 `mcp_server.py` 中注册，自动出现在权限管理页
-- **新验证厂商**：在 LLM 插件的 `plugin.py` 中添加厂商适配类
+- **新验证厂商**：在 LLM 插件的 `plugin.py` 中向 `VENDOR_CONFIGS` 注册厂商（协议驱动，复用 openai/anthropic/专用协议处理器）
 - **数据库迁移**：`database.py` 中维护 `SCHEMA_VERSION`，启动时自动执行迁移脚本

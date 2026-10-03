@@ -160,7 +160,7 @@ CREATE TABLE plugins (
     "label": "厂商",
     "type": "select",
     "required": true,
-    "options": ["openai", "anthropic", "doubao", "tongyi", "wenxin"],
+    "options": ["openai", "anthropic", "deepseek", "openrouter", "gemini", "minimax", "nvidia", "moonshot", "siliconflow", "dashscope", "huawei_maas", "coze", "glm", "glm_anthropic", "firecrawl", "tavily", "doubao", "tongyi", "wenxin", "openai_compatible", "anthropic_compatible"],
     "sensitive": false
   },
   {
