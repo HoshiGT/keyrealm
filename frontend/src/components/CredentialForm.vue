@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import { useVaultStore } from '@/stores/vault'
+import { api } from '@/api'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -93,15 +94,28 @@ function schemaDefaults(list, source = {}) {
   return data
 }
 
-function resetForm() {
+async function resetForm() {
   const existing = props.credential
-  if (existing && existing.id) {
+  const targetId = existing && existing.id ? existing.id : null
+
+  if (targetId) {
     form.name = existing.name || ''
     form.credential_type = existing.credential_type || ''
     form.group_id = existing.group_id ?? null
     form.auto_verify = true
     const plugin = vaultStore.pluginByType[existing.credential_type]
-    form.data = schemaDefaults((plugin && plugin.fields_schema) || [], existing.data_plain || {})
+    const schema = (plugin && plugin.fields_schema) || []
+    // 先用非敏感字段同步预填，再拉取完整明文补全敏感字段（避免空值覆盖密钥）
+    form.data = schemaDefaults(schema, existing.data_plain || {})
+    try {
+      const full = await api.getCredential(targetId)
+      // 防止快速切换时把旧结果写进新表单
+      if (props.credential && props.credential.id === targetId && full && full.data) {
+        form.data = schemaDefaults(schema, full.data)
+      }
+    } catch {
+      // 拉取失败则回退到 data_plain（非敏感字段）
+    }
   } else {
     const initialType = props.defaultType || (plugins.value[0] && plugins.value[0].credential_type) || ''
     form.name = ''

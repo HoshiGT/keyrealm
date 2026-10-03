@@ -174,7 +174,18 @@ def list_credentials(
 
 
 def get_credential(credential_id: int) -> Optional[dict]:
-    return db.get_credential(credential_id)
+    cred = db.get_credential(credential_id)
+    if not cred:
+        return None
+    # GUI 编辑表单需要完整明文（含敏感字段）来预填，避免提交空值覆盖密钥。
+    # 保险库已解锁（_get_key 可用）才返回明文；锁定时不附加 data 字段。
+    key = _get_key()
+    if key and cred.get("data_encrypted"):
+        try:
+            cred["data"] = decrypt_dict(key, cred["data_encrypted"])
+        except Exception:
+            cred["data"] = cred.get("data_plain", {})
+    return cred
 
 
 def create_credential(
@@ -244,8 +255,21 @@ def update_credential(
             for f in plugin_record.get("fields_schema", []):
                 if f.get("sensitive"):
                     sensitive_keys.add(f["key"])
-        kwargs["data_encrypted"] = encrypt_dict(key, data)
-        kwargs["data_plain"] = {k: v for k, v in data.items() if k not in sensitive_keys}
+
+        # 防御：敏感字段缺失或为空时保留已存明文，避免编辑表单未预填
+        # 导致提交空值而覆盖密钥（凭据的敏感字段为空是无意义状态）。
+        merged = dict(data)
+        if sensitive_keys:
+            try:
+                existing_data = decrypt_dict(key, cred["data_encrypted"])
+            except Exception:
+                existing_data = {}
+            for sk in sensitive_keys:
+                if not merged.get(sk) and existing_data.get(sk):
+                    merged[sk] = existing_data[sk]
+
+        kwargs["data_encrypted"] = encrypt_dict(key, merged)
+        kwargs["data_plain"] = {k: v for k, v in merged.items() if k not in sensitive_keys}
 
     updated = db.update_credential(credential_id, **kwargs)
 

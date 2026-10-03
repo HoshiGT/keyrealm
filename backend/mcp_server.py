@@ -243,8 +243,20 @@ def _build_mcp_app() -> MCPServer:
                 for f in plugin_record.get("fields_schema", []):
                     if f.get("sensitive"):
                         sensitive_keys.add(f["key"])
-            kwargs["data_encrypted"] = encrypt_dict(key, data)
-            kwargs["data_plain"] = {k: v for k, v in data.items() if k not in sensitive_keys}
+
+            # 防御：敏感字段缺失或为空时保留已存明文，避免部分更新覆盖密钥
+            merged = dict(data)
+            if sensitive_keys:
+                try:
+                    existing_data = decrypt_dict(key, cred["data_encrypted"])
+                except Exception:
+                    existing_data = {}
+                for sk in sensitive_keys:
+                    if not merged.get(sk) and existing_data.get(sk):
+                        merged[sk] = existing_data[sk]
+
+            kwargs["data_encrypted"] = encrypt_dict(key, merged)
+            kwargs["data_plain"] = {k: v for k, v in merged.items() if k not in sensitive_keys}
 
         updated = db.update_credential(credential_id, **kwargs)
         _push_event("vault:credentials_changed", {})
