@@ -5,7 +5,7 @@ export const useMcpStore = defineStore('mcp', {
   state: () => ({
     status: { running: false, port: 8765, active_tokens: 0, url: '' },
     permissions: [],
-    tokens: [],
+    token: null,
     loading: false,
     busy: false,
   }),
@@ -42,7 +42,7 @@ export const useMcpStore = defineStore('mcp', {
     clear() {
       this.status = { running: false, port: 8765, active_tokens: 0, url: '' }
       this.permissions = []
-      this.tokens = []
+      this.token = null
     },
 
     async fetchStatus() {
@@ -91,43 +91,41 @@ export const useMcpStore = defineStore('mcp', {
       return result
     },
 
-    async fetchTokens() {
+    async fetchToken() {
       this.loading = true
       try {
-        const items = await api.listMcpTokens()
-        this.tokens = Array.isArray(items) ? items : []
+        const result = await api.getMcpToken()
+        this.token = result && result.exists ? result : null
       } finally {
         this.loading = false
       }
-      return this.tokens
+      return this.token
     },
 
-    async createToken(payload) {
-      const created = await api.createMcpToken(
-        payload.name,
+    async rotateToken(payload = {}) {
+      const rotated = await api.rotateMcpToken(
         payload.tools_allowed || [],
         payload.expires_days ?? null,
       )
-      await this.fetchTokens()
-      return created
+      await Promise.all([this.fetchToken(), this.fetchStatus()])
+      return rotated
     },
 
-    async revokeToken(tokenId) {
-      const result = await api.revokeMcpToken(tokenId)
-      this.tokens = this.tokens.filter((item) => item.id !== tokenId)
+    async revokeToken() {
+      const result = await api.revokeMcpToken()
+      this.token = null
       await this.fetchStatus()
       return result
     },
 
-    async updateTokenScope(tokenId, toolsAllowed) {
-      const result = await api.updateTokenScope(tokenId, toolsAllowed)
-      const target = this.tokens.find((item) => item.id === tokenId)
-      if (target) target.tools_allowed = [...toolsAllowed]
+    async updateTokenScope(toolsAllowed) {
+      const result = await api.updateMcpTokenScope(toolsAllowed)
+      if (this.token) this.token.tools_allowed = [...toolsAllowed]
       return result
     },
 
     async refreshAll() {
-      await Promise.all([this.fetchStatus(), this.fetchPermissions(), this.fetchTokens()])
+      await Promise.all([this.fetchStatus(), this.fetchPermissions(), this.fetchToken()])
     },
 
     applyStatusEvent(detail) {

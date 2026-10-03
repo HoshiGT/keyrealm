@@ -38,6 +38,8 @@ CREATE TABLE settings (
 | `verify_token` | 主密码验证密文（base64） | `"x9k1..."` |
 | `mcp_port` | MCP Server 端口 | `"8765"` |
 | `auto_verify` | 保存时自动验证 | `"true"` |
+| `log_level` | 日志级别 | `"INFO"` |
+| `close_action` | 关闭窗口行为（ask / quit / background） | `"ask"` |
 
 ---
 

@@ -93,6 +93,7 @@ export const EVENTS = {
   batchDone: 'vault:batch_verify_done',
   pluginInstalled: 'vault:plugin_installed',
   mcpStatus: 'vault:mcp_status',
+  closeConfirm: 'vault:close_confirm',
 }
 
 export const api = {
@@ -159,12 +160,11 @@ export const api = {
   stopMcp: () => call('stop_mcp'),
   listMcpPermissions: () => call('list_mcp_permissions'),
   setMcpPermission: (toolName, enabled) => call('set_mcp_permission', toolName, enabled),
-  listMcpTokens: () => call('list_mcp_tokens'),
-  createMcpToken: (name, toolsAllowed = [], expiresDays = null) =>
-    call('create_mcp_token', name, toolsAllowed, expiresDays),
-  revokeMcpToken: (tokenId) => call('revoke_mcp_token', tokenId),
-  updateTokenScope: (tokenId, toolsAllowed) =>
-    call('update_token_scope', tokenId, toolsAllowed),
+  getMcpToken: () => call('get_mcp_token'),
+  rotateMcpToken: (toolsAllowed = [], expiresDays = null) =>
+    call('rotate_mcp_token', toolsAllowed, expiresDays),
+  revokeMcpToken: () => call('revoke_mcp_token'),
+  updateMcpTokenScope: (toolsAllowed) => call('update_mcp_token_scope', toolsAllowed),
 
   // ── 定时计划 ────────────────────────────────────────────
   listSchedules: () => call('list_schedules'),
@@ -180,12 +180,15 @@ export const api = {
   updateSchedule: (id, payload) => call('update_schedule', id, payload),
   deleteSchedule: (id) => call('delete_schedule', id),
 
-  // ── 仪表盘 ──────────────────────────────────────────────
-  getDashboardStats: () => call('get_dashboard_stats'),
-
   // ── 托盘 ────────────────────────────────────────────────
   getTrayStatus: () => call('get_tray_status'),
   minimizeToTray: () => call('minimize_to_tray'),
+
+  // ── 关闭窗口行为 ────────────────────────────────────────
+  getCloseAction: () => call('get_close_action'),
+  setCloseAction: (action) => call('set_close_action', action),
+  confirmCloseAction: (action, remember = false) =>
+    call('confirm_close_action', action, remember),
 
   // ── 日志 ────────────────────────────────────────────────
   getLogConfig: () => call('get_log_config'),

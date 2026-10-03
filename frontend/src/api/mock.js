@@ -134,15 +134,20 @@ function createState() {
     credentials,
     history,
     mcpPermissions,
-    mcpTokens: [
-      { id: 1, name: 'Claude Desktop', token_prefix: 'cv_a3f2', tools_allowed: [], created_at: daysAgo(2), last_used_at: minutesAgo(2), expires_at: null, revoked: false },
-      { id: 2, name: 'Cursor（只读）', token_prefix: 'cv_b7e1', tools_allowed: ['vault_list_credentials', 'vault_verify_credential', 'vault_list_groups'], created_at: daysAgo(1), last_used_at: minutesAgo(75), expires_at: daysAgo(-30), revoked: false },
-    ],
+    mcpToken: {
+      id: 1,
+      token_prefix: 'cv_a3f2',
+      tools_allowed: [],
+      created_at: daysAgo(2),
+      last_used_at: minutesAgo(2),
+      expires_at: null,
+    },
     schedules: [
       { id: 1, name: '每日全量验证', trigger_type: 'cron', trigger_args: { hour: 2, minute: 0 }, target_scope: 'all', target_id: null, enabled: true, last_run_at: daysAgo(1), next_run_at: daysAgo(-1), created_at: daysAgo(20) },
       { id: 2, name: '工作分组巡检', trigger_type: 'interval', trigger_args: { hours: 6 }, target_scope: 'group', target_id: 1, enabled: false, last_run_at: null, next_run_at: null, created_at: daysAgo(10) },
     ],
     logLevel: 'INFO',
+    closeAction: 'ask',
     logs: [
       { level: 'INFO', text: logLine('INFO', 'main', '应用启动（frozen=False，日志级别=INFO，数据目录=…）', minutesDate(32)) },
       { level: 'DEBUG', text: logLine('DEBUG', 'backend.scheduler', '调度器已启动，加载 2 个计划', minutesDate(32)) },
@@ -473,7 +478,7 @@ export function createMockApi() {
       return {
         running: state.mcpRunning,
         port: state.mcpPort,
-        active_tokens: state.mcpTokens.filter((token) => !token.revoked).length,
+        active_tokens: state.mcpToken ? 1 : 0,
         url: `http://localhost:${state.mcpPort}/sse`,
       }
     },
@@ -505,42 +510,43 @@ export function createMockApi() {
       return { ok: true }
     },
 
-    async list_mcp_tokens() {
+    async get_mcp_token() {
       await delay()
-      return clone(state.mcpTokens)
+      if (!state.mcpToken) return { exists: false }
+      return { exists: true, ...clone(state.mcpToken) }
     },
 
-    async create_mcp_token(name, toolsAllowed = [], expiresDays = null) {
+    async rotate_mcp_token(toolsAllowed = [], expiresDays = null) {
       await delay(300)
-      const id = nextId()
       const secret = `cv_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`
       const record = {
-        id,
-        name,
+        id: nextId(),
         token_prefix: secret.slice(0, 7),
         tools_allowed: clone(toolsAllowed) || [],
         created_at: iso(),
         last_used_at: null,
         expires_at: expiresDays ? iso(new Date(Date.now() + Number(expiresDays) * 86_400_000)) : null,
-        revoked: false,
       }
-      state.mcpTokens.push(record)
-      return { id, name, token: secret, token_prefix: record.token_prefix }
+      state.mcpToken = record            // 轮换：新 token 覆盖旧的
+      return {
+        id: record.id,
+        token: secret,                   // 明文仅此一次
+        token_prefix: record.token_prefix,
+        tools_allowed: clone(record.tools_allowed),
+        expires_at: record.expires_at,
+      }
     },
 
-    async revoke_mcp_token(tokenId) {
+    async revoke_mcp_token() {
       await delay(140)
-      const index = state.mcpTokens.findIndex((item) => item.id === Number(tokenId))
-      if (index === -1) return { ok: false, message: 'Token 不存在' }
-      state.mcpTokens.splice(index, 1)
+      state.mcpToken = null
       return { ok: true }
     },
 
-    async update_token_scope(tokenId, toolsAllowed) {
+    async update_mcp_token_scope(toolsAllowed) {
       await delay(140)
-      const target = state.mcpTokens.find((item) => item.id === Number(tokenId))
-      if (!target) return { ok: false, message: 'Token 不存在' }
-      target.tools_allowed = clone(toolsAllowed) || []
+      if (!state.mcpToken) return { ok: false, message: '当前没有活跃 Token' }
+      state.mcpToken.tools_allowed = clone(toolsAllowed) || []
       return { ok: true }
     },
 
@@ -584,41 +590,13 @@ export function createMockApi() {
       return { ok: true }
     },
 
-    // ── 仪表盘 ────────────────────────────────────────────
-    async get_dashboard_stats() {
-      await delay()
-      const counts = { valid: 0, invalid: 0, error: 0, unknown: 0 }
-      state.credentials.forEach((item) => {
-        counts[item.status] = (counts[item.status] || 0) + 1
-      })
-      const recent = [...state.history]
-        .sort((a, b) => String(b.verified_at).localeCompare(String(a.verified_at)))
-        .slice(0, 8)
-        .map((record) => {
-          const credential = state.credentials.find((item) => item.id === record.credential_id)
-          return {
-            ...record,
-            credential_name: credential ? credential.name : `#${record.credential_id}`,
-            credential_type: credential ? credential.credential_type : '',
-          }
-        })
-      return {
-        total: state.credentials.length,
-        valid: counts.valid,
-        invalid: counts.invalid,
-        error: counts.error,
-        unknown: counts.unknown,
-        recent_activity: clone(recent),
-      }
-    },
-
     // ── 托盘 ──────────────────────────────────────────────
     async get_tray_status() {
       await delay(40)
       return {
         mcp_running: state.mcpRunning,
         mcp_port: state.mcpPort,
-        active_tokens: state.mcpTokens.filter((token) => !token.revoked).length,
+        active_tokens: state.mcpToken ? 1 : 0,
         is_locked: !state.unlocked,
       }
     },
@@ -626,6 +604,36 @@ export function createMockApi() {
     async minimize_to_tray() {
       await delay(40)
       return { ok: true }
+    },
+
+    // ── 关闭窗口行为 ──────────────────────────────────────
+    async get_close_action() {
+      await delay(40)
+      return {
+        action: state.closeAction,
+        options: [
+          { value: 'ask', label: '每次询问我' },
+          { value: 'quit', label: '直接退出程序' },
+          { value: 'background', label: '后台运行（最小化到托盘）' },
+        ],
+      }
+    },
+
+    async set_close_action(action) {
+      await delay(40)
+      if (!['ask', 'quit', 'background'].includes(action)) {
+        return { ok: false, message: `无效的关闭行为：${action || '(空)'}` }
+      }
+      state.closeAction = action
+      return { ok: true, action }
+    },
+
+    async confirm_close_action(action, remember = false) {
+      await delay(40)
+      if (remember && ['quit', 'background'].includes(action)) {
+        state.closeAction = action
+      }
+      return { ok: true, action }
     },
 
     // ── 日志 ──────────────────────────────────────────────

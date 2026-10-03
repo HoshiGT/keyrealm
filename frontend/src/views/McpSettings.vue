@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CircleCheck, CircleClose, Plus, Refresh, VideoPause, VideoPlay } from '@element-plus/icons-vue'
+import { CircleCheck, CircleClose, Refresh, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 
 import { useMcpStore } from '@/stores/mcp'
 import { useAppStore } from '@/stores/app'
@@ -14,7 +14,6 @@ const appStore = useAppStore()
 
 const tokenDialog = ref(false)
 const scopeDialog = ref(false)
-const scopeToken = ref(null)
 const scopeTools = ref([])
 
 onMounted(() => {
@@ -71,14 +70,14 @@ async function togglePermission(toolName, enabled) {
   }
 }
 
-async function handleRevoke(token) {
+async function handleRevoke() {
   try {
     await ElMessageBox.confirm(
-      `确认撤销 Token「${token.name}」？撤销后使用该 Token 的 Agent 将立即失去访问权限。`,
+      '确认撤销当前 Token？撤销后使用该 Token 的 Agent 将立即失去访问权限。',
       '撤销 Token',
       { type: 'warning', confirmButtonText: '确认撤销', cancelButtonText: '取消' },
     )
-    await mcpStore.revokeToken(token.id)
+    await mcpStore.revokeToken()
     await appStore.refreshTray()
     ElMessage.success('Token 已撤销')
   } catch (err) {
@@ -86,15 +85,14 @@ async function handleRevoke(token) {
   }
 }
 
-function openScopeDialog(token) {
-  scopeToken.value = token
-  scopeTools.value = [...(token.tools_allowed || [])]
+function openScopeDialog() {
+  scopeTools.value = [...((mcpStore.token && mcpStore.token.tools_allowed) || [])]
   scopeDialog.value = true
 }
 
 async function saveScope() {
   try {
-    await mcpStore.updateTokenScope(scopeToken.value.id, scopeTools.value)
+    await mcpStore.updateTokenScope(scopeTools.value)
     ElMessage.success('Token 权限范围已更新')
     scopeDialog.value = false
   } catch (err) {
@@ -194,63 +192,65 @@ async function copyClientConfig() {
       </el-table>
     </el-card>
 
-    <!-- Token 管理 -->
+    <!-- 访问 Token（单 Token + 轮换） -->
     <el-card shadow="never">
       <template #header>
         <div class="card-header">
           <span>访问 Token</span>
-          <el-button type="primary" size="small" :icon="Plus" @click="tokenDialog = true">
-            生成 Token
+          <el-button type="primary" size="small" :icon="Refresh" @click="tokenDialog = true">
+            {{ mcpStore.token ? '轮换 Token' : '生成 Token' }}
           </el-button>
         </div>
       </template>
 
-      <el-empty v-if="!mcpStore.tokens.length" description="暂无 Token，点击上方按钮生成" />
+      <el-empty v-if="!mcpStore.token" description="暂无活跃 Token，点击右上角生成" />
 
-      <el-table v-else :data="mcpStore.tokens" size="small" stripe>
-        <el-table-column prop="name" label="名称" min-width="140" />
-        <el-table-column label="Token 前缀" width="130">
-          <template #default="{ row }">
-            <code class="mono">{{ row.token_prefix }}…</code>
-          </template>
-        </el-table-column>
-        <el-table-column label="工具范围" min-width="180">
-          <template #default="{ row }">
-            <el-tag v-if="!row.tools_allowed || !row.tools_allowed.length" size="small" type="info">
+      <template v-else>
+        <el-alert type="warning" :closable="false" class="mb-12">
+          Token 明文仅在生成 / 轮换时展示一次；轮换后旧 Token 立即失效，数据库只保存其哈希与前缀。
+        </el-alert>
+
+        <el-descriptions :column="2" border size="small">
+          <el-descriptions-item label="Token 前缀">
+            <code class="mono">{{ mcpStore.token.token_prefix }}…</code>
+          </el-descriptions-item>
+          <el-descriptions-item label="工具范围">
+            <el-tag
+              v-if="!mcpStore.token.tools_allowed || !mcpStore.token.tools_allowed.length"
+              size="small"
+              type="info"
+            >
               继承全局
             </el-tag>
-            <el-tooltip
-              v-else
-              :content="row.tools_allowed.join(', ')"
-              placement="top"
-            >
-              <el-tag size="small">{{ row.tools_allowed.length }} 个工具</el-tag>
+            <el-tooltip v-else :content="mcpStore.token.tools_allowed.join(', ')" placement="top">
+              <el-tag size="small">{{ mcpStore.token.tools_allowed.length }} 个工具</el-tag>
             </el-tooltip>
-          </template>
-        </el-table-column>
-        <el-table-column label="创建时间" width="150">
-          <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
-        </el-table-column>
-        <el-table-column label="最后使用" width="120">
-          <template #default="{ row }">{{ formatRelative(row.last_used_at, '从未') }}</template>
-        </el-table-column>
-        <el-table-column label="过期时间" width="150">
-          <template #default="{ row }">
-            <span v-if="!row.expires_at" class="text-muted">永不过期</span>
-            <span v-else>{{ formatDateTime(row.expires_at) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="140" fixed="right">
-          <template #default="{ row }">
-            <el-button text size="small" @click="openScopeDialog(row)">范围</el-button>
-            <el-button text size="small" type="danger" @click="handleRevoke(row)">撤销</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+          </el-descriptions-item>
+          <el-descriptions-item label="创建时间">
+            {{ formatDateTime(mcpStore.token.created_at) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="最后使用">
+            {{ formatRelative(mcpStore.token.last_used_at, '从未') }}
+          </el-descriptions-item>
+          <el-descriptions-item label="过期时间">
+            <span v-if="!mcpStore.token.expires_at" class="text-muted">永不过期</span>
+            <span v-else>{{ formatDateTime(mcpStore.token.expires_at) }}</span>
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <div class="server-actions">
+          <el-button @click="openScopeDialog">编辑范围</el-button>
+          <el-button type="danger" plain @click="handleRevoke">撤销 Token</el-button>
+        </div>
+      </template>
     </el-card>
 
-    <!-- Token 生成对话框 -->
-    <TokenDialog v-model="tokenDialog" @created="appStore.refreshTray()" />
+    <!-- Token 生成 / 轮换对话框 -->
+    <TokenDialog
+      v-model="tokenDialog"
+      :rotating="!!mcpStore.token"
+      @created="appStore.refreshTray()"
+    />
 
     <!-- 工具范围编辑对话框 -->
     <el-dialog v-model="scopeDialog" title="编辑 Token 工具范围" width="520px">

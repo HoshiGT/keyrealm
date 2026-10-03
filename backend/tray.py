@@ -21,8 +21,10 @@ _first_minimize_shown = False
 
 
 def _make_icon_image(color: str) -> Image.Image:
-    """生成纯色圆形图标 64x64"""
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    """生成 64x64 托盘图标：品牌几何（圆角方块 + 保险库门圆环 + 钥匙孔），
+    用状态色填充以便一眼判别服务状态。"""
+    s = 64
+    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     colors = {
         "green":  (34, 197, 94, 255),
@@ -31,9 +33,40 @@ def _make_icon_image(color: str) -> Image.Image:
         "gray":   (156, 163, 175, 255),
     }
     c = colors.get(color, colors["gray"])
-    draw.ellipse([4, 4, 60, 60], fill=c)
-    # 内圈白色钥匙符号（简化：白色小圆）
-    draw.ellipse([22, 22, 42, 42], fill=(255, 255, 255, 200))
+
+    # 圆角方块底（状态色）
+    draw.rounded_rectangle([0, 0, s - 1, s - 1], radius=int(s * 0.22), fill=c)
+
+    cx = cy = s / 2
+
+    # 保险库门：白色圆环
+    ring_r = s * 0.34
+    draw.ellipse(
+        [cx - ring_r, cy - ring_r, cx + ring_r, cy + ring_r],
+        outline=(255, 255, 255, 235),
+        width=max(2, int(s * 0.055)),
+    )
+
+    # 钥匙孔：上方圆 + 下方梯形柄
+    head_r = s * 0.10
+    head_cy = cy - s * 0.05
+    draw.ellipse(
+        [cx - head_r, head_cy - head_r, cx + head_r, head_cy + head_r],
+        fill=(255, 255, 255, 255),
+    )
+    stem_top_y = head_cy + head_r * 0.35
+    stem_bot_y = cy + s * 0.19
+    top_half = head_r * 0.62
+    bot_half = head_r * 1.05
+    draw.polygon(
+        [
+            (cx - top_half, stem_top_y),
+            (cx + top_half, stem_top_y),
+            (cx + bot_half, stem_bot_y),
+            (cx - bot_half, stem_bot_y),
+        ],
+        fill=(255, 255, 255, 255),
+    )
     return img
 
 

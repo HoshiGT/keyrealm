@@ -19,9 +19,8 @@ def setup_module():
 
 
 def teardown_module():
-    # 清理测试数据
-    for t in db.list_mcp_tokens():
-        db.revoke_mcp_token(t["id"])
+    # 清理测试数据：撤销全部活跃 Token
+    db.revoke_active_mcp_tokens()
 
 
 # ── ContextVar 传播测试 ──────────────────────────────────

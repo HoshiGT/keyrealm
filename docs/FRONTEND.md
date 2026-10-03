@@ -35,7 +35,6 @@ window.addEventListener('vault:credential_updated', (e) => {
 ```
 App.vue
 ├── 侧边栏（Sidebar）
-│   ├── Dashboard（仪表盘）
 │   ├── 凭据管理（Credentials）
 │   ├── 分组管理（Groups）
 │   ├── 插件管理（Plugins）
@@ -84,29 +83,7 @@ App.vue
 └─────────────────────────────────┘
 ```
 
-### 3. Dashboard（仪表盘）
-
-```
-┌─────────────────────────────────────────────────────┐
-│  凭据总览                                            │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐   │
-│  │  总计   │ │  有效   │ │  失效   │ │  未验证  │   │
-│  │   24    │ │   18    │ │    3    │ │    3    │   │
-│  └─────────┘ └─────────┘ └─────────┘ └─────────┘   │
-│                                                     │
-│  最近验证活动                                        │
-│  ┌─────────────────────────────────────────────┐   │
-│  │ ✅ OpenAI 生产账号    有效    2分钟前         │   │
-│  │ ❌ 测试 Key           无效    1小时前         │   │
-│  │ ✅ Claude 主账号      有效    3小时前         │   │
-│  └─────────────────────────────────────────────┘   │
-│                                                     │
-│  快捷操作                                            │
-│  [ + 添加凭据 ]  [ 批量验证 ]  [ 管理插件 ]          │
-└─────────────────────────────────────────────────────┘
-```
-
-### 4. 凭据管理（Credentials）
+### 3. 凭据管理（Credentials）
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -181,7 +158,7 @@ App.vue
 └─────────────────────────────────────┘
 ```
 
-### 5. 分组管理（Groups）
+### 4. 分组管理（Groups）
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -200,7 +177,7 @@ App.vue
 └─────────────────────────────────────────────────────┘
 ```
 
-### 6. 插件管理（Plugins）
+### 5. 插件管理（Plugins）
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -225,7 +202,7 @@ App.vue
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 7. MCP 设置（MCP）
+### 6. MCP 设置（MCP）
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -282,16 +259,14 @@ App.vue
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**生成 Token 弹窗**：
+**生成 / 轮换 Token 弹窗**（MCP 全局仅一个活跃 Token，通过轮换更换）：
 
 ```
 ┌─────────────────────────────────────┐
-│  生成新 Token                  [×]  │
+│  轮换 Token                    [×]  │
 │                                     │
-│  Token 名称 *                       │
-│  ┌─────────────────────────────┐   │
-│  │  Claude Desktop              │   │
-│  └─────────────────────────────┘   │
+│  ⚠️ 轮换后当前 Token 立即失效，请    │
+│     及时更新已配置的客户端。         │
 │                                     │
 │  工具范围                           │
 │  ○ 继承全局权限（推荐）             │
@@ -307,12 +282,12 @@ App.vue
 │  过期时间                           │
 │  ○ 永不过期  ● 30天  ○ 90天  ○ 自定义 │
 │                                     │
-│       [ 取消 ]   [ 生成 ]           │
+│       [ 取消 ]   [ 轮换 ]           │
 └─────────────────────────────────────┘
 
-生成后（仅展示一次）：
+轮换后（仅展示一次）：
 ┌─────────────────────────────────────┐
-│  ✅ Token 已生成               [×]  │
+│  ✅ Token 已轮换               [×]  │
 │                                     │
 │  ⚠️ 请立即复制，关闭后无法再次查看  │
 │  ┌─────────────────────────────┐   │
@@ -323,7 +298,7 @@ App.vue
 └─────────────────────────────────────┘
 ```
 
-### 8. 系统设置（Settings）
+### 7. 系统设置（Settings）
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -363,9 +338,16 @@ App.vue
 
 ### 窗口关闭行为
 
+关闭窗口的行为由设置项 `close_action` 决定（"系统设置 → 窗口与关闭"可调整）：
+
+| 取值 | 行为 |
+|------|------|
+| `ask`（默认） | 弹出确认框，让用户选择"直接退出"或"后台运行"，可勾选"记住我的选择" |
+| `quit` | 直接退出程序（停止所有后台服务） |
+| `background` | 隐藏窗口，最小化到托盘（MCP 与定时任务继续运行） |
+
 | 操作 | 结果 |
 |------|------|
-| 点击窗口 `×` | 隐藏窗口，最小化到托盘（不退出） |
 | 托盘菜单"显示主窗口" | 恢复窗口显示 |
 | 托盘菜单"锁定" | 清除内存密钥，下次显示窗口时需重新输入主密码 |
 | 托盘菜单"退出" | 停止所有后台服务，真正退出进程 |
@@ -402,7 +384,14 @@ await window.pywebview.api.lock_vault()
 
 // 查询托盘/MCP 状态
 const status = await window.pywebview.api.get_tray_status()
-// → { mcp_running: true, port: 8765, active_tokens: 2, locked: false }
+// → { mcp_running: true, port: 8765, active_tokens: 1, is_locked: false }
+
+// 关闭行为：读取 / 持久化设置（"系统设置 → 窗口与关闭"）
+await window.pywebview.api.get_close_action()
+await window.pywebview.api.set_close_action('background')
+
+// 关闭确认弹窗中用户做出选择后回调（action: 'quit' | 'background'，remember=是否记住）
+await window.pywebview.api.confirm_close_action('quit', true)
 ```
 
 ---
@@ -447,21 +436,21 @@ const status = await window.pywebview.api.get_tray_status()
   // 服务状态
   serverStatus: 'stopped',  // running | stopped | error
   port: 8765,
-  
+
   // 全局工具权限
   permissions: {},           // { tool_name: bool }
-  
-  // Token 管理
-  tokens: [],               // [{ id, name, token_prefix, tools_allowed, created_at, last_used_at, expires_at, revoked }]
-  
+
+  // 当前活跃 Token（全局唯一，无则为 null）
+  token: null,               // { exists, id, token_prefix, tools_allowed, created_at, last_used_at, expires_at }
+
   // 操作
   fetchPermissions(),
-  togglePermission(toolName, enabled),
-  fetchTokens(),
-  createToken({ name, tools_allowed, expires_days }),  // 返回明文 token（仅一次）
-  revokeToken(id),
-  updateTokenScope(id, tools_allowed),
-  restartServer(),
+  setPermission(toolName, enabled),
+  fetchToken(),
+  rotateToken({ tools_allowed, expires_days }),  // 撤销旧 Token 并签发新的，返回明文（仅一次）
+  revokeToken(),
+  updateTokenScope(tools_allowed),               // 仅改范围，不轮换
+  start() / stop(),
 }
 ```
 
@@ -493,3 +482,4 @@ const status = await window.pywebview.api.get_tray_status()
 | `vault:batch_verify_done` | 批量验证完成 | `{results: [...]}` |
 | `vault:plugin_installed` | 插件安装成功 | `{credential_type, name}` |
 | `vault:mcp_status` | MCP 服务状态变化 | `{status, port}` |
+| `vault:close_confirm` | 用户点击关闭且关闭行为为"询问" | `{}`（前端弹出退出/后台选择框） |

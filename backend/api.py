@@ -46,6 +46,18 @@ def set_window(window):
     _window = window
 
 
+# 关闭窗口行为回调（由 main.py 注入）：分别执行"直接退出"与"隐藏到托盘"
+_close_quit_cb = None
+_close_hide_cb = None
+
+
+def set_close_callbacks(quit_cb=None, hide_cb=None):
+    """注入关闭行为回调：quit_cb=直接退出，hide_cb=隐藏到托盘。"""
+    global _close_quit_cb, _close_hide_cb
+    _close_quit_cb = quit_cb
+    _close_hide_cb = hide_cb
+
+
 def _get_key() -> Optional[bytes]:
     with _key_lock:
         return _master_key
@@ -404,15 +416,35 @@ def set_mcp_permission(tool_name: str, enabled: bool) -> dict:
     return {"ok": True}
 
 
-def list_mcp_tokens() -> list:
-    return db.list_mcp_tokens()
+def get_mcp_token() -> dict:
+    """返回当前活跃 MCP Token 的元数据（不含明文）；无活跃 Token 时 exists=False。"""
+    record = db.get_active_mcp_token()
+    if not record:
+        return {"exists": False}
+    return {
+        "exists": True,
+        "id": record["id"],
+        "token_prefix": record["token_prefix"],
+        "tools_allowed": record.get("tools_allowed", []),
+        "created_at": record.get("created_at"),
+        "last_used_at": record.get("last_used_at"),
+        "expires_at": record.get("expires_at"),
+    }
 
 
-def create_mcp_token(
-    name: str,
-    tools_allowed: list = None,
-    expires_days: Optional[int] = None,
-) -> dict:
+def _push_mcp_status():
+    """推送 MCP 状态变化事件（供前端与托盘刷新）。"""
+    tray.update_tray()
+    push_event("vault:mcp_status", {
+        "running": mcp_server.is_running(),
+        "port": mcp_server.get_port(),
+        "active_tokens": db.count_active_tokens(),
+    })
+
+
+def rotate_mcp_token(tools_allowed: list = None, expires_days: Optional[int] = None) -> dict:
+    """轮换 MCP Token：撤销现有活跃 Token 并签发新的（明文仅返回一次）。"""
+    db.revoke_active_mcp_tokens()
     token = generate_token()
     token_hash = hash_token(token)
     token_prefix = token[:8]
@@ -421,29 +453,37 @@ def create_mcp_token(
         expires_at = (datetime.now(timezone.utc) + timedelta(days=expires_days)).isoformat()
 
     record = db.create_mcp_token(
-        name=name,
+        name="default",
         token_hash=token_hash,
         token_prefix=token_prefix,
         tools_allowed=tools_allowed or [],
         expires_at=expires_at,
     )
-    tray.update_tray()
+    _push_mcp_status()
+    _log.info("已轮换 MCP Token（前缀 %s…）", token_prefix)
     return {
         "id": record["id"],
-        "name": record["name"],
         "token": token,          # 明文仅此一次
         "token_prefix": token_prefix,
+        "tools_allowed": record.get("tools_allowed", []),
+        "expires_at": expires_at,
     }
 
 
-def revoke_mcp_token(token_id: int) -> dict:
-    db.revoke_mcp_token(token_id)
-    tray.update_tray()
+def revoke_mcp_token() -> dict:
+    """撤销当前活跃 MCP Token。"""
+    db.revoke_active_mcp_tokens()
+    _push_mcp_status()
+    _log.info("已撤销 MCP Token")
     return {"ok": True}
 
 
-def update_token_scope(token_id: int, tools_allowed: list) -> dict:
-    db.update_token_scope(token_id, tools_allowed)
+def update_mcp_token_scope(tools_allowed: list) -> dict:
+    """更新当前活跃 Token 的工具范围（不改变明文）。"""
+    record = db.get_active_mcp_token()
+    if not record:
+        return {"ok": False, "message": "当前没有活跃 MCP Token"}
+    db.update_token_scope(record["id"], tools_allowed or [])
     return {"ok": True}
 
 
@@ -479,12 +519,6 @@ def delete_schedule(schedule_id: int) -> dict:
     return {"ok": True}
 
 
-# ── Dashboard ─────────────────────────────────────────────
-
-def get_dashboard_stats() -> dict:
-    return db.get_dashboard_stats()
-
-
 # ── Tray ──────────────────────────────────────────────────
 
 def minimize_to_tray() -> dict:
@@ -499,6 +533,59 @@ def minimize_to_tray() -> dict:
 
 def get_tray_status_api() -> dict:
     return get_tray_status()
+
+
+# ── 关闭窗口行为 ──────────────────────────────────────────
+# 用户点击窗口关闭按钮时可选择：每次询问 / 直接退出 / 后台运行（最小化到托盘）。
+# 选择持久化于 settings 表键 close_action，可在"系统设置"中二次调整。
+
+CLOSE_ACTIONS = ("ask", "quit", "background")
+_CLOSE_ACTION_DEFAULT = "ask"
+_CLOSE_ACTION_OPTIONS = [
+    {"value": "ask", "label": "每次询问我"},
+    {"value": "quit", "label": "直接退出程序"},
+    {"value": "background", "label": "后台运行（最小化到托盘）"},
+]
+
+
+def _read_close_action() -> str:
+    action = (db.get_setting("close_action", _CLOSE_ACTION_DEFAULT) or "").strip().lower()
+    return action if action in CLOSE_ACTIONS else _CLOSE_ACTION_DEFAULT
+
+
+def get_close_action() -> dict:
+    """返回当前关闭行为与可选值（供"系统设置"展示）。"""
+    return {"action": _read_close_action(), "options": _CLOSE_ACTION_OPTIONS}
+
+
+def set_close_action(action: str) -> dict:
+    """持久化关闭行为设置。"""
+    action = (action or "").strip().lower()
+    if action not in CLOSE_ACTIONS:
+        return {"ok": False, "message": f"无效的关闭行为：{action or '(空)'}"}
+    db.set_setting("close_action", action)
+    _log.info("关闭窗口行为已设置为 %s", action)
+    return {"ok": True, "action": action}
+
+
+def confirm_close_action(action: str, remember: bool = False) -> dict:
+    """前端在关闭确认弹窗中做出选择后回调（action: 'quit' | 'background'）。
+
+    remember 为真时把该选择记为默认（下次不再询问）。
+    """
+    action = (action or "").strip().lower()
+    if action not in ("quit", "background"):
+        return {"ok": False, "message": f"无效的选择：{action or '(空)'}"}
+    if remember:
+        db.set_setting("close_action", action)
+        _log.info("已记住关闭窗口行为：%s", action)
+    if action == "quit":
+        if _close_quit_cb:
+            _close_quit_cb()
+    else:
+        if _close_hide_cb:
+            _close_hide_cb()
+    return {"ok": True, "action": action}
 
 
 # ── Logging ───────────────────────────────────────────────

@@ -129,7 +129,15 @@ def assemble_release() -> Path:
     else:
         print("警告：未找到 plugins/，release/ 将不含内置插件", file=sys.stderr)
 
-    # data/ 不预建，应用首次运行时自动创建
+    # 约定：plugins/ 是内置插件的唯一事实来源；data/installed_plugins/ 只是运行期缓存
+    # （应用每次启动由 install_builtin_plugins() 从 plugins/ 重建），不随发行包分发。
+    # 若用户此前从 release/ 运行过、留下了该缓存目录，此处精确删除它（绝不触碰 data/ 下
+    # 其它内容，如 vault.db、logs/ 等）。下次启动会自动按 plugins/ 内容重建。
+    stale_cache = RELEASE / "data" / "installed_plugins"
+    if stale_cache.exists():
+        shutil.rmtree(stale_cache)
+
+    # data/ 其余内容不预建，应用首次运行时自动创建
     return exe_dest
 
 

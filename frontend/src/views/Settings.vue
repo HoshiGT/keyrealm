@@ -463,6 +463,40 @@ async function clearLogs() {
   }
 }
 
+/* ── 关闭窗口行为 ───────────────────────────────────── */
+const closeAction = ref('ask')
+const closeActionOptions = ref([
+  { value: 'ask', label: '每次询问我' },
+  { value: 'quit', label: '直接退出程序' },
+  { value: 'background', label: '后台运行（最小化到托盘）' },
+])
+const closeSaving = ref(false)
+
+async function loadCloseAction() {
+  try {
+    const config = await api.getCloseAction()
+    if (config.action) closeAction.value = config.action
+    if (Array.isArray(config.options) && config.options.length) {
+      closeActionOptions.value = config.options
+    }
+  } catch (err) {
+    ElMessage.error(err.message || '加载关闭设置失败')
+  }
+}
+
+async function applyCloseAction(value) {
+  closeSaving.value = true
+  try {
+    await api.setCloseAction(value)
+    ElMessage.success('关闭行为已更新')
+  } catch (err) {
+    ElMessage.error(err.message || '设置关闭行为失败')
+    await loadCloseAction()
+  } finally {
+    closeSaving.value = false
+  }
+}
+
 /* ── 关于 ───────────────────────────────────────────── */
 const isDesktop = computed(() => typeof window !== 'undefined' && !!window.pywebview)
 const runtimeLabel = computed(() => (isDesktop.value ? '桌面端（pywebview）' : '浏览器预览（开发模式）'))
@@ -473,6 +507,7 @@ onMounted(async () => {
     loadSchedules(),
     loadLogConfig(),
     loadLogs(),
+    loadCloseAction(),
     vaultStore.fetchGroups().catch(() => {}),
     vaultStore.fetchPlugins().catch(() => {}),
     appStore.refreshTray().catch(() => {}),
@@ -509,6 +544,32 @@ onMounted(async () => {
           <div class="setting-desc">立即清除内存中的解密密钥与明文数据，需重新输入主密码才能访问。</div>
         </div>
         <el-button :icon="Lock" @click="lockNow">立即锁定</el-button>
+      </div>
+    </el-card>
+
+    <el-card shadow="never">
+      <template #header><span>窗口与关闭</span></template>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">关闭主窗口时</div>
+          <div class="setting-desc">
+            点击窗口关闭按钮时的默认行为。选择"后台运行"时程序会最小化到系统托盘，MCP 服务与定时任务继续执行。
+          </div>
+        </div>
+        <el-select
+          v-model="closeAction"
+          class="close-select"
+          :loading="closeSaving"
+          @change="applyCloseAction"
+        >
+          <el-option
+            v-for="opt in closeActionOptions"
+            :key="opt.value"
+            :label="opt.label"
+            :value="opt.value"
+          />
+        </el-select>
       </div>
     </el-card>
 
@@ -936,6 +997,10 @@ onMounted(async () => {
 
 .level-select {
   width: 150px;
+}
+
+.close-select {
+  width: 220px;
 }
 
 .limit-select {

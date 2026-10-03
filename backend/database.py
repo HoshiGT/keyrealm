@@ -347,30 +347,6 @@ def delete_credential(cred_id: int):
         conn.commit()
 
 
-def get_dashboard_stats() -> dict:
-    with _lock:
-        conn = get_conn()
-        rows = conn.execute(
-            "SELECT status, COUNT(*) as cnt FROM credentials GROUP BY status"
-        ).fetchall()
-        recent = conn.execute("""
-            SELECT vh.*, c.name as credential_name
-            FROM verification_history vh
-            JOIN credentials c ON c.id = vh.credential_id
-            ORDER BY vh.verified_at DESC LIMIT 10
-        """).fetchall()
-    counts = {r["status"]: r["cnt"] for r in rows}
-    total = sum(counts.values())
-    return {
-        "total": total,
-        "valid": counts.get("valid", 0),
-        "invalid": counts.get("invalid", 0),
-        "unknown": counts.get("unknown", 0),
-        "error": counts.get("error", 0),
-        "recent_activity": [dict(r) for r in recent],
-    }
-
-
 # ── verification_history ──────────────────────────────────
 
 def add_verification_record(
@@ -498,18 +474,22 @@ def is_tool_enabled(tool_name: str) -> bool:
 
 
 # ── mcp_tokens ────────────────────────────────────────────
+# MCP 只保留【单个活跃 Token】：轮换时先撤销已有活跃 Token，再签发新的。
 
-def list_mcp_tokens() -> list[dict]:
+def get_active_mcp_token() -> Optional[dict]:
+    """返回当前活跃（未撤销且未过期）的 Token，取最新创建的一个；无则 None。"""
     with _lock:
-        rows = get_conn().execute(
-            "SELECT * FROM mcp_tokens WHERE revoked=0 ORDER BY created_at DESC"
-        ).fetchall()
-    results = []
-    for r in rows:
-        d = dict(r)
-        d["tools_allowed"] = json.loads(d.get("tools_allowed") or "[]")
-        results.append(d)
-    return results
+        row = get_conn().execute(
+            """SELECT * FROM mcp_tokens
+               WHERE revoked=0 AND (expires_at IS NULL OR expires_at > ?)
+               ORDER BY created_at DESC, id DESC LIMIT 1""",
+            (_now(),),
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["tools_allowed"] = json.loads(d.get("tools_allowed") or "[]")
+    return d
 
 
 def create_mcp_token(
@@ -555,6 +535,17 @@ def revoke_mcp_token(token_id: int):
         conn = get_conn()
         conn.execute("UPDATE mcp_tokens SET revoked=1, revoked_at=? WHERE id=?", (_now(), token_id))
         conn.commit()
+
+
+def revoke_active_mcp_tokens() -> int:
+    """撤销所有活跃 Token（轮换用，保证全局至多一个活跃 Token）。返回撤销数量。"""
+    with _lock:
+        conn = get_conn()
+        cur = conn.execute(
+            "UPDATE mcp_tokens SET revoked=1, revoked_at=? WHERE revoked=0", (_now(),)
+        )
+        conn.commit()
+    return cur.rowcount or 0
 
 
 def update_token_scope(token_id: int, tools_allowed: list[str]):

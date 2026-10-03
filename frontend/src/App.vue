@@ -1,8 +1,9 @@
 <script setup>
-import { onBeforeUnmount, onMounted, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 
-import { EVENTS, onEvent } from '@/api'
+import api, { EVENTS, onEvent } from '@/api'
 import { useAppStore } from '@/stores/app'
 import { useVaultStore } from '@/stores/vault'
 import { useMcpStore } from '@/stores/mcp'
@@ -13,6 +14,23 @@ const vaultStore = useVaultStore()
 const mcpStore = useMcpStore()
 
 const disposers = []
+
+// 关闭窗口确认弹窗（由后端关闭事件 vault:close_confirm 触发）
+const closeDialog = ref(false)
+const closeRemember = ref(false)
+const closeBusy = ref(false)
+
+async function handleCloseChoice(action) {
+  closeBusy.value = true
+  try {
+    await api.confirmCloseAction(action, closeRemember.value)
+    closeDialog.value = false
+  } catch (err) {
+    ElMessage.error(err.message || '操作失败')
+  } finally {
+    closeBusy.value = false
+  }
+}
 
 function guard(promise) {
   if (promise && typeof promise.catch === 'function') promise.catch(() => {})
@@ -34,6 +52,12 @@ onMounted(() => {
     onEvent(EVENTS.mcpStatus, (detail) => {
       mcpStore.applyStatusEvent(detail)
       guard(appStore.refreshTray())
+    }),
+  )
+  disposers.push(
+    onEvent(EVENTS.closeConfirm, () => {
+      closeRemember.value = false
+      closeDialog.value = true
     }),
   )
 
@@ -58,6 +82,28 @@ watch(
 
 <template>
   <router-view />
+
+  <el-dialog
+    v-model="closeDialog"
+    title="关闭窗口"
+    width="440px"
+    align-center
+    :close-on-click-modal="false"
+    :close-on-press-escape="false"
+    :show-close="false"
+  >
+    <p class="close-ask">要直接退出程序，还是让程序继续在后台运行？</p>
+    <p class="close-hint">后台运行时窗口会最小化到系统托盘，MCP 服务与定时任务继续执行。</p>
+    <el-checkbox v-model="closeRemember">记住我的选择（可在"系统设置"中修改）</el-checkbox>
+    <template #footer>
+      <el-button :disabled="closeBusy" @click="handleCloseChoice('background')">
+        后台运行
+      </el-button>
+      <el-button type="primary" :disabled="closeBusy" @click="handleCloseChoice('quit')">
+        直接退出
+      </el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style>
@@ -118,6 +164,17 @@ body {
 }
 
 .text-muted {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.close-ask {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.close-hint {
+  margin: 0 0 14px;
   color: var(--el-text-color-secondary);
   font-size: 13px;
 }

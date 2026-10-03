@@ -25,9 +25,11 @@ from .plugin_base import (
 
 _log = logger.get_logger(__name__)
 
-# 应用根目录：开发时=项目根；冻结后=exe 同级目录
-# plugins/（内置插件，用户可改）与 data/installed_plugins/（运行时安装）都在此目录下，
-# 均不打包进 exe，随 exe 同级以外部目录形式提供。
+# 应用根目录：开发时=项目根；冻结后=exe 同级目录。
+# plugins/（内置插件源码，用户可改）是内置插件的【唯一事实来源】，不打包进 exe，
+# 随 exe 同级以外部目录形式提供。data/installed_plugins/ 是【运行期缓存】：
+# 每次启动由 install_builtin_plugins() 以 plugins/ 内容覆盖重建（含数据库记录），
+# 不随发行包分发（见 scripts/build.py assemble_release 的清理逻辑）。
 BASE_DIR = app_dir()
 PLUGINS_DIR = BASE_DIR / "data" / "installed_plugins"
 BUILTIN_PLUGINS_DIR = BASE_DIR / "plugins"

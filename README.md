@@ -61,18 +61,24 @@ python scripts/build.py --frontend
 release/
 ├── CredentialVault.exe        # 单文件可执行程序（后端代码 + frontend/dist 已内置）
 ├── credential-vault-src.zip   # 源码归档（由 scripts/pack_source.py 生成，见下）
-├── plugins/                   # 外部可改插件目录（不进 exe，可直接编辑，改完重启生效）
+├── plugins/                   # 内置插件【唯一事实来源】（不进 exe，可直接编辑，改完重启生效）
 │   ├── llm_api_key/
 │   └── api_service/
-└── data/                      # 首次运行时自动创建（数据库、已装插件、主密码校验）
+└── data/                      # 首次运行时自动创建（数据库、主密码校验）
+    └── installed_plugins/     # 运行期缓存：启动时由 plugins/ 覆盖重建，不随包分发
 ```
+
+> 约定：内置插件只以 `plugins/` 为准。`data/installed_plugins/` 是应用启动时由
+> `install_builtin_plugins()` 从 `plugins/` 覆盖重建的**运行期缓存**，发行包中**不包含**它。
+> 直接编辑 `plugins/` 下的插件、重启即可生效（`scripts/build.py` 会在打包时常量清理旧的
+> `data/installed_plugins/`，避免与 `plugins/` 出现重复的陈旧副本）。
 
 打包边界：
 
 | 内容 | 是否进 exe | 说明 |
 |------|-----------|------|
 | 后端代码、`frontend/dist` | ✅ 内置 | 只读资源，运行时从临时解压目录读取 |
-| `plugins/` | ❌ 外部 | 用户可改，放 exe 同级；启动时引导复制进 `data/installed_plugins/` |
+| `plugins/` | ❌ 外部 | 内置插件唯一事实来源，放 exe 同级；启动时覆盖重建 `data/installed_plugins/` |
 | `data/` | ❌ 外部 | 运行时可写，放 exe 同级，保证数据持久化 |
 
 `release/` 是自包含、可便携分发的目录，且**不被 git 追踪**（`CredentialVault.spec` 与
@@ -112,10 +118,13 @@ API-Key-Checker/
 │   ├── plugin_base.py       # 插件接口定义
 │   ├── plugin_manager.py    # 插件安装/加载/管理
 │   ├── scheduler.py         # 定时验证调度器
+│   ├── logger.py            # 日志配置（轮转文件 + 级别可调）
 │   ├── tray.py              # 系统托盘
 │   └── mcp_server.py        # MCP Server（SSE）
+├── assets/                  # 应用图标资源（icon.ico / icon.png，由脚本生成）
 ├── scripts/
 │   ├── build.py             # 可执行文件打包脚本（输出到 release/）
+│   ├── make_icon.py         # 生成应用图标（ICO/PNG/favicon）
 │   └── pack_source.py       # 源码归档脚本（生成 release/credential-vault-src.zip）
 ├── plugins/                 # 内置插件源码（打包时作为外部目录，不进 exe）
 │   ├── llm_api_key/         # LLM 对话模型 API Key 验证
@@ -125,6 +134,7 @@ API-Key-Checker/
 │   │   ├── views/
 │   │   ├── components/
 │   │   └── stores/
+│   ├── public/              # 静态资源（favicon.svg / favicon.png）
 │   └── vite.config.js
 ├── release/                 # 打包产物（gitignored，构建时生成）
 └── docs/                    # 项目文档

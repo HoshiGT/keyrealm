@@ -13,7 +13,7 @@
 │                        桌面应用窗口                           │
 │  ┌────────────────────────────────────────────────────────┐  │
 │  │               Vue 3 前端（WebView）                     │  │
-│  │  Dashboard │ 凭据管理 │ 分组 │ 插件 │ MCP │ 设置        │  │
+│  │  凭据管理 │ 分组 │ 插件 │ MCP │ 设置                     │  │
 │  └───────────────────────┬────────────────────────────────┘  │
 │                          │ window.pywebview.api.*             │
 │  ┌───────────────────────▼────────────────────────────────┐  │
@@ -178,11 +178,13 @@ Agent 发起 SSE 连接
             ▼ 更新 last_used_at
 ```
 
-**Token 格式**：`cv_` + 32 位随机十六进制（共 35 字符），数据库中只存 SHA-256 哈希，明文仅在创建时展示一次。
+**Token 格式**：`cv_` + 32 位随机十六进制（共 35 字符），数据库中只存 SHA-256 哈希，明文仅在创建 / 轮换时展示一次。
+
+MCP 全局只保留**一个活跃 Token**，通过「轮换」更换（撤销旧 Token 并签发新 Token）。
 
 **权限控制（双层）**：
 1. **全局工具开关**（`mcp_permissions` 表）：管理员在 MCP 设置页统一控制
-2. **Token 级范围**（`mcp_tokens.tools_allowed`）：每个 Token 可单独限定可调用工具子集
+2. **Token 级范围**（`mcp_tokens.tools_allowed`）：当前 Token 可限定可调用的工具子集
 
 两层均通过才允许调用，任一层拒绝则返回 `permission_denied`。
 
@@ -231,7 +233,7 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
 │  显示主窗口              │
 │  ─────────────────────  │
 │  MCP：运行中 :8765      │
-│  活跃 Token：2 个       │
+│  活跃 Token：1 个       │
 │  ─────────────────────  │
 │  锁定（清除内存密钥）    │
 │  ─────────────────────  │
@@ -239,12 +241,26 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
 └─────────────────────────┘
 ```
 
-**窗口关闭行为**：
-- 点击窗口 `×` → 隐藏窗口，最小化到托盘（不退出）
-- 托盘菜单"退出" → 停止所有后台服务，真正退出进程
+**窗口关闭行为**（由设置项 `close_action` 决定）：
+- `ask`（默认）→ 弹窗让用户选择"直接退出"或"后台运行"，可勾选"记住我的选择"
+- `quit` → 停止所有后台服务，真正退出进程
+- `background` → 隐藏窗口，最小化到托盘（不退出）
+- 托盘菜单"退出" → 无论设置如何，均停止所有后台服务并退出
 - 首次最小化时弹出气泡提示："Credential Vault 已最小化到托盘，MCP 服务持续运行"
 
 **托盘线程**：`pystray` 在独立守护线程中运行，通过线程安全队列与主线程通信。
+
+---
+
+### 2.8 日志模块（logger.py）
+
+**职责**：统一日志配置，写入 `<app_dir>/data/logs/credential_vault.log`，并可按用户选择调整级别。
+
+**实现**：`logging` + `RotatingFileHandler`（单文件约 1 MB × 5 份备份），多行堆栈按时间戳归组。
+
+**日志级别**：`DEBUG / INFO / WARNING / ERROR / CRITICAL`（默认 `INFO`），运行时可调整并持久化到
+`settings` 表的 `log_level` 键，下次启动自动恢复。`httpx` / `httpcore` 被压制到 `WARNING`，
+避免第三方库噪声。
 
 ---
 

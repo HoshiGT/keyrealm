@@ -9,7 +9,6 @@ import {
   FolderOpened,
   Grid,
   Key,
-  Odometer,
   Setting,
   Lock,
   Minus,
@@ -27,7 +26,6 @@ const collapsed = ref(false)
 const batchDialog = ref(false)
 
 const navItems = [
-  { path: '/', title: '仪表盘', icon: Odometer },
   { path: '/credentials', title: '凭据管理', icon: Key },
   { path: '/groups', title: '分组管理', icon: FolderOpened },
   { path: '/plugins', title: '插件管理', icon: Grid },
@@ -86,7 +84,7 @@ async function handleMinimize() {
   <el-container class="layout">
     <el-aside :width="collapsed ? '64px' : '220px'" class="layout-aside">
       <div class="brand" :class="{ 'is-collapsed': collapsed }">
-        <span class="brand-logo">🔐</span>
+        <img src="/favicon.svg" class="brand-logo" alt="Credential Vault" />
         <span v-show="!collapsed" class="brand-text">Credential Vault</span>
       </div>
 
@@ -203,7 +201,10 @@ async function handleMinimize() {
 }
 
 .brand-logo {
-  font-size: 20px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  flex-shrink: 0;
 }
 
 .layout-menu {

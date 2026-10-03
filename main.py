@@ -113,17 +113,17 @@ class VaultApi:
     def set_mcp_permission(self, tool_name: str, enabled: bool):
         return api.set_mcp_permission(tool_name, enabled)
 
-    def list_mcp_tokens(self):
-        return api.list_mcp_tokens()
+    def get_mcp_token(self):
+        return api.get_mcp_token()
 
-    def create_mcp_token(self, name: str, tools_allowed=None, expires_days=None):
-        return api.create_mcp_token(name, tools_allowed or [], expires_days)
+    def rotate_mcp_token(self, tools_allowed=None, expires_days=None):
+        return api.rotate_mcp_token(tools_allowed or [], expires_days)
 
-    def revoke_mcp_token(self, token_id: int):
-        return api.revoke_mcp_token(token_id)
+    def revoke_mcp_token(self):
+        return api.revoke_mcp_token()
 
-    def update_token_scope(self, token_id: int, tools_allowed: list):
-        return api.update_token_scope(token_id, tools_allowed)
+    def update_mcp_token_scope(self, tools_allowed):
+        return api.update_mcp_token_scope(tools_allowed or [])
 
     # ── Schedules ─────────────────────────────────────────
     def list_schedules(self):
@@ -139,16 +139,22 @@ class VaultApi:
     def delete_schedule(self, schedule_id: int):
         return api.delete_schedule(schedule_id)
 
-    # ── Dashboard ─────────────────────────────────────────
-    def get_dashboard_stats(self):
-        return api.get_dashboard_stats()
-
     # ── Tray ──────────────────────────────────────────────
     def minimize_to_tray(self):
         return api.minimize_to_tray()
 
     def get_tray_status(self):
         return api.get_tray_status_api()
+
+    # ── 关闭窗口行为 ──────────────────────────────────────
+    def get_close_action(self):
+        return api.get_close_action()
+
+    def set_close_action(self, action: str):
+        return api.set_close_action(action)
+
+    def confirm_close_action(self, action: str, remember: bool = False):
+        return api.confirm_close_action(action, remember)
 
     # ── Logging ───────────────────────────────────────────
     def get_log_config(self):
@@ -183,15 +189,43 @@ def _get_frontend_path() -> str:
     return str(root / "frontend" / "index.html")
 
 
-def _on_closing():
-    """窗口关闭事件 → 隐藏到托盘（不退出）"""
+def _shutdown_services():
+    """停止后台服务并标记为正在退出（供"直接退出"路径共用的清理）。"""
+    global _quitting
+    logger.get_logger("main").info("用户请求退出应用")
+    _quitting = True
+    scheduler.stop_scheduler()
+    mcp_server.stop_server()
+    tray.stop_tray()
+
+
+def _hide_to_tray():
+    """隐藏窗口到系统托盘（后台运行）。"""
     global _window
-    if _quitting:
-        return True  # 允许关闭
     if _window:
         _window.hide()
         tray.show_first_minimize_bubble()
-    return False  # 阻止关闭
+
+
+def _on_closing():
+    """窗口关闭事件：按用户设置的关闭行为处理（询问/直接退出/后台运行）。"""
+    global _window
+    if _quitting:
+        return True  # 正在退出，允许关闭
+
+    action = db.get_setting("close_action", "ask").strip().lower()
+    if action not in ("ask", "quit", "background"):
+        action = "ask"
+
+    if action == "quit":
+        _shutdown_services()
+        return True  # 允许关闭，应用随之退出
+    if action == "background":
+        _hide_to_tray()
+        return False  # 阻止关闭，驻留托盘
+    # ask：先阻止本次关闭，通知前端弹窗让用户选择
+    api.push_event("vault:close_confirm")
+    return False
 
 
 def _show_window():
@@ -206,12 +240,7 @@ def _lock_vault():
 
 
 def _quit_app():
-    global _quitting
-    logger.get_logger("main").info("用户请求退出应用")
-    _quitting = True
-    scheduler.stop_scheduler()
-    mcp_server.stop_server()
-    tray.stop_tray()
+    _shutdown_services()
     if _window:
         _window.destroy()
 
@@ -258,8 +287,9 @@ def main():
         confirm_close=False,
     )
 
-    # 注入 window 引用到 api 模块
+    # 注入 window 引用与关闭行为回调到 api 模块
     api.set_window(_window)
+    api.set_close_callbacks(quit_cb=_quit_app, hide_cb=_hide_to_tray)
 
     # 启动托盘
     tray.start_tray(

@@ -102,31 +102,32 @@ class PluginInfo(BaseModel):
     credential_count: int = 0
 
 
-# ── MCP Token ─────────────────────────────────────────────
+# ── MCP Token（单 Token + 轮换）────────────────────────────
 
 class McpToken(BaseModel):
+    """当前活跃 Token 的元数据（不含明文）。"""
+    exists: bool = True
     id: int
-    name: str
     token_prefix: str
     tools_allowed: list[str] = Field(default_factory=list)
-    created_at: datetime
+    created_at: Optional[datetime] = None
     last_used_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
-    revoked: bool = False
 
 
-class McpTokenCreate(BaseModel):
-    name: str
+class McpTokenRotate(BaseModel):
+    """轮换 Token 的入参。"""
     tools_allowed: list[str] = Field(default_factory=list)  # 空 = 继承全局
     expires_days: Optional[int] = None
 
 
-class McpTokenCreated(BaseModel):
-    """创建成功后返回，token 明文仅此一次"""
+class McpTokenRotated(BaseModel):
+    """轮换成功后返回，token 明文仅此一次"""
     id: int
-    name: str
     token: str          # 明文，仅展示一次
     token_prefix: str
+    tools_allowed: list[str] = Field(default_factory=list)
+    expires_at: Optional[datetime] = None
 
 
 # ── MCP 权限 ──────────────────────────────────────────────
@@ -168,12 +169,3 @@ class TrayStatus(BaseModel):
     mcp_port: int = 8765
     active_tokens: int = 0
     is_locked: bool = True
-
-
-class DashboardStats(BaseModel):
-    total: int = 0
-    valid: int = 0
-    invalid: int = 0
-    unknown: int = 0
-    error: int = 0
-    recent_activity: list[VerificationRecord] = Field(default_factory=list)

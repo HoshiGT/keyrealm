@@ -27,6 +27,10 @@ FRONTEND_DIST = ROOT / "frontend" / "dist"
 
 _console = os.environ.get("CV_CONSOLE") == "1"
 
+# 应用图标（Windows exe 需 .ico）。文件缺失时传 None，回退 PyInstaller 默认图标。
+_ICON_PATH = ROOT / "assets" / "icon.ico"
+_icon = str(_ICON_PATH) if _ICON_PATH.exists() else None
+
 datas = []
 binaries = []
 hiddenimports = []
@@ -113,6 +117,7 @@ exe = EXE(
     a.datas,
     [],
     name="CredentialVault",
+    icon=_icon,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

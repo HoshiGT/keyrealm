@@ -201,7 +201,11 @@ def get_display_summary(data: dict) -> str:
 
 ### 本地开发模式
 
-将插件目录直接放入 `<data_dir>/installed_plugins/`，修改 `plugin.py` 后在应用"插件管理"页点击**重新加载**。
+- **内置插件**：源码在应用根目录 `plugins/<credential_type>/`，这是内置插件的唯一事实来源。
+  直接编辑其 `plugin.py` 后重启应用即可（启动时会用 `plugins/` 覆盖重建运行期缓存
+  `data/installed_plugins/`），也可在"插件管理"页点击**重新加载**。
+- **外部/调试插件**：将插件目录放入 `<data_dir>/installed_plugins/<credential_type>/`，
+  修改 `plugin.py` 后在"插件管理"页点击**重新加载**。
 
 ### 打包为 .zip
 

@@ -8,6 +8,7 @@ import { copyText } from '@/utils/clipboard'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
+  rotating: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:modelValue', 'created'])
@@ -20,19 +21,13 @@ const submitting = ref(false)
 const createdToken = ref(null)
 
 const form = reactive({
-  name: '',
   scopeMode: 'inherit',
   tools_allowed: [],
   expiresMode: 'never',
   customDays: 30,
 })
 
-const rules = {
-  name: [
-    { required: true, message: '请输入 Token 名称', trigger: 'blur' },
-    { min: 1, max: 60, message: '名称长度需在 1-60 个字符之间', trigger: 'blur' },
-  ],
-}
+const rules = {}
 
 const toolOptions = computed(() => mcpStore.toolOptions)
 
@@ -45,9 +40,9 @@ const expiresDays = computed(() => {
 function reset() {
   step.value = 'form'
   createdToken.value = null
-  form.name = ''
-  form.scopeMode = 'inherit'
-  form.tools_allowed = []
+  const current = mcpStore.token && mcpStore.token.tools_allowed
+  form.scopeMode = current && current.length ? 'custom' : 'inherit'
+  form.tools_allowed = current ? [...current] : []
   form.expiresMode = 'never'
   form.customDays = 30
   if (formRef.value) formRef.value.clearValidate()
@@ -61,17 +56,9 @@ watch(
 )
 
 async function submit() {
-  if (!formRef.value) return
-  try {
-    await formRef.value.validate()
-  } catch {
-    return
-  }
-
   submitting.value = true
   try {
-    const result = await mcpStore.createToken({
-      name: form.name.trim(),
+    const result = await mcpStore.rotateToken({
       tools_allowed: form.scopeMode === 'custom' ? [...form.tools_allowed] : [],
       expires_days: expiresDays.value,
     })
@@ -79,7 +66,7 @@ async function submit() {
     step.value = 'reveal'
     emit('created', result)
   } catch (err) {
-    ElMessage.error(err.message || '生成 Token 失败')
+    ElMessage.error(err.message || (props.rotating ? '轮换 Token 失败' : '生成 Token 失败'))
   } finally {
     submitting.value = false
   }
@@ -99,7 +86,9 @@ function close() {
 <template>
   <el-dialog
     :model-value="modelValue"
-    :title="step === 'form' ? '生成新 Token' : 'Token 已生成'"
+    :title="step === 'form'
+      ? (rotating ? '轮换 Token' : '生成 Token')
+      : (rotating ? 'Token 已轮换' : 'Token 已生成')"
     width="560px"
     :close-on-click-modal="false"
     :close-on-press-escape="step === 'form'"
@@ -107,9 +96,9 @@ function close() {
     @update:model-value="emit('update:modelValue', $event)"
   >
     <el-form v-if="step === 'form'" ref="formRef" :model="form" :rules="rules" label-position="top">
-      <el-form-item label="Token 名称" prop="name">
-        <el-input v-model="form.name" placeholder="例如：Claude Desktop" clearable maxlength="60" />
-      </el-form-item>
+      <el-alert v-if="rotating" type="warning" :closable="false" class="mb-12">
+        <template #title>轮换后当前 Token 立即失效，请及时更新已配置的客户端。</template>
+      </el-alert>
 
       <el-form-item label="工具范围">
         <el-radio-group v-model="form.scopeMode">
@@ -170,7 +159,6 @@ function close() {
       </div>
 
       <div class="token-meta">
-        <p><span>名称：</span>{{ createdToken?.name }}</p>
         <p><span>前缀：</span>{{ createdToken?.token_prefix }}…</p>
         <p class="warn-text">
           <el-icon><WarningFilled /></el-icon>
@@ -182,7 +170,9 @@ function close() {
     <template #footer>
       <template v-if="step === 'form'">
         <el-button @click="close">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="submit">生成</el-button>
+        <el-button type="primary" :loading="submitting" @click="submit">
+          {{ rotating ? '轮换' : '生成' }}
+        </el-button>
       </template>
       <el-button v-else type="primary" @click="close">我已保存，关闭</el-button>
     </template>
@@ -241,5 +231,9 @@ function close() {
   align-items: center;
   gap: 6px;
   color: var(--el-color-warning);
+}
+
+.mb-12 {
+  margin-bottom: 12px;
 }
 </style>
