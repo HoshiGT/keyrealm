@@ -21,8 +21,12 @@ const router = useRouter()
 const appStore = useAppStore()
 const vaultStore = useVaultStore()
 
-const collapsed = ref(false)
+const collapsed = ref(localStorage.getItem('vault.layout.asideCollapsed') === '1')
 const batchDialog = ref(false)
+
+watch(collapsed, (value) => {
+  localStorage.setItem('vault.layout.asideCollapsed', value ? '1' : '0')
+})
 
 const navItems = [
   { path: '/credentials', title: '凭据管理', icon: Key },
@@ -80,7 +84,7 @@ async function handleMinimize() {
 
 <template>
   <el-container class="layout">
-    <el-aside :width="collapsed ? '64px' : '220px'" class="layout-aside">
+    <el-aside :width="collapsed ? '64px' : '168px'" class="layout-aside">
       <div class="brand" :class="{ 'is-collapsed': collapsed }">
         <img src="/favicon.svg" class="brand-logo" alt="Credential Vault" />
         <span v-show="!collapsed" class="brand-text">Credential Vault</span>
@@ -184,11 +188,11 @@ async function handleMinimize() {
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   height: 60px;
-  padding: 0 18px;
+  padding: 0 12px;
   font-weight: 700;
-  font-size: 16px;
+  font-size: 14px;
   white-space: nowrap;
   border-bottom: 1px solid var(--el-border-color);
 }
