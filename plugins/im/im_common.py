@@ -168,10 +168,7 @@ def _verify_feishu(data: dict) -> VerifyResult:
     if isinstance(payload, dict):
         code = payload.get("code")
         if code in (0, "0"):
-            info: dict[str, Any] = {"app_id": app_id}
-            if payload.get("expire") is not None:
-                info["expires_in"] = payload["expire"]
-            return VerifyResult(status="valid", message="凭证有效", account_info=info)
+            return VerifyResult(status="valid", message="凭证有效")
         if code is not None:
             detail = _error_detail(payload)
             return VerifyResult(status="invalid", message=f"凭证无效: {detail}")
@@ -209,10 +206,7 @@ def _dingtalk_oauth2(app_key: str, app_secret: str) -> Optional[VerifyResult]:
     payload = _safe_json(resp)
     if status == 200:
         if isinstance(payload, dict) and payload.get("accessToken"):
-            info: dict[str, Any] = {"app_key": app_key}
-            if payload.get("expireIn") is not None:
-                info["expires_in"] = payload["expireIn"]
-            return VerifyResult(status="valid", message="凭证有效", account_info=info)
+            return VerifyResult(status="valid", message="凭证有效")
         detail = _error_detail(payload) or _body_snippet(resp)
         return VerifyResult(status="invalid", message=f"凭证无效: {detail}" if detail else "凭证无效")
     if status in (400, 401, 403):
@@ -243,10 +237,7 @@ def _dingtalk_gettoken(app_key: str, app_secret: str) -> VerifyResult:
     if isinstance(payload, dict):
         errcode = payload.get("errcode")
         if errcode in (0, "0") and payload.get("access_token"):
-            info: dict[str, Any] = {"app_key": app_key}
-            if payload.get("expires_in") is not None:
-                info["expires_in"] = payload["expires_in"]
-            return VerifyResult(status="valid", message="凭证有效", account_info=info)
+            return VerifyResult(status="valid", message="凭证有效")
         if errcode is not None:
             detail = _error_detail(payload)
             return VerifyResult(status="invalid", message=f"凭证无效: {detail}")
@@ -331,10 +322,7 @@ def _verify_qq_bot(data: dict) -> VerifyResult:
     status = resp.status_code
     payload = _safe_json(resp)
     if status == 200 and isinstance(payload, dict) and payload.get("access_token"):
-        info: dict[str, Any] = {"app_id": app_id}
-        if payload.get("expires_in") is not None:
-            info["expires_in"] = payload["expires_in"]
-        return VerifyResult(status="valid", message="凭证有效", account_info=info)
+        return VerifyResult(status="valid", message="凭证有效")
     if isinstance(payload, dict):
         detail = _error_detail(payload)
         if detail:

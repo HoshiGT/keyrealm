@@ -165,7 +165,7 @@ def _verify_smtp(data: dict) -> VerifyResult:
         return VerifyResult(
             status="valid",
             message="凭证有效：SMTP 登录成功",
-            account_info={"server": host, "port": port, "ssl": use_ssl},
+            account_info={"server": host, "port": port},
         )
     finally:
         _safe_quit(server)

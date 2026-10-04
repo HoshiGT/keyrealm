@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Optional
 
 import httpx
@@ -85,6 +86,8 @@ VENDOR_CONFIGS = {
         "name": "OpenRouter",
         "default_base_url": "https://openrouter.ai/api/v1",
         "protocol": "openrouter",
+        "balance_url": "https://openrouter.ai/api/v1/credits",
+        "balance_kind": "openrouter",
     },
     "gemini": {
         "name": "Google Gemini",
@@ -155,6 +158,8 @@ VENDOR_CONFIGS = {
         "name": "第三方中转 (OpenAI 兼容)",
         "default_base_url": "",
         "protocol": "openai_models",
+        # one-api / new-api 类中转实现 /dashboard/billing/* 余额接口，best-effort 查询
+        "balance_kind": "openai_billing",
     },
     "anthropic_compatible": {
         "name": "第三方中转 (Anthropic 协议)",
@@ -264,12 +269,16 @@ def _verify_openrouter(base_url: str, api_key: str) -> VerifyResult:
     status = resp.status_code
     payload = _safe_json(resp)
     if status == 200:
+        # 单 key 限额：有 limit 时给出剩余额度与使用率（plan 类账号）
         info: dict[str, Any] = {}
-        if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
-            d = payload["data"]
-            for key in ("label", "usage", "limit", "limit_remaining"):
-                if d.get(key) is not None:
-                    info[key] = d[key]
+        d = payload.get("data") if isinstance(payload, dict) else None
+        if isinstance(d, dict):
+            limit, usage, remaining = d.get("limit"), d.get("usage"), d.get("limit_remaining")
+            if isinstance(remaining, (int, float)):
+                info["balance"] = remaining
+                info["currency"] = "USD"
+            if isinstance(limit, (int, float)) and isinstance(usage, (int, float)) and limit > 0:
+                info["usage_rate"] = max(0.0, min(1.0, usage / limit))
         return VerifyResult(status="valid", message="凭证有效", account_info=info or None)
     if status in (401, 403):
         return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
@@ -381,25 +390,15 @@ def _looks_insufficient_balance(snippet: str) -> bool:
 # ── 账号信息提取 ─────────────────────────────────────────
 
 def _extract_account_info(payload: Any) -> Optional[dict]:
-    """从响应中尽力提取账号相关信息。"""
+    """从响应中提取账号信息。
+
+    LLM 的「附加信息」只展示余额 / 使用率，故不再回传模型数量等噪声字段；
+    余额由 verify_vendor 统一通过各厂商的 balance_url 查询。
+    """
     if not isinstance(payload, dict):
         return None
 
     info: dict[str, Any] = {}
-
-    models = payload.get("data")
-    if isinstance(models, list):
-        info["model_count"] = len(models)
-
-    if isinstance(payload.get("object"), str):
-        info["object"] = payload["object"]
-    if isinstance(payload.get("first_id"), str):
-        info["first_id"] = payload["first_id"]
-    if isinstance(payload.get("last_id"), str):
-        info["last_id"] = payload["last_id"]
-    if payload.get("has_more") is not None:
-        info["has_more"] = bool(payload["has_more"])
-
     for key in ("organization", "org_id"):
         if payload.get(key):
             info[key] = payload[key]
@@ -430,23 +429,83 @@ def _parse_balance(kind: str, payload: dict) -> Optional[dict]:
                 }
             except (TypeError, ValueError):
                 return None
+    elif kind == "siliconflow":
+        data = payload.get("data")
+        if isinstance(data, dict):
+            raw = data.get("totalBalance", data.get("balance"))
+            try:
+                return {"balance": float(raw), "currency": "CNY"}
+            except (TypeError, ValueError):
+                return None
+    elif kind == "openrouter":
+        data = payload.get("data")
+        if isinstance(data, dict):
+            try:
+                total = float(data.get("total_credits", 0))
+                used = float(data.get("total_usage", 0))
+            except (TypeError, ValueError):
+                return None
+            if total <= 0:
+                return None  # 免费额度账号无余额概念
+            result: dict[str, Any] = {"balance": round(total - used, 6), "currency": "USD"}
+            result["usage_rate"] = max(0.0, min(1.0, used / total))
+            return result
     return None
 
 
-def _fetch_balance(config: dict, api_key: str) -> Optional[dict]:
-    """查询余额（best-effort），失败返回 None。"""
-    balance_url = config.get("balance_url")
-    if not balance_url:
+def _fetch_openai_billing(client: httpx.Client, base_url: str, api_key: str) -> Optional[dict]:
+    """OpenAI 兼容中转的余额：/dashboard/billing/subscription + /usage（one-api/new-api 实现）。
+
+    仅在网关实现了这两个端点时可用，否则返回 None。
+    """
+    if not base_url:
+        return None
+    root = base_url.rstrip("/")
+    headers = {"Authorization": f"Bearer {api_key}"}
+    sub = client.get(f"{root}/dashboard/billing/subscription", headers=headers)
+    if sub.status_code != 200:
+        return None
+    sub_data = _safe_json(sub)
+    if not isinstance(sub_data, dict):
         return None
     try:
+        total = float(sub_data.get("hard_limit_usd") or sub_data.get("system_hard_limit_usd") or 0)
+    except (TypeError, ValueError):
+        return None
+    used = 0.0
+    today = date.today()
+    usage = client.get(
+        f"{root}/dashboard/billing/usage",
+        headers=headers,
+        params={"start_date": today.replace(day=1).isoformat(), "end_date": today.isoformat()},
+    )
+    if usage.status_code == 200:
+        u = _safe_json(usage)
+        if isinstance(u, dict):
+            try:
+                used = float(u.get("total_usage", 0)) / 100.0  # 美分 → 美元
+            except (TypeError, ValueError):
+                used = 0.0
+    return {"balance": round(total - used, 6), "currency": "USD"}
+
+
+def _fetch_balance(config: dict, api_key: str, base_url: str = "") -> Optional[dict]:
+    """查询余额（best-effort），失败返回 None。"""
+    kind = config.get("balance_kind", "")
+    try:
         with _client() as client:
+            if kind == "openai_billing":
+                return _fetch_openai_billing(client, base_url, api_key)
+            balance_url = config.get("balance_url")
+            if not balance_url:
+                return None
             resp = client.get(balance_url, headers={"Authorization": f"Bearer {api_key}"})
-        if resp.status_code != 200:
-            return None
-        payload = _safe_json(resp)
-        if not isinstance(payload, dict):
-            return None
-        return _parse_balance(config.get("balance_kind", ""), payload)
+            if resp.status_code != 200:
+                return None
+            payload = _safe_json(resp)
+            if not isinstance(payload, dict):
+                return None
+            return _parse_balance(kind, payload)
     except Exception:
         return None
 
@@ -518,13 +577,15 @@ def verify_vendor(vendor: str, data: dict) -> VerifyResult:
 
         result = _dispatch(config["protocol"], config, base_url, api_key)
 
-        # 认证成功且配置了余额端点：查询余额，负余额标记欠费
-        if result.status == "valid" and config.get("balance_url"):
-            balance = _fetch_balance(config, api_key)
+        # 认证成功：查询余额（各厂商 balance_url / 中转 billing 接口），负余额标记欠费
+        if result.status == "valid" and (config.get("balance_url") or config.get("balance_kind")):
+            balance = _fetch_balance(config, api_key, base_url)
             if balance:
                 info = dict(result.account_info or {})
                 info["balance"] = balance["balance"]
                 info["currency"] = balance["currency"]
+                if balance.get("usage_rate") is not None:
+                    info["usage_rate"] = balance["usage_rate"]
                 result.account_info = info
                 if balance["balance"] < 0:
                     result.status = "invalid"

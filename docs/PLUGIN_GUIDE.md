@@ -138,6 +138,21 @@ plugins/
 
 ---
 
+## 2.2 附加信息（account_info）
+
+`verify` 返回的 `account_info` 会显示在凭据列表的「附加信息」列，前端按「标签 值」渲染。约定：
+
+| 场景 | account_info 写法 | 展示效果 |
+|------|-------------------|----------|
+| 余额 | `{"balance": 12.34, "currency": "CNY"}` | 余额 12.34 CNY（保留 2 位小数） |
+| 使用率（plan/额度制） | `{"usage_rate": 0.52}` | 使用率 52%（已用 ÷ 总额度，按服务适配） |
+| 其它可读字段 | 如 `organization` / `domain_count` / `account_id` | `组织 Xxx` / `域名数 1` / `账号 ID …` |
+
+- **LLM 类**：附加信息只展示**余额**；无余额概念的 plan 账号展示**使用率**。余额由 `llm_common` 按厂商 `balance_url`/`balance_kind` best-effort 查询——目前 DeepSeek / Moonshot 有余额接口，OpenRouter 用 `/credits` 计算余额与使用率；OpenAI / Anthropic / Gemini / 智谱 / 中转等多数无公开余额接口，附加信息为空。
+- 无信息量的字段（`object` / `type` / `auth_mode` / 原始时间戳等）不展示，前端 `extraInfo()` 统一处理。
+
+---
+
 ## 3. plugin.py 接口
 
 必须暴露 `verify(data)`；可选 `validate(data)` 与 `get_display_summary(data)`。

@@ -378,7 +378,7 @@ def _verify_cloudflare(data: dict) -> VerifyResult:
     result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
 
     if success is True:
-        info: dict[str, Any] = {"auth_mode": mode}
+        info: dict[str, Any] = {}
         if mode == "token":
             if result.get("id"):
                 info["token_id"] = result["id"]

@@ -75,20 +75,83 @@ function maskedSubtitle(row) {
   return values[0] || ''
 }
 
-/** 附加信息列：账户信息（余额、组织等） */
+// account_info 常见键的中文标签（插件返回的原始英文键 → 可读标签）
+const ACCOUNT_INFO_LABELS = {
+  domain_count: '域名数',
+  model_count: '模型数',
+  workspace_count: '工作区数',
+  account_id: '账号 ID',
+  user_id: '用户 ID',
+  accountId: '账号 ID',
+  userId: '用户 ID',
+  arn: 'ARN',
+  email: '邮箱',
+  login: '账号',
+  username: '账号',
+  name: '名称',
+  first_name: '名称',
+  scopes: '权限',
+  plan: '套餐',
+  accountType: '账户类型',
+  canTrade: '可交易',
+  canWithdraw: '可提现',
+  canDeposit: '可充值',
+  totalEq: '总权益',
+  isoEq: '持仓权益',
+  uTime: '更新时间',
+  server: '服务器',
+  port: '端口',
+  channel_id: '频道 ID',
+  guild_id: '服务器 ID',
+  id: 'ID',
+  label: '标签',
+  usage: '用量',
+  limit: '额度',
+  limit_remaining: '剩余额度',
+  org_id: '组织 ID',
+  ram_user: 'RAM 用户',
+  token_id: 'Token ID',
+  token_status: 'Token 状态',
+  app_id: 'App ID',
+  app_key: 'App Key',
+  tenant: '租户',
+  account: '账号',
+}
+
+// 无展示价值、直接跳过的键（余额/币种/组织在上方单独处理）
+const ACCOUNT_INFO_SKIP = new Set([
+  'balance', 'currency', 'organization', 'object', 'auth_mode', 'ssl', 'type',
+  'usage_rate', 'usage_label',
+])
+
+/** 把 account_info 的单个值格式化为可读文本（毫秒时间戳转日期） */
+function formatAccountValue(key, value) {
+  if ((key === 'uTime' || key === 'updated_at') && /^\d{12,}$/.test(String(value))) {
+    return formatDateTimeFull(new Date(Number(value)).toISOString())
+  }
+  return String(value)
+}
+
+/** 附加信息列：把 account_info 渲染为「标签 值 · …」的可读文本 */
 function extraInfo(row) {
   const info = row.status_detail && row.status_detail.account_info
   if (!info || typeof info !== 'object') return ''
   const parts = []
   if (info.balance !== undefined && info.balance !== null && info.balance !== '') {
-    parts.push(`余额 ${info.balance}${info.currency ? ` ${info.currency}` : ''}`)
+    const num = Number(info.balance)
+    const shown = Number.isFinite(num) ? num.toFixed(2) : String(info.balance)
+    parts.push(`余额 ${shown}${info.currency ? ` ${info.currency}` : ''}`)
   }
-  if (info.organization) parts.push(info.organization)
+  if (info.usage_rate !== undefined && info.usage_rate !== null && info.usage_rate !== '') {
+    const pct = Math.round(Number(info.usage_rate) * 100)
+    if (!Number.isNaN(pct)) parts.push(`使用率 ${pct}%`)
+  }
+  if (info.organization) parts.push(`组织 ${info.organization}`)
   Object.keys(info).forEach((key) => {
-    if (['balance', 'currency', 'organization'].includes(key)) return
+    if (ACCOUNT_INFO_SKIP.has(key)) return
     const value = info[key]
     if (value === null || value === undefined || value === '' || typeof value === 'object') return
-    parts.push(String(value))
+    parts.push(`${ACCOUNT_INFO_LABELS[key] || key} ${formatAccountValue(key, value)}`)
   })
   return parts.join(' · ')
 }
