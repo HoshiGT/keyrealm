@@ -91,6 +91,64 @@ def verify(data) -> VerifyResult:
     return _verify_wandb(api_key)
 
 
+# ── 可选操作：查看账号信息 ───────────────────────────────
+
+_VIEWER_QUERY = "query { viewer { username email } }"
+
+
+def actions(data: dict) -> list[dict]:
+    """声明可用操作（凭据含 api_key 时才提供）。"""
+    data = data or {}
+    if not (data.get(TOKEN_KEY) or "").strip():
+        return []
+    return [{
+        "id": "account_info",
+        "name": "查看账号信息",
+        "kind": "form",
+        "submit": "查询",
+        "fields": [],
+    }]
+
+
+def run_action(action_id: str, params: dict, data: dict) -> dict:
+    """执行操作：查看 W&B 账号信息（只读，绝不回显 api_key）。"""
+    data = data or {}
+    params = params or {}
+    api_key = (data.get(TOKEN_KEY) or "").strip()
+    if not api_key:
+        return {"ok": False, "error": "缺少 API Key"}
+    try:
+        if action_id != "account_info":
+            return {"ok": False, "error": "未知操作"}
+        with make_client() as client:
+            resp = client.post(
+                ENDPOINT,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={"query": _VIEWER_QUERY},
+            )
+        if resp.status_code in (401, 403):
+            return {"ok": False, "error": f"凭证无效 (HTTP {resp.status_code})"}
+        if resp.status_code != 200:
+            return {"ok": False, "error": f"请求失败 (HTTP {resp.status_code})"}
+        payload = safe_json(resp) or {}
+        viewer = None
+        node = payload.get("data")
+        if isinstance(node, dict):
+            viewer = node.get("viewer")
+        if not isinstance(viewer, dict) or not viewer:
+            return {"ok": False, "error": "凭证无效或无 viewer 数据"}
+        lines = [
+            f"用户名：{viewer.get('username') or '-'}",
+            f"邮箱：{viewer.get('email') or '-'}",
+        ]
+        return {"ok": True, "output": "\n".join(lines)}
+    except Exception as exc:  # noqa: BLE001 - 操作边界兜底
+        return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
+
+
 def get_display_summary(data) -> str:
     """凭据列表中的简短展示文本。"""
     data = data or {}

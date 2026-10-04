@@ -102,6 +102,111 @@ def _bot_id(token: str) -> str:
     return token.split(":", 1)[0].strip()
 
 
+# ── 可选操作：查看机器人信息（只读）/ 发送消息（写操作）────────────
+
+def _as_text(value) -> str:
+    """统一转字符串并去除首尾空白。"""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def actions(data) -> list[dict]:
+    """声明可用操作（凭据含 bot_token 时提供）。"""
+    data = data or {}
+    if not _as_text(data.get("bot_token")):
+        return []
+    return [
+        {
+            "id": "bot_info",
+            "name": "查看机器人信息",
+            "kind": "form",
+            "submit": "查询",
+            "fields": [],
+        },
+        {
+            "id": "send_message",
+            "name": "发送消息（写操作）",
+            "kind": "form",
+            "submit": "发送",
+            "fields": [
+                {
+                    "key": "chat_id",
+                    "label": "会话 ID",
+                    "type": "text",
+                    "default": "",
+                    "placeholder": "@频道名 或 数字 ID",
+                    "required": True,
+                },
+                {
+                    "key": "text",
+                    "label": "消息内容",
+                    "type": "textarea",
+                    "default": "",
+                    "placeholder": "支持 Markdown",
+                    "required": True,
+                },
+            ],
+        },
+    ]
+
+
+def run_action(action_id: str, params: dict, data: dict) -> dict:
+    """执行操作：查看机器人信息（只读）/ 发送消息（写操作）。
+
+    错误消息只暴露异常类型或 Telegram 自身 description，绝不带 URL
+    （token 位于 URL 路径中）。
+    """
+    data = data or {}
+    params = params or {}
+    token = _as_text(data.get("bot_token"))
+    if not token:
+        return {"ok": False, "error": "缺少 Bot Token"}
+    # token 位于 URL 路径，异常/非 JSON 响应可能回带 URL，故仅取异常类型与状态码
+    base = f"https://api.telegram.org/bot{token}"
+    try:
+        if action_id == "bot_info":
+            try:
+                with make_client() as client:
+                    resp = client.get(f"{base}/getMe")
+            except httpx.HTTPError as exc:
+                return {"ok": False, "error": f"网络请求失败：{type(exc).__name__}"}
+            payload = safe_json(resp)
+            if not isinstance(payload, dict):
+                return {"ok": False, "error": f"响应异常 (HTTP {resp.status_code})"}
+            if not payload.get("ok"):
+                return {"ok": False, "error": f"查询失败：{_error_detail(payload) or '未知错误'}"}
+            result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+            lines = [
+                f"机器人 ID：{result.get('id', '-')}",
+                f"用户名：{result.get('username', '-')}",
+                f"名称：{result.get('first_name', '-')}",
+            ]
+            return {"ok": True, "output": "\n".join(lines)}
+
+        if action_id == "send_message":
+            chat_id = _as_text(params.get("chat_id"))
+            text = "" if params.get("text") is None else str(params.get("text"))
+            if not chat_id:
+                return {"ok": False, "error": "请填写会话 ID"}
+            if not text.strip():
+                return {"ok": False, "error": "消息内容不能为空"}
+            try:
+                with make_client() as client:
+                    resp = client.post(f"{base}/sendMessage", json={"chat_id": chat_id, "text": text})
+            except httpx.HTTPError as exc:
+                return {"ok": False, "error": f"网络请求失败：{type(exc).__name__}"}
+            payload = safe_json(resp)
+            if isinstance(payload, dict) and payload.get("ok"):
+                return {"ok": True, "output": "已发送"}
+            detail = _error_detail(payload) if isinstance(payload, dict) else ""
+            return {"ok": False, "error": f"发送失败：{detail or f'HTTP {resp.status_code}'}"}
+
+        return {"ok": False, "error": "未知操作"}
+    except Exception as exc:  # noqa: BLE001 - 操作边界兜底
+        return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
+
+
 def get_display_summary(data) -> str:
     data = data or {}
     bot_id = _bot_id((data.get("bot_token") or "").strip())

@@ -3,7 +3,7 @@
 自带完整的校验与展示逻辑，只复用 api_common 的通用工具；
 复制本目录即可派生出新的服务插件。
 """
-from api_common import VerifyResult, body_snippet, guarded, make_client
+from api_common import VerifyResult, body_snippet, guarded, make_client, safe_json
 
 NAME = "Tavily"
 DEFAULT_BASE_URL = "https://api.tavily.com"
@@ -66,6 +66,81 @@ def verify(data):
         return VerifyResult(status="error", message=f"服务「{NAME}」需要填写 Base URL")
 
     return _verify_tavily(base_url, api_key)
+
+
+# ── 可选操作：执行搜索 ──────────────────────────────────
+
+def _as_count(value, default: int = 5, low: int = 1, high: int = 20) -> int:
+    """条数兼容 int / 数字字符串；非法或越界时回落默认值。"""
+    try:
+        count = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(count, high))
+
+
+def actions(data):
+    """声明可用操作（凭据含 api_key 时提供搜索）。"""
+    data = data or {}
+    if not (data.get("api_key") or "").strip():
+        return []
+    return [{
+        "id": "search",
+        "name": "执行搜索",
+        "kind": "form",
+        "submit": "搜索",
+        "fields": [
+            {"key": "query", "label": "搜索词", "type": "text",
+             "placeholder": "例如：latest AI news", "required": True},
+            {"key": "max_results", "label": "结果条数", "type": "text", "default": "5"},
+        ],
+    }]
+
+
+def run_action(action_id: str, params: dict, data: dict) -> dict:
+    """执行操作：调用 Tavily 搜索接口并列出来源（只读，不回显 API Key）。"""
+    data = data or {}
+    params = params or {}
+    try:
+        if action_id != "search":
+            return {"ok": False, "error": "未知操作"}
+
+        api_key = (data.get("api_key") or "").strip()
+        if not api_key:
+            return {"ok": False, "error": "缺少 API Key"}
+        query = (params.get("query") or "").strip()
+        if not query:
+            return {"ok": False, "error": "请填写搜索词"}
+        base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
+        max_results = _as_count(params.get("max_results"), 5, 1, 20)
+
+        with make_client() as client:
+            resp = client.post(
+                base_url.rstrip("/") + "/search",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"query": query, "max_results": max_results},
+            )
+        if resp.status_code != 200:
+            return {"ok": False, "error": f"搜索失败（HTTP {resp.status_code}）"}
+
+        payload = safe_json(resp) or {}
+        results = payload.get("results")
+        results = results if isinstance(results, list) else []
+        lines = [f"「{query}」共返回 {len(results)} 条结果：", ""]
+        for index, item in enumerate(results, 1):
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title", "")).strip() or "(无标题)"
+            url = str(item.get("url", "")).strip()
+            content = " ".join(str(item.get("content", "")).split())[:200]
+            lines.append(f"{index}. {title}")
+            if url:
+                lines.append(f"   {url}")
+            if content:
+                lines.append(f"   {content}")
+        return {"ok": True, "output": "\n".join(lines)}
+    except Exception as exc:  # noqa: BLE001 - 操作边界兜底
+        return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
 
 
 def get_display_summary(data):

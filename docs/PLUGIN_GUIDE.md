@@ -313,6 +313,22 @@ cloudflare（API Token 或 Global API Key）。
 > 说明：`duckdns` 的校验本身是写操作（先写入 `1.1.1.1` 确认生效再还原原值），
 > `wechat_ilink` 与 `ht` 无公开校验接口——三者均标记 `batch_verify: false`，只能手动单个验证。
 
+### 内置「简易操作」一览
+
+凭据齐全时，凭据行会出现「操作」按钮（见 §3.1）。当前内置操作：
+
+- **llm**：全部 18 个厂商 —— 简单对话
+- **dns**：dnspod（查看解析记录、新增/修改解析记录）、godaddy（查看域名解析记录、查看域名列表）、
+  duckdns（查看当前解析）
+- **cloud**：cloudflare（查看站点、查看/修改 DNS 记录）、aliyun / tencentcloud（查看调用者身份）
+- **dev**：github（查看账号信息、查看我的仓库）、huggingface / wandb（查看账号信息）
+- **im**：telegram（查看机器人信息、发送消息）、discord（查看 Webhook 信息）
+- **exchange**：okx（查看账户余额）、binance（查看账户信息、查看交易所时间）
+- **api**：coze（查看工作区）、tavily（执行搜索）、firecrawl（抓取网页）
+- **mail**：smtp（查看收件箱，IMAP 只读）
+
+> 写操作（名称中已标注，如「新增/修改解析记录」「发送消息」）会真实改动远端数据，请谨慎使用。
+
 ---
 
 ## 6. 调试

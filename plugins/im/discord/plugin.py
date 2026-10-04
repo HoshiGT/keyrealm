@@ -94,6 +94,61 @@ def _webhook_id(url: str) -> str:
     return ""
 
 
+# ── 可选操作：查看 Webhook 信息（只读）────────────────────
+
+def _as_text(value) -> str:
+    """统一转字符串并去除首尾空白。"""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def actions(data) -> list[dict]:
+    """声明可用操作（凭据含 webhook_url 时提供）。"""
+    data = data or {}
+    if not _as_text(data.get("webhook_url")):
+        return []
+    return [{
+        "id": "webhook_info",
+        "name": "查看 Webhook 信息",
+        "kind": "form",
+        "submit": "查询",
+        "fields": [],
+    }]
+
+
+def run_action(action_id: str, params: dict, data: dict) -> dict:
+    """执行操作：读取 Webhook 元数据（只读）。
+
+    关闭重定向（与 verify 一致）；错误只暴露异常类型与状态码，绝不带 URL
+    （token 位于 URL 路径中）；响应里的 token 字段不回显。
+    """
+    data = data or {}
+    if action_id != "webhook_info":
+        return {"ok": False, "error": "未知操作"}
+    url = _as_text(data.get("webhook_url"))
+    if not url:
+        return {"ok": False, "error": "缺少 Webhook URL"}
+    try:
+        try:
+            with make_client(follow_redirects=False) as client:
+                resp = client.get(url)
+        except httpx.HTTPError as exc:
+            return {"ok": False, "error": f"网络请求失败：{type(exc).__name__}"}
+        payload = safe_json(resp)
+        if resp.status_code != 200 or not isinstance(payload, dict):
+            return {"ok": False, "error": f"查询失败 (HTTP {resp.status_code})"}
+        # 注意：不输出响应中的 token 字段（与凭据同源，属敏感信息）
+        lines = [
+            f"名称：{payload.get('name') or '-'}",
+            f"频道 ID：{payload.get('channel_id') or '-'}",
+            f"服务器 ID：{payload.get('guild_id') or '-'}",
+        ]
+        return {"ok": True, "output": "\n".join(lines)}
+    except Exception as exc:  # noqa: BLE001 - 操作边界兜底
+        return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
+
+
 def get_display_summary(data) -> str:
     data = data or {}
     webhook_id = _webhook_id((data.get("webhook_url") or "").strip())

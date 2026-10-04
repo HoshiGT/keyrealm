@@ -71,6 +71,64 @@ def verify(data):
     return _verify_firecrawl(base_url, api_key)
 
 
+# ── 可选操作：抓取网页 ──────────────────────────────────
+
+def actions(data):
+    """声明可用操作（凭据含 api_key 时提供网页抓取）。"""
+    data = data or {}
+    if not (data.get("api_key") or "").strip():
+        return []
+    return [{
+        "id": "scrape",
+        "name": "抓取网页",
+        "kind": "form",
+        "submit": "抓取",
+        "fields": [
+            {"key": "url", "label": "网页 URL", "type": "text",
+             "placeholder": "https://example.com", "required": True},
+        ],
+    }]
+
+
+def run_action(action_id: str, params: dict, data: dict) -> dict:
+    """执行操作：调用 Firecrawl 抓取网页并输出 markdown（只读，不回显 API Key）。"""
+    data = data or {}
+    params = params or {}
+    try:
+        if action_id != "scrape":
+            return {"ok": False, "error": "未知操作"}
+
+        api_key = (data.get("api_key") or "").strip()
+        if not api_key:
+            return {"ok": False, "error": "缺少 API Key"}
+        target = (params.get("url") or "").strip()
+        if not target:
+            return {"ok": False, "error": "请填写网页 URL"}
+        base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
+
+        with make_client() as client:
+            resp = client.post(
+                base_url.rstrip("/") + "/v1/scrape",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"url": target, "formats": ["markdown"]},
+            )
+        if resp.status_code != 200:
+            return {"ok": False, "error": f"抓取失败（HTTP {resp.status_code}）"}
+
+        payload = safe_json(resp) or {}
+        if not payload.get("success"):
+            return {"ok": False, "error": "抓取失败：接口返回 success=false"}
+        info = payload.get("data")
+        info = info if isinstance(info, dict) else {}
+        markdown = str(info.get("markdown", "")).strip()
+        if not markdown:
+            return {"ok": False, "error": "未取到 markdown 内容"}
+        lines = [f"{target} 抓取成功，markdown 前 1500 字：", "", markdown[:1500]]
+        return {"ok": True, "output": "\n".join(lines)}
+    except Exception as exc:  # noqa: BLE001 - 操作边界兜底
+        return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
+
+
 def get_display_summary(data):
     """凭据列表中的简短展示文本。"""
     data = data or {}

@@ -128,6 +128,73 @@ def verify(data):
     return _unconfirmed(status, body_snippet(resp))
 
 
+# ── 可选操作：查看调用者身份（只读）─────────────────────
+
+def _redact(text: str, *secrets: str) -> str:
+    """把可能出现在接口返回中的密钥替换掉，任何路径都不回显凭据。"""
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "***")
+    return text
+
+
+def actions(data: dict) -> list[dict]:
+    """声明可用操作（凭据完整时提供只读的调用者身份查询）。"""
+    data = data or {}
+    if not (_field(data, "access_key_id") and _field(data, "access_key_secret")):
+        return []
+    return [{
+        "id": "whoami",
+        "name": "查看调用者身份",
+        "kind": "form",
+        "submit": "查询",
+        "fields": [],
+    }]
+
+
+def run_action(action_id: str, params: dict, data: dict) -> dict:
+    """执行操作：调用 STS GetCallerIdentity 查看当前凭据身份（只读）。"""
+    data = data or {}
+    try:
+        if action_id != "whoami":
+            return {"ok": False, "error": "未知操作"}
+
+        access_key_id = _field(data, "access_key_id")
+        access_key_secret = _field(data, "access_key_secret")
+        if not access_key_id or not access_key_secret:
+            return {"ok": False, "error": "AccessKey ID 或 AccessKey Secret 为空"}
+
+        # 复用与 verify 相同的 RPC 签名 v1 逻辑，仅请求体构造重复一次
+        query: dict[str, Any] = {
+            "Format": "JSON",
+            "Version": "2015-04-01",
+            "AccessKeyId": access_key_id,
+            "SignatureMethod": "HMAC-SHA1",
+            "SignatureVersion": "1.0",
+            "SignatureNonce": str(uuid.uuid4()),
+            "Timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "Action": "GetCallerIdentity",
+        }
+        query["Signature"] = _aliyun_signature(query, access_key_secret)
+
+        with make_client() as client:
+            resp = client.get(STS_ENDPOINT, params=query)
+
+        payload = safe_json(resp) or {}
+        code = str(payload.get("Code") or "").strip()
+        if resp.status_code != 200 or code:
+            detail = str(payload.get("Message") or code or f"HTTP {resp.status_code}")
+            return {"ok": False, "error": f"查询失败：{_redact(detail, access_key_id, access_key_secret)}"}
+
+        lines = ["调用者身份："]
+        for key in ("AccountId", "Arn", "UserId"):
+            if payload.get(key):
+                lines.append(f"{key}: {payload[key]}")
+        return {"ok": True, "output": "\n".join(lines)}
+    except Exception as exc:  # noqa: BLE001 - 操作边界兜底，绝不抛出
+        return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
+
+
 def get_display_summary(data):
     """凭据列表中的简短展示文本（不回显任何敏感字段）。"""
     return "阿里云 | AccessKey (AK/SK)"

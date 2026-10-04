@@ -156,6 +156,83 @@ def verify(data):
     return _unconfirmed(status, body_snippet(resp))
 
 
+# ── 可选操作：查看调用者身份（只读）─────────────────────
+
+def _redact(text: str, *secrets: str) -> str:
+    """把可能出现在接口返回中的密钥替换掉，任何路径都不回显凭据。"""
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "***")
+    return text
+
+
+def actions(data: dict) -> list[dict]:
+    """声明可用操作（凭据完整时提供只读的调用者身份查询）。"""
+    data = data or {}
+    if not (_field(data, "secret_id") and _field(data, "secret_key")):
+        return []
+    return [{
+        "id": "whoami",
+        "name": "查看调用者身份",
+        "kind": "form",
+        "submit": "查询",
+        "fields": [],
+    }]
+
+
+def run_action(action_id: str, params: dict, data: dict) -> dict:
+    """执行操作：调用 STS GetCallerIdentity 查看当前凭据身份（只读）。"""
+    data = data or {}
+    try:
+        if action_id != "whoami":
+            return {"ok": False, "error": "未知操作"}
+
+        secret_id = _field(data, "secret_id")
+        secret_key = _field(data, "secret_key")
+        if not secret_id or not secret_key:
+            return {"ok": False, "error": "SecretId 或 SecretKey 为空"}
+
+        # 复用与 verify 相同的 TC3-HMAC-SHA256 签名逻辑，仅请求体构造重复一次
+        payload = "{}"
+        content_type = "application/json; charset=utf-8"
+        timestamp = int(datetime.now(timezone.utc).timestamp())
+        date = datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%d")
+        headers = {
+            "Authorization": _tencent_authorization(
+                secret_id, secret_key, timestamp, date, payload, content_type
+            ),
+            "Content-Type": content_type,
+            "Host": STS_HOST,
+            "X-TC-Action": STS_ACTION,
+            "X-TC-Version": STS_VERSION,
+            "X-TC-Timestamp": str(timestamp),
+            "X-TC-Region": STS_REGION,
+        }
+
+        with make_client() as client:
+            resp = client.post(f"https://{STS_HOST}/", headers=headers, content=payload)
+
+        body = safe_json(resp) or {}
+        response_body = body.get("Response")
+        response_body = response_body if isinstance(response_body, dict) else {}
+
+        # 腾讯云多数业务错误以 HTTP 200 + Response.Error 返回
+        error = response_body.get("Error")
+        if isinstance(error, dict):
+            detail = str(error.get("Message") or error.get("Code") or f"HTTP {resp.status_code}")
+            return {"ok": False, "error": f"查询失败：{_redact(detail, secret_id, secret_key)}"}
+        if resp.status_code != 200:
+            return {"ok": False, "error": f"查询失败：HTTP {resp.status_code}"}
+
+        lines = ["调用者身份："]
+        for key in ("Arn", "AccountId", "PrincipalId", "UserId"):
+            if response_body.get(key):
+                lines.append(f"{key}: {response_body[key]}")
+        return {"ok": True, "output": "\n".join(lines)}
+    except Exception as exc:  # noqa: BLE001 - 操作边界兜底，绝不抛出
+        return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
+
+
 def get_display_summary(data):
     """凭据列表中的简短展示文本（不回显任何敏感字段）。"""
     return "腾讯云 | SecretId/SecretKey"

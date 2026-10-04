@@ -154,6 +154,56 @@ def verify(data):
     return _verify_duckdns(data)
 
 
+# ── 可选操作：查看当前解析（只读）────────────────────
+
+def actions(data: dict) -> list[dict]:
+    """声明可用操作（凭据含 token 与域名时提供解析查看）。"""
+    data = data or {}
+    if not ((data.get("token") or "").strip() and _normalize_duckdns_domain(data.get("domain") or "")):
+        return []
+    domain = _normalize_duckdns_domain(data.get("domain") or "")
+    return [
+        {
+            "id": "view_records",
+            "name": "查看当前解析",
+            "kind": "form",
+            "submit": "查询",
+            "fields": [
+                {
+                    "key": "domain",
+                    "label": "域名",
+                    "type": "text",
+                    "default": domain,
+                    "placeholder": "子域名，如 myhome（无需 .duckdns.org）",
+                },
+            ],
+        },
+    ]
+
+
+def run_action(action_id: str, params: dict, data: dict) -> dict:
+    """执行操作：经 DoH 查看 DuckDNS 当前 A 记录（只读，绝不触发 update 写入）。"""
+    data = data or {}
+    params = params or {}
+    try:
+        if action_id == "view_records":
+            domain = _normalize_duckdns_domain(params.get("domain") or data.get("domain") or "")
+            if not domain:
+                return {"ok": False, "error": "请填写域名"}
+            fqdn = f"{domain}{_DUCKDNS_FQDN_SUFFIX}"
+            ip = _doh_resolve_a(fqdn)
+            if not ip:
+                return {
+                    "ok": True,
+                    "output": f"{fqdn} 未查询到 A 记录（可能未设置或解析尚未生效）",
+                }
+            return {"ok": True, "output": f"{fqdn} 当前解析：\n  A    {ip}"}
+
+        return {"ok": False, "error": "未知操作"}
+    except Exception as exc:  # noqa: BLE001 - 操作边界兜底
+        return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
+
+
 def get_display_summary(data):
     """凭据列表中的简短展示文本。"""
     data = data or {}

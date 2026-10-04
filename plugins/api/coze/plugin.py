@@ -70,6 +70,60 @@ def verify(data):
     return _verify_coze(base_url, api_key)
 
 
+# ── 可选操作：查看工作区 ────────────────────────────────
+
+def actions(data):
+    """声明可用操作（凭据含 api_key 时提供工作区查看）。"""
+    data = data or {}
+    if not (data.get("api_key") or "").strip():
+        return []
+    return [{
+        "id": "workspaces",
+        "name": "查看工作区",
+        "kind": "form",
+        "submit": "查询",
+        "fields": [],
+    }]
+
+
+def run_action(action_id: str, params: dict, data: dict) -> dict:
+    """执行操作：列出 Coze 名下工作区（只读，不回显 API Key）。"""
+    data = data or {}
+    try:
+        if action_id != "workspaces":
+            return {"ok": False, "error": "未知操作"}
+
+        api_key = (data.get("api_key") or "").strip()
+        if not api_key:
+            return {"ok": False, "error": "缺少 API Key"}
+        base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
+
+        with make_client() as client:
+            resp = client.get(
+                base_url.rstrip("/") + "/v1/workspaces",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if resp.status_code != 200:
+            return {"ok": False, "error": f"查询失败（HTTP {resp.status_code}）"}
+
+        payload = safe_json(resp) or {}
+        info = payload.get("data")
+        info = info if isinstance(info, dict) else {}
+        items = info.get("workspace_list") or info.get("items") or []
+        items = items if isinstance(items, list) else []
+        total = info.get("total_count", len(items))
+        lines = [f"共 {total} 个工作区：", ""]
+        for index, item in enumerate(items, 1):
+            if not isinstance(item, dict):
+                continue
+            lines.append(f"{index}. {item.get('name', '')} (id={item.get('id', '')})")
+        if not items:
+            lines.append("（无工作区）")
+        return {"ok": True, "output": "\n".join(lines)}
+    except Exception as exc:  # noqa: BLE001 - 操作边界兜底
+        return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
+
+
 def get_display_summary(data):
     """凭据列表中的简短展示文本。"""
     data = data or {}
