@@ -96,7 +96,7 @@ def _badge(size: int) -> Image.Image:
 
 def _svg() -> str:
     """等价的矢量 favicon（圆角渐变方块 + 圆环 + 钥匙孔）。"""
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+    return """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#3B82F6"/>

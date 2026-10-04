@@ -85,7 +85,6 @@ API-Key-Checker/
 └── data/                  # 已在 .gitignore 中排除
     ├── credentials.db
     ├── credentials.db-wal
-    └── installed_plugins/   # 旧版遗留缓存，启动时一次性迁移/清理
 ```
 
 > 应用启动时自动创建 `data/` 目录。数据库路径相对于 `main.py` 所在目录解析，与操作系统无关。
@@ -125,7 +124,6 @@ plugins/
 - **类别共享模块**：同类别子插件通过 `from llm_common import ...` 复用**通用工具**（`VerifyResult` / `make_client` / `safe_json` / `guarded` 等，llm 另有协议级探针）；加载子插件时临时将其目录与类别目录注入 `sys.path`（见 plugin_base.load_plugin_module）。**具体厂商逻辑在各子插件内自带，新增插件无需改动共享模块。**
 - **同步流程**：启动时 `sync_plugins()` 扫描两层结构 → upsert plugins 表（含 category / category_name / batch_verify）→ 清理已消失插件的记录与模块缓存。
 - **批量验证开关**：manifest 的 `batch_verify`（默认 true）落库到 plugins.batch_verify；调度器与前端批量时跳过为 false 的类型（无法自动化或有写副作用，如 duckdns / wechat_ilink / ht）——前端在批量勾选弹窗中禁用其勾选。
-- **旧版迁移**：`data/installed_plugins/`（zip 安装时代遗留）启动时由 `migrate_legacy_installed_plugins()` 一次性迁移/清理。
 
 **插件模块约定**：必须暴露 `verify(data)`；可选 `validate(data)`、`get_display_summary(data)`。`verify` 返回值鸭子类型兼容 VerifyResult / dataclass / dict。
 

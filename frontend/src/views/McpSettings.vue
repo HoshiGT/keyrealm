@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CircleCheck, CircleClose, Refresh, VideoPause, VideoPlay } from '@element-plus/icons-vue'
+import { Refresh, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 
 import { useMcpStore } from '@/stores/mcp'
 import { useAppStore } from '@/stores/app'

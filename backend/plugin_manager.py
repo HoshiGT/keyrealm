@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import base64
 import json
-import shutil
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -30,7 +29,6 @@ from . import database as db
 from . import logger
 from .paths import app_dir
 from .plugin_base import (
-    PluginManifest,
     VerifyResult,
     call_display_summary,
     call_validate,
@@ -45,12 +43,6 @@ _log = logger.get_logger(__name__)
 # plugins/ 是插件的【唯一事实来源】，不打包进 exe，随 exe 同级以外部目录形式提供。
 BASE_DIR = app_dir()
 PLUGINS_DIR = BASE_DIR / "plugins"
-
-# 旧版本运行期缓存目录（zip 安装时代），启动时一次性迁移/清理
-_LEGACY_PLUGINS_DIR = BASE_DIR / "data" / "installed_plugins"
-
-# 旧版内置整包插件的 credential_type（其缓存目录直接清理，不迁移）
-_LEGACY_BUILTIN_TYPES = ("llm_api_key", "api_service")
 
 # 内存中的插件模块缓存  credential_type -> module
 _loaded_modules: dict[str, Any] = {}
@@ -223,43 +215,6 @@ def sync_plugins():
 def _unload_plugin(credential_type: str):
     _loaded_modules.pop(credential_type, None)
     sys.modules.pop(f"_vault_plugin_{credential_type}", None)
-
-
-def migrate_legacy_installed_plugins():
-    """迁移旧版本 data/installed_plugins/ 运行期缓存。
-
-    旧内置整包插件（llm_api_key/api_service）的缓存直接删除；
-    用户 zip 安装的其他插件移动到 plugins/ 根级，纳入自动加载。
-    """
-    legacy = _LEGACY_PLUGINS_DIR
-    if not legacy.exists():
-        return
-    for entry in sorted(legacy.iterdir()):
-        if not entry.is_dir():
-            continue
-        if entry.name in _LEGACY_BUILTIN_TYPES or not (entry / "manifest.json").exists():
-            shutil.rmtree(entry, ignore_errors=True)
-            continue
-        dest = PLUGINS_DIR / entry.name
-        if dest.exists():
-            shutil.rmtree(entry, ignore_errors=True)
-            continue
-        try:
-            PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(entry), str(dest))
-            _log.info("旧版插件已迁移到 plugins/: %s", entry.name)
-        except Exception as e:
-            _log.error("旧版插件迁移失败 %s: %s", entry.name, e)
-    try:
-        legacy.rmdir()  # 仅清空后删除目录本身
-    except OSError:
-        pass
-
-
-def bootstrap_plugins():
-    """启动入口：迁移旧缓存并全量扫描 plugins/。"""
-    migrate_legacy_installed_plugins()
-    sync_plugins()
 
 
 def load_plugin(credential_type: str) -> Optional[Any]:

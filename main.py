@@ -4,7 +4,6 @@ pywebview 主窗口 + 系统托盘 + MCP Server + 调度器
 """
 from __future__ import annotations
 
-import os
 import sys
 import threading
 from pathlib import Path
@@ -195,7 +194,6 @@ def _shutdown_services():
 
 def _hide_to_tray():
     """隐藏窗口到系统托盘（后台运行）。"""
-    global _window
     if _window:
         _window.hide()
         tray.show_first_minimize_bubble()
@@ -203,7 +201,6 @@ def _hide_to_tray():
 
 def _on_closing():
     """窗口关闭事件：按用户设置的关闭行为处理（询问/直接退出/后台运行）。"""
-    global _window
     if _quitting:
         return True  # 正在退出，允许关闭
 
@@ -227,7 +224,6 @@ def _on_closing():
 
 
 def _show_window():
-    global _window
     if _window:
         _window.show()
         _window.restore()
@@ -263,8 +259,8 @@ def main():
     log.info("应用启动（frozen=%s，日志级别=%s，数据目录=%s）",
              is_frozen(), logger.get_level(), app_dir())
 
-    # 装载插件（迁移旧缓存 + 扫描 plugins/）
-    plugin_manager.bootstrap_plugins()
+    # 扫描 plugins/ 装载插件
+    plugin_manager.sync_plugins()
 
     # 注入回调
     api.init_callbacks()

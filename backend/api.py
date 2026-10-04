@@ -5,7 +5,6 @@ pywebview JS-API 桥接层
 from __future__ import annotations
 
 import json
-import os
 import threading
 from typing import Any, Optional, Union
 
@@ -265,7 +264,7 @@ def create_credential(
     )
 
     if auto_verify:
-        result = scheduler.verify_single_credential(cred["id"], trigger_type="auto")
+        scheduler.verify_single_credential(cred["id"], trigger_type="auto")
         cred = db.get_credential(cred["id"]) or cred
 
     push_event("vault:credentials_changed")

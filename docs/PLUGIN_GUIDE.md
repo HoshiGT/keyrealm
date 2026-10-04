@@ -307,6 +307,3 @@ print(mod.verify({"base_url": "https://api.deepseek.com/v1", "api_key": "sk-..."
   - `VAULT_PROXY=socks5://127.0.0.1:10808`：让校验走代理（telegram / discord / huggingface 等被墙厂商必需）；
   - 条目 `expected` 取值：`valid` / `invalid` / `overdue`（按 invalid 判定）/ `ip_restricted` / `skip`。
     其中 `expected: "skip"` 的条目**不会调用 verify**（用于有写副作用或无校验接口的类型）。
-
-- 旧版本（zip 安装时代）的 `data/installed_plugins/` 运行期缓存会在启动时由
-  `migrate_legacy_installed_plugins()` 一次性迁移/清理，无需手工处理。

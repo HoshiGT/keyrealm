@@ -6,7 +6,6 @@ SQLite 数据访问层
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -146,9 +145,7 @@ def _migrate(conn: sqlite3.Connection):
         from_version = 0
 
     if from_version < 2:
-        # v2: credentials.last_valid_at、plugins.category/category_name、
-        #     删除 verification_history、移除 vault_install_plugin 权限、
-        #     存量凭据类型 llm_api_key→llm_<vendor>、api_service→api_<vendor>
+        # v2: credentials.last_valid_at、plugins.category/category_name
         cred_cols = {r["name"] for r in conn.execute("PRAGMA table_info(credentials)")}
         if "last_valid_at" not in cred_cols:
             conn.execute("ALTER TABLE credentials ADD COLUMN last_valid_at TIMESTAMP")
@@ -159,42 +156,11 @@ def _migrate(conn: sqlite3.Connection):
         if "category_name" not in plugin_cols:
             conn.execute("ALTER TABLE plugins ADD COLUMN category_name TEXT DEFAULT ''")
 
-        # 旧整包插件按 data_plain.vendor 拆分为独立子插件类型
-        legacy_types = {"llm_api_key": "llm_", "api_service": "api_"}
-        rows = conn.execute(
-            "SELECT id, credential_type, data_plain FROM credentials "
-            "WHERE credential_type IN ('llm_api_key','api_service')"
-        ).fetchall()
-        for r in rows:
-            try:
-                vendor = (json.loads(r["data_plain"] or "{}") or {}).get("vendor") or ""
-            except Exception:
-                vendor = ""
-            prefix = legacy_types[r["credential_type"]]
-            if not vendor:
-                # 无厂商信息的兜底：OpenAI 兼容中转需用户自行补 Base URL
-                vendor = "openai_compatible" if prefix == "llm_" else "firecrawl"
-            new_type = f"{prefix}{vendor}"
-            # data_plain 中残留的 vendor 字段一并清理
-            try:
-                plain = json.loads(r["data_plain"] or "{}") or {}
-                plain.pop("vendor", None)
-                new_plain = json.dumps(plain, ensure_ascii=False)
-            except Exception:
-                new_plain = r["data_plain"]
-            conn.execute(
-                "UPDATE credentials SET credential_type=?, data_plain=? WHERE id=?",
-                (new_type, new_plain, r["id"]),
-            )
-
         # 最后有效时间回填：当前状态为有效的凭据，以最后验证时间近似
         conn.execute(
             "UPDATE credentials SET last_valid_at=last_verified_at "
             "WHERE status='valid' AND last_valid_at IS NULL"
         )
-
-        conn.execute("DROP TABLE IF EXISTS verification_history")
-        conn.execute("DELETE FROM mcp_permissions WHERE tool_name='vault_install_plugin'")
         conn.commit()
 
     if from_version < 3:
@@ -231,6 +197,12 @@ def _seed_mcp_permissions(conn: sqlite3.Connection):
             "INSERT OR IGNORE INTO mcp_permissions (tool_name, enabled, description) VALUES (?,?,?)",
             (tool, enabled, desc),
         )
+    # 权限表以 defaults 为准：清理已不存在的工具记录
+    placeholders = ",".join("?" for _ in defaults)
+    conn.execute(
+        f"DELETE FROM mcp_permissions WHERE tool_name NOT IN ({placeholders})",
+        [tool for tool, _, _ in defaults],
+    )
     conn.commit()
 
 

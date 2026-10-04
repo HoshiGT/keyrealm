@@ -5,7 +5,6 @@ MCP Server — SSE 传输，Bearer Token 鉴权
 from __future__ import annotations
 
 import asyncio
-import json
 import threading
 import time
 from contextvars import ContextVar
@@ -14,7 +13,6 @@ from typing import Any, Optional
 
 import uvicorn
 from mcp.server.mcpserver import MCPServer
-from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -206,7 +204,7 @@ def _build_mcp_app() -> MCPServer:
 
         if auto_verify:
             from .scheduler import verify_single_credential
-            result = verify_single_credential(cred["id"], trigger_type="auto")
+            verify_single_credential(cred["id"], trigger_type="auto")
             cred = db.get_credential(cred["id"]) or cred
 
         _push_event("vault:credentials_changed", {})
@@ -363,7 +361,7 @@ def _make_asgi_app(mcp: MCPServer):
 
 def start_server(port: int = 8765) -> tuple[bool, int, str]:
     """启动 MCP SSE 服务（后台线程）"""
-    global _server_thread, _uvicorn_server, _mcp_app, _running, _port
+    global _server_thread, _uvicorn_server, _mcp_app, _port
 
     if _running:
         return True, _port, f"http://127.0.0.1:{_port}/sse"
@@ -411,7 +409,7 @@ def start_server(port: int = 8765) -> tuple[bool, int, str]:
 
 
 def stop_server():
-    global _running, _uvicorn_server
+    global _running
     if _uvicorn_server:
         _uvicorn_server.should_exit = True
     _running = False

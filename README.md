@@ -78,8 +78,6 @@ release/
 
 > 约定：插件只以 `plugins/` 为准。一个服务就是一个独立子插件，放入 `plugins/` 目录
 > 即自动加载，删除对应子插件目录即卸载，互不影响，无需手动管理。
-> 旧版本的 `data/installed_plugins/` 运行期缓存已废弃：应用启动时由
-> `migrate_legacy_installed_plugins()` 一次性迁移/清理，不再重建，发行包中也不包含它。
 
 打包边界：
 
@@ -121,7 +119,6 @@ API-Key-Checker/
 │   ├── api.py               # pywebview JS-API 桥接层
 │   ├── crypto.py            # AES-256-GCM 加密/解密
 │   ├── database.py          # SQLite 数据访问层
-│   ├── models.py            # 数据模型（Pydantic）
 │   ├── paths.py             # 冻结感知路径解析（打包/开发统一）
 │   ├── plugin_base.py       # 插件接口定义
 │   ├── plugin_manager.py    # 插件目录扫描与自动加载

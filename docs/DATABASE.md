@@ -12,9 +12,6 @@ API-Key-Checker/
     └── credentials.db-shm    # 共享内存（运行时）
 ```
 
-> 旧版本的 `data/installed_plugins/`（zip 安装时代的运行期缓存）已废弃，
-> 启动时由 `migrate_legacy_installed_plugins()` 一次性迁移/清理，不再创建。
-
 > `data/` 目录已加入 `.gitignore`，不会提交到版本库。应用启动时自动创建。
 
 SQLite 开启 WAL 模式，支持读写并发。

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 import sys
-import time  # noqa: F401 - 供子插件按需复用；本模块自身不直接使用
 from dataclasses import dataclass
 from typing import Optional
 

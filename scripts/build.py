@@ -64,9 +64,9 @@ def build_frontend() -> None:
 
 def run_pyinstaller(console: bool) -> None:
     """调用当前解释器的 PyInstaller，按 spec 打包到 dist/。"""
-    try:
-        import PyInstaller  # noqa: F401
-    except ImportError:
+    import importlib.util
+
+    if importlib.util.find_spec("PyInstaller") is None:
         sys.exit("当前 Python 环境未安装 PyInstaller：pip install pyinstaller")
 
     if not FRONTEND_DIST.exists():
