@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from '@/api'
+import { inlineIcon } from '@/utils/pluginIcon'
 
 const emptyFilters = () => ({
   group_id: null,
@@ -50,7 +51,7 @@ export const useVaultStore = defineStore('vault', {
 
     typeOptions: (state) =>
       state.plugins.map((plugin) => ({
-        label: `${plugin.icon || '🔑'} ${plugin.name}`,
+        label: `${inlineIcon(plugin.icon, '')} ${plugin.name}`.trim(),
         value: plugin.credential_type,
       })),
 
@@ -63,7 +64,7 @@ export const useVaultStore = defineStore('vault', {
           groups[key] = { label: plugin.category_name || plugin.category || '其他', options: [] }
         }
         groups[key].options.push({
-          label: `${plugin.icon || '🔑'} ${plugin.name}`,
+          label: `${inlineIcon(plugin.icon, '')} ${plugin.name}`.trim(),
           value: plugin.credential_type,
         })
       })
@@ -87,7 +88,7 @@ export const useVaultStore = defineStore('vault', {
         categories[key].children.push({
           id: `type:${plugin.credential_type}`,
           label: plugin.name,
-          icon: plugin.icon || '🔑',
+          icon: inlineIcon(plugin.icon),
           icon_image: plugin.icon_image || null,
           credential_type: plugin.credential_type,
           category: key,

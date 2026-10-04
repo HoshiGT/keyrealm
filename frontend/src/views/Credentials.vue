@@ -8,6 +8,7 @@ import CredentialForm from '@/components/CredentialForm.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { useVaultStore } from '@/stores/vault'
 import { STATUS_OPTIONS, formatDateTimeFull } from '@/utils/format'
+import { inlineIcon } from '@/utils/pluginIcon'
 
 const route = useRoute()
 const router = useRouter()
@@ -50,7 +51,7 @@ function typeLabel(type) {
 
 function typeIcon(type) {
   const plugin = pluginFor(type)
-  return plugin && plugin.icon ? plugin.icon : '🔑'
+  return inlineIcon(plugin && plugin.icon)
 }
 
 /** 插件自定义图标（manifest icon 指向图片文件时后端返回 data URL） */
