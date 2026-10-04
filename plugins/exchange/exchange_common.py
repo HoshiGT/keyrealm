@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -82,8 +83,17 @@ def _body_snippet(response: httpx.Response) -> str:
     return " ".join(text.split())[:_BODY_LIMIT]
 
 
+def _proxy() -> Optional[str]:
+    """验证代理：优先 VAULT_PROXY（应用设置写入），其次标准代理环境变量。"""
+    for key in ("VAULT_PROXY", "ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"):
+        value = os.environ.get(key)
+        if value:
+            return value
+    return None
+
+
 def _client() -> httpx.Client:
-    return httpx.Client(timeout=TIMEOUT, follow_redirects=True)
+    return httpx.Client(timeout=TIMEOUT, follow_redirects=True, proxy=_proxy())
 
 
 def _unconfirmed(status: int, snippet: str) -> VerifyResult:
@@ -178,6 +188,19 @@ def _verify_okx(data: dict) -> VerifyResult:
     return _unconfirmed(resp.status_code, _body_snippet(resp))
 
 
+def _binance_server_time() -> Optional[int]:
+    """取 Binance 服务器时间（毫秒），避免本机时钟偏差触发 -1021；失败返回 None。"""
+    try:
+        with _client() as client:
+            resp = client.get("https://api.binance.com/api/v3/time")
+        payload = _safe_json(resp)
+        if isinstance(payload, dict) and isinstance(payload.get("serverTime"), int):
+            return payload["serverTime"]
+    except Exception:  # noqa: BLE001 - 拿不到就回退本机时间
+        return None
+    return None
+
+
 def _verify_binance(data: dict) -> VerifyResult:
     """Binance：GET /api/v3/account，HMAC-SHA256 查询串签名鉴权。"""
     api_key = (data.get("api_key") or "").strip()
@@ -186,8 +209,8 @@ def _verify_binance(data: dict) -> VerifyResult:
         return VerifyResult(status="invalid", message="缺少 Secret Key")
 
     path = "/api/v3/account"
-    # 参与签名的查询串必须与实际请求顺序一致
-    timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
+    # 参与签名的查询串必须与实际请求顺序一致；优先用服务器时间规避时钟偏差(-1021)
+    timestamp = _binance_server_time() or int(datetime.now(timezone.utc).timestamp() * 1000)
     query_string = f"timestamp={timestamp}&recvWindow=5000"
     signature = hmac.new(
         secret_key.encode("utf-8"), query_string.encode("utf-8"), hashlib.sha256
@@ -210,9 +233,10 @@ def _verify_binance(data: dict) -> VerifyResult:
                     info[key] = payload[key]
         return VerifyResult(status="valid", message="凭证有效", account_info=info or None)
 
-    # 密钥无效 / 未启用现货 / 权限不足
+    # 密钥无效 / 未启用现货 / 权限不足 / IP 未白名单（-2015 三者皆可能，附服务端原因）
     if code in (-2015, -1022, -1102):
-        return VerifyResult(status="invalid", message=f"凭证无效 (code {code})")
+        detail = payload.get("msg") if isinstance(payload, dict) else ""
+        return VerifyResult(status="invalid", message=f"凭证无效 (code {code})" + (f": {detail}" if detail else ""))
     if status in (401, 403):
         return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
     # 451：因地域限制拒绝访问，与凭证本身无关

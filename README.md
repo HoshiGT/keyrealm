@@ -7,7 +7,8 @@
 - **AES-256-GCM 加密存储**：主密码派生密钥，敏感字段全程加密
 - **插件化架构**：一个服务一个插件，目录放入 `plugins/` 即自动加载，删除即卸载，无需手动管理
 - **MCP 服务**：内置 MCP Server，AI Agent 可直接管理与验证凭据，支持按工具粒度控制权限
-- **多模式验证**：保存时自动验证 / 手动验证 / 定时批量验证
+- **多模式验证**：保存时自动验证 / 手动验证 / 定时批量验证；有写副作用或无法自动化的类型可声明 `batch_verify: false`，仅允许手动单个验证
+- **验证代理**：可为所有插件的校验请求配置 http/https/socks5 代理（也可用环境变量 `VAULT_PROXY` 覆盖）
 - **分组管理**：平面分组，凭据按项目或用途归类
 - **跨平台**：Windows 优先，兼容 macOS / Linux
 
@@ -66,10 +67,11 @@ release/
 │   │   ├── openai/            # 每个服务一个独立子插件（manifest.json + plugin.py）
 │   │   ├── deepseek/
 │   │   └── …                  # 共 18 个 LLM 子插件
-│   └── api/                   # API 服务类别目录（category.json + api_common.py）
-│       ├── firecrawl/
-│       ├── tavily/
-│       └── coze/
+│   ├── api/                   # API 服务类别（category.json + api_common.py）
+│   │   ├── firecrawl/
+│   │   ├── tavily/
+│   │   └── coze/
+│   └── dns/ dev/ im/ cloud/ exchange/ mail/   # 域名解析 / 开发者平台 / 即时通讯 / 云服务商 / 交易所 / 邮箱
 └── data/                      # 首次运行时自动创建（数据库、主密码校验）
 ```
 
@@ -133,7 +135,8 @@ API-Key-Checker/
 │   └── pack_source.py       # 源码归档脚本（生成 release/credential-vault-src.zip）
 ├── plugins/                 # 插件源码（打包时作为外部目录，不进 exe）
 │   ├── llm/                 # LLM 类别：18 个厂商子插件 + llm_common.py 共享模块
-│   └── api/                 # API 服务类别：firecrawl / tavily / coze + api_common.py
+│   ├── api/                 # API 服务类别：firecrawl / tavily / coze + api_common.py
+│   └── dns/ dev/ im/ cloud/ exchange/ mail/   # 另 6 个类别共 19 个子插件
 ├── frontend/                # Vue 3 前端
 │   ├── src/
 │   │   ├── views/

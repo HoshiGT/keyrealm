@@ -100,14 +100,26 @@ def batch_verify(
     credential_type: Optional[str] = None,
     trigger_type: str = "manual",
 ):
-    """批量验证，在后台线程池执行"""
-    creds = db.list_credentials(
+    """批量验证，在后台线程池执行。
+
+    禁用批量验证的插件（manifest 中 batch_verify=false）会被排除：这类插件无法
+    自动化验证或有写副作用，只能手动单个验证。
+    """
+    all_creds = db.list_credentials(
         group_id=group_id if scope == "group" else None,
         credential_type=credential_type if scope == "type" else None,
     )
+    no_batch = {
+        p["credential_type"] for p in db.list_plugins()
+        if not p.get("batch_verify", 1)
+    }
+    creds = [c for c in all_creds if c.get("credential_type") not in no_batch]
+    skipped = len(all_creds) - len(creds)
+
     total = len(creds)
     if total == 0:
-        _push_event("vault:batch_verify_done", {"total": 0, "valid": 0, "invalid": 0, "error": 0})
+        _push_event("vault:batch_verify_done",
+                    {"total": 0, "valid": 0, "invalid": 0, "error": 0, "skipped": skipped})
         return
 
     def _run():
@@ -128,7 +140,7 @@ def batch_verify(
                 "status": status,
             })
         _push_event("vault:batch_verify_done", {
-            "total": total, "valid": valid, "invalid": invalid, "error": error,
+            "total": total, "valid": valid, "invalid": invalid, "error": error, "skipped": skipped,
         })
 
     _executor.submit(_run)

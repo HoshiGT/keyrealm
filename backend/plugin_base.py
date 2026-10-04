@@ -66,6 +66,9 @@ class PluginManifest:
     description: str = ""
     icon: str = "🔑"
     fields: list[FieldSchema] = field(default_factory=list)
+    # 是否允许参与批量验证。无法自动化验证或自动化验证有风险（如会产生写副作用）的
+    # 插件应设为 False：前端将其排除在批量范围外，仅允许手动单个验证。
+    batch_verify: bool = True
 
     @classmethod
     def from_dict(cls, data: dict) -> "PluginManifest":
@@ -89,6 +92,7 @@ class PluginManifest:
             description=data.get("description", ""),
             icon=data.get("icon", "🔑"),
             fields=fields,
+            batch_verify=bool(data.get("batch_verify", True)),
         )
 
     def fields_schema_json(self) -> list[dict]:

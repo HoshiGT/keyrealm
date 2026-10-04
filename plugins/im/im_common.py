@@ -18,6 +18,7 @@ plugins/im/ 下的每个子插件（feishu、dingtalk、telegram……）都是�
 """
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -101,8 +102,17 @@ def _body_snippet(response: httpx.Response) -> str:
     return " ".join(text.split())[:_BODY_LIMIT]
 
 
+def _proxy() -> Optional[str]:
+    """验证代理：优先 VAULT_PROXY（应用设置写入），其次标准代理环境变量。"""
+    for key in ("VAULT_PROXY", "ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"):
+        value = os.environ.get(key)
+        if value:
+            return value
+    return None
+
+
 def _client(follow_redirects: bool = True) -> httpx.Client:
-    return httpx.Client(timeout=TIMEOUT, follow_redirects=follow_redirects)
+    return httpx.Client(timeout=TIMEOUT, follow_redirects=follow_redirects, proxy=_proxy())
 
 
 def _unconfirmed(status: int, snippet: str) -> VerifyResult:

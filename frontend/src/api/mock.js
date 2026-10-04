@@ -62,6 +62,29 @@ const API_SERVICES = [
   ['firecrawl', 'Firecrawl'], ['tavily', 'Tavily'], ['coze', 'Coze'],
 ]
 
+// 其余类别子插件：[类别, 类别名, 类别图标, 服务目录, 显示名, 图标, 是否支持批量验证]
+const EXTRA_PLUGINS = [
+  ['dns', '域名解析', '🌐', 'dnspod', 'DNSPod', '🅳', true],
+  ['dns', '域名解析', '🌐', 'duckdns', 'DuckDNS', '🦆', false],
+  ['dns', '域名解析', '🌐', 'godaddy', 'GoDaddy', '🛒', true],
+  ['dev', '开发者平台', '🧰', 'github', 'GitHub', '🐙', true],
+  ['dev', '开发者平台', '🧰', 'huggingface', 'HuggingFace', '🤗', true],
+  ['dev', '开发者平台', '🧰', 'wandb', 'Weights & Biases', '📊', true],
+  ['im', '即时通讯', '💬', 'feishu', '飞书', '🕊️', true],
+  ['im', '即时通讯', '💬', 'dingtalk', '钉钉', '📌', true],
+  ['im', '即时通讯', '💬', 'telegram', 'Telegram', '✈️', true],
+  ['im', '即时通讯', '💬', 'discord', 'Discord', '🎮', true],
+  ['im', '即时通讯', '💬', 'qq_bot', 'QQ 频道机器人', '🐧', true],
+  ['im', '即时通讯', '💬', 'wechat_ilink', '微信 iLink Bot', '📲', false],
+  ['cloud', '云服务商', '☁️', 'aliyun', '阿里云', '☁️', true],
+  ['cloud', '云服务商', '☁️', 'tencentcloud', '腾讯云', '🐧', true],
+  ['cloud', '云服务商', '☁️', 'cloudflare', 'Cloudflare', '🛡️', true],
+  ['exchange', '交易所', '📈', 'ht', '华泰证券（涨乐）', '📈', false],
+  ['exchange', '交易所', '📈', 'okx', 'OKX', '📉', true],
+  ['exchange', '交易所', '📈', 'binance', 'Binance', '🟡', true],
+  ['mail', '邮箱', '✉️', 'smtp', '通用 SMTP', '✉️', true],
+]
+
 function makeFieldsSchema(isCompatible) {
   return [
     { key: 'base_url', label: 'Base URL', type: 'url', required: !!isCompatible, sensitive: false, default: null, placeholder: 'https://api.example.com/v1', options: null },
@@ -88,6 +111,7 @@ function buildPlugins() {
       category_name: 'LLM 模型',
       category_icon: '🤖',
       rel_path: `llm/${vendor}`,
+      batch_verify: true,
       is_builtin: true,
       enabled: true,
       installed_at: daysAgo(30),
@@ -110,6 +134,30 @@ function buildPlugins() {
       category_name: 'API 服务',
       category_icon: '🔌',
       rel_path: `api/${service}`,
+      batch_verify: true,
+      is_builtin: true,
+      enabled: true,
+      installed_at: daysAgo(30),
+      credential_count: 0,
+      fields_schema: makeFieldsSchema(false),
+    })
+  }
+  for (const [cat, catName, catIcon, service, name, icon, batch] of EXTRA_PLUGINS) {
+    id += 1
+    plugins.push({
+      id,
+      name,
+      version: '1.0.0',
+      author: 'Credential Vault',
+      description: `${name} 凭据管理与验证`,
+      credential_type: `${cat}_${service}`,
+      icon,
+      icon_image: null,
+      category: cat,
+      category_name: catName,
+      category_icon: catIcon,
+      rel_path: `${cat}/${service}`,
+      batch_verify: batch,
       is_builtin: true,
       enabled: true,
       installed_at: daysAgo(30),
@@ -173,10 +221,11 @@ function createState() {
     ],
     logLevel: 'INFO',
     closeAction: 'ask',
+    proxy: '',
     logs: [
       { level: 'INFO', text: logLine('INFO', 'main', '应用启动（frozen=False，日志级别=INFO，数据目录=…）', minutesDate(32)) },
       { level: 'DEBUG', text: logLine('DEBUG', 'backend.scheduler', '调度器已启动，加载 2 个计划', minutesDate(32)) },
-      { level: 'INFO', text: logLine('INFO', 'backend.plugin_manager', '扫描到 21 个子插件（2 个类别）', minutesDate(30)) },
+      { level: 'INFO', text: logLine('INFO', 'backend.plugin_manager', '扫描到 40 个子插件（7 个类别）', minutesDate(30)) },
       { level: 'WARNING', text: logLine('WARNING', 'backend.api', '事件推送失败 vault:mcp_status: window not ready', minutesDate(14)) },
       { level: 'ERROR', text: logLine('ERROR', 'backend.scheduler', '加载计划失败 id=2: 触发器参数无效', minutesDate(6)) },
     ],
@@ -637,6 +686,22 @@ export function createMockApi() {
         state.closeAction = action
       }
       return { ok: true, action }
+    },
+
+    // ── 验证代理 ──────────────────────────────────────────
+    async get_proxy() {
+      await delay(40)
+      return { proxy: state.proxy || '' }
+    },
+
+    async set_proxy(proxy) {
+      await delay(60)
+      const value = String(proxy || '').trim()
+      if (value && !value.includes('://')) {
+        return { ok: false, message: '代理地址需带协议前缀，如 socks5://127.0.0.1:10808' }
+      }
+      state.proxy = value
+      return { ok: true, proxy: value, effective: value }
     },
 
     // ── 日志 ──────────────────────────────────────────────

@@ -157,6 +157,9 @@ async function handleMinimize() {
               <span class="is-valid">有效 {{ vaultStore.batch.result.valid }}</span>
               <span class="is-invalid">失效 {{ vaultStore.batch.result.invalid }}</span>
               <span class="is-error">错误 {{ vaultStore.batch.result.error }}</span>
+              <span v-if="vaultStore.batch.result.skipped" class="is-skipped">
+                跳过 {{ vaultStore.batch.result.skipped }}（需手动验证）
+              </span>
             </div>
           </template>
         </el-result>
@@ -334,5 +337,9 @@ async function handleMinimize() {
 
 .result-grid .is-error {
   color: var(--el-color-warning);
+}
+
+.result-grid .is-skipped {
+  color: var(--el-text-color-secondary);
 }
 </style>

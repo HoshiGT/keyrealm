@@ -40,6 +40,13 @@ const scopeArgs = computed(() => {
   return ['all', null, null]
 })
 
+/** 当前筛选为单一类型、且该类型禁用批量验证时返回其名称（用于禁用批量按钮） */
+const batchBlockedName = computed(() => {
+  if (scopeArgs.value[0] !== 'type') return ''
+  const plugin = pluginFor(filters.credential_type)
+  return plugin && plugin.batch_verify === false ? plugin.name || '该类型' : ''
+})
+
 function pluginFor(type) {
   return vaultStore.pluginByType[type] || null
 }
@@ -533,7 +540,20 @@ onMounted(async () => {
           <div class="column-settings-hint">表头可拖拽调整顺序</div>
         </div>
       </el-popover>
-      <el-button :icon="Refresh" :loading="batchStarting" @click="batchVerify">批量验证</el-button>
+      <el-tooltip
+        :disabled="!batchBlockedName"
+        :content="`「${batchBlockedName}」不支持批量验证，请逐条手动验证`"
+        placement="bottom"
+      >
+        <span>
+          <el-button
+            :icon="Refresh"
+            :loading="batchStarting"
+            :disabled="!!batchBlockedName"
+            @click="batchVerify"
+          >批量验证</el-button>
+        </span>
+      </el-tooltip>
       <el-button type="primary" :icon="Plus" @click="openCreate">添加凭据</el-button>
     </div>
 

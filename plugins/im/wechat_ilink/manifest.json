@@ -5,6 +5,7 @@
   "author": "Credential Vault",
   "description": "保存微信 iLink Bot 账号与凭据（暂无公开校验接口）",
   "icon": "📲",
+  "batch_verify": false,
   "fields": [
     {
       "key": "account",

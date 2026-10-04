@@ -430,6 +430,31 @@ async function applyLogLevel() {
   }
 }
 
+/* ── 验证代理 ───────────────────────────────────────── */
+const proxyValue = ref('')
+const proxySaving = ref(false)
+
+async function loadProxy() {
+  try {
+    const config = await api.getProxy()
+    proxyValue.value = config.proxy || ''
+  } catch (err) {
+    ElMessage.error(err.message || '加载代理配置失败')
+  }
+}
+
+async function saveProxy() {
+  proxySaving.value = true
+  try {
+    const res = await api.setProxy(proxyValue.value)
+    ElMessage.success(res && res.proxy ? '验证代理已保存' : '已切换为直连（不使用代理）')
+  } catch (err) {
+    ElMessage.error(err.message || '保存代理失败')
+  } finally {
+    proxySaving.value = false
+  }
+}
+
 async function loadLogs() {
   logsLoading.value = true
   try {
@@ -508,6 +533,7 @@ onMounted(async () => {
     loadLogConfig(),
     loadLogs(),
     loadCloseAction(),
+    loadProxy(),
     vaultStore.fetchGroups().catch(() => {}),
     vaultStore.fetchPlugins().catch(() => {}),
     appStore.refreshTray().catch(() => {}),
@@ -639,6 +665,29 @@ onMounted(async () => {
           </template>
         </el-table-column>
       </el-table>
+    </el-card>
+
+    <el-card shadow="never">
+      <template #header><span>网络与代理</span></template>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">验证代理</div>
+          <div class="setting-desc">
+            验证凭据时使用的代理，留空表示直连。支持 http / https / socks5，例如
+            socks5://127.0.0.1:10808。也可用环境变量 VAULT_PROXY 覆盖（环境变量优先）。
+          </div>
+        </div>
+        <div class="inline-row">
+          <el-input
+            v-model="proxyValue"
+            class="proxy-input"
+            placeholder="socks5://127.0.0.1:10808"
+            clearable
+          />
+          <el-button type="primary" :loading="proxySaving" @click="saveProxy">保存</el-button>
+        </div>
+      </div>
     </el-card>
 
     <el-card shadow="never">
@@ -997,6 +1046,10 @@ onMounted(async () => {
 
 .level-select {
   width: 150px;
+}
+
+.proxy-input {
+  width: 280px;
 }
 
 .close-select {

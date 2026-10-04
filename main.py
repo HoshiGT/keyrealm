@@ -16,7 +16,7 @@ if str(BASE_DIR) not in sys.path:
 
 import webview  # pywebview
 
-from backend import api, database as db, logger, mcp_server, plugin_manager, scheduler, tray
+from backend import api, database as db, logger, mcp_server, plugin_manager, proxy as proxy_config, scheduler, tray
 from backend.paths import app_dir, is_frozen, resource_dir
 
 
@@ -143,6 +143,13 @@ class VaultApi:
     def confirm_close_action(self, action: str, remember: bool = False):
         return api.confirm_close_action(action, remember)
 
+    # ── 验证代理 ──────────────────────────────────────────
+    def get_proxy(self):
+        return api.get_proxy()
+
+    def set_proxy(self, proxy: str):
+        return api.set_proxy(proxy)
+
     # ── Logging ───────────────────────────────────────────
     def get_log_config(self):
         return api.get_log_config()
@@ -246,10 +253,13 @@ def main():
     # 初始化数据库
     db.init_db()
 
-    # 应用用户在「设置」中选择的日志级别（持久化于 settings 表）
+    # 应用持久化的日志级别（settings 表）
     persisted = db.get_setting("log_level", "").strip().upper()
     if persisted in logger.LEVELS:
         logger.set_level(persisted)
+
+    # 应用持久化的验证代理（写入 VAULT_PROXY 供插件读取；外部同名变量优先）
+    proxy_config.apply_proxy(db.get_setting("verify_proxy", ""))
     log.info("应用启动（frozen=%s，日志级别=%s，数据目录=%s）",
              is_frozen(), logger.get_level(), app_dir())
 

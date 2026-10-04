@@ -199,6 +199,10 @@ export const api = {
   confirmCloseAction: (action, remember = false) =>
     call('confirm_close_action', action, remember),
 
+  // ── 验证代理 ────────────────────────────────────────────
+  getProxy: () => call('get_proxy'),
+  setProxy: (proxy) => call('set_proxy', proxy),
+
   // ── 日志 ────────────────────────────────────────────────
   getLogConfig: () => call('get_log_config'),
   setLogLevel: (level) => call('set_log_level', level),

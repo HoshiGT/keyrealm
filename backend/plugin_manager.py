@@ -206,6 +206,7 @@ def sync_plugins():
                 is_builtin=True,
                 category=category,
                 category_name=_category_display(category, cat_meta),
+                batch_verify=manifest.batch_verify,
             )
             load_plugin(ct)
         except Exception as e:

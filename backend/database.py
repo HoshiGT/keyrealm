@@ -19,7 +19,7 @@ BASE_DIR = app_dir()
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "credentials.db"
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _lock = threading.Lock()
 _conn: Optional[sqlite3.Connection] = None
@@ -93,6 +93,7 @@ def init_db():
             category_name   TEXT DEFAULT '',
             is_builtin      INTEGER DEFAULT 0,
             enabled         INTEGER DEFAULT 1,
+            batch_verify    INTEGER DEFAULT 1,
             installed_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -195,6 +196,13 @@ def _migrate(conn: sqlite3.Connection):
 
         conn.execute("DROP TABLE IF EXISTS verification_history")
         conn.execute("DELETE FROM mcp_permissions WHERE tool_name='vault_install_plugin'")
+        conn.commit()
+
+    if from_version < 3:
+        # v3: plugins.batch_verify —— 无法自动化验证或有写副作用的插件禁用批量验证
+        plugin_cols = {r["name"] for r in conn.execute("PRAGMA table_info(plugins)")}
+        if "batch_verify" not in plugin_cols:
+            conn.execute("ALTER TABLE plugins ADD COLUMN batch_verify INTEGER DEFAULT 1")
         conn.commit()
 
 
@@ -437,25 +445,26 @@ def upsert_plugin(
     name: str, version: str, credential_type: str, fields_schema: list,
     plugin_path: str, author: str = "", description: str = "",
     icon: str = "🔑", is_builtin: bool = False,
-    category: str = "", category_name: str = "",
+    category: str = "", category_name: str = "", batch_verify: bool = True,
 ):
     with _lock:
         conn = get_conn()
         conn.execute(
             """INSERT INTO plugins (name, version, author, description, credential_type,
                                     icon, fields_schema, plugin_path, category, category_name,
-                                    is_builtin, enabled, installed_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?)
+                                    batch_verify, is_builtin, enabled, installed_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?)
                ON CONFLICT(credential_type) DO UPDATE SET
                  name=excluded.name, version=excluded.version,
                  author=excluded.author, description=excluded.description,
                  icon=excluded.icon, fields_schema=excluded.fields_schema,
                  plugin_path=excluded.plugin_path,
                  category=excluded.category, category_name=excluded.category_name,
+                 batch_verify=excluded.batch_verify,
                  enabled=1""",
             (name, version, author, description, credential_type, icon,
              json.dumps(fields_schema, ensure_ascii=False), plugin_path,
-             category, category_name or category, int(is_builtin), _now()),
+             category, category_name or category, int(batch_verify), int(is_builtin), _now()),
         )
         conn.commit()
 

@@ -5,6 +5,7 @@
   "author": "Credential Vault",
   "description": "保存华泰证券（涨乐）API 凭证（暂无公开联网校验接口）",
   "icon": "📈",
+  "batch_verify": false,
   "fields": [
     {
       "key": "api_key",

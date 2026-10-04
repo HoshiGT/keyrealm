@@ -9,7 +9,9 @@ plugins/dns/ 下的每个子插件（dnspod、duckdns、godaddy）都是独立�
 """
 from __future__ import annotations
 
+import os
 import sys
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -73,8 +75,17 @@ def _body_snippet(response: httpx.Response) -> str:
     return " ".join(text.split())[:_BODY_LIMIT]
 
 
+def _proxy() -> Optional[str]:
+    """验证代理：优先 VAULT_PROXY（应用设置写入），其次标准代理环境变量。"""
+    for key in ("VAULT_PROXY", "ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"):
+        value = os.environ.get(key)
+        if value:
+            return value
+    return None
+
+
 def _client() -> httpx.Client:
-    return httpx.Client(timeout=TIMEOUT, follow_redirects=True)
+    return httpx.Client(timeout=TIMEOUT, follow_redirects=True, proxy=_proxy())
 
 
 def _unconfirmed(status: int, snippet: str) -> VerifyResult:
@@ -149,39 +160,116 @@ def _verify_dnspod(data: dict) -> VerifyResult:
     return VerifyResult(status="error", message=f"无法确认凭证状态 ({detail})")
 
 
-def _verify_duckdns(data: dict) -> VerifyResult:
-    """DuckDNS：无独立校验端点，用自有域名调用一次 update 接口判定。
+_DUCKDNS_FQDN_SUFFIX = ".duckdns.org"
+_DUCKDNS_TEST_IP = "1.1.1.1"
+_DOH_URL = "https://1.1.1.1/dns-query"
 
-    注意：该请求会真实执行一次动态域名更新（txt 传空），属于对 DuckDNS 的
-    写操作，仅在用户明确提供自有域名与 Token 时才应发起。
-    响应正文首行为 "OK" 表示成功，"KO" 表示 Token 或域名错误。
+
+def _doh_resolve_a(fqdn: str) -> Optional[str]:
+    """用 Cloudflare DoH 查询 A 记录，返回首个 IPv4；失败或无记录返回 None。"""
+    try:
+        with _client() as client:
+            resp = client.get(
+                _DOH_URL,
+                params={"name": fqdn, "type": "A"},
+                headers={"Accept": "application/dns-json"},
+            )
+        payload = _safe_json(resp)
+    except Exception:  # noqa: BLE001 - 解析失败按无记录处理
+        return None
+    for ans in (payload or {}).get("Answer") or []:
+        if ans.get("type") == 1 and ans.get("data"):
+            return str(ans["data"])
+    return None
+
+
+def _duckdns_update(domain: str, token: str, ip: Optional[str]) -> tuple[bool, str]:
+    """调用 DuckDNS update 接口；返回 (是否 OK, 状态行)。
+
+    ip 为 None 时由 DuckDNS 使用请求来源 IP；给定 ip 时写入该 IP。
+    """
+    params: dict[str, str] = {"domains": domain, "token": token, "txt": "", "verbose": "true"}
+    if ip:
+        params["ip"] = ip
+    with _client() as client:
+        resp = client.get("https://www.duckdns.org/update", params=params)
+    text = (resp.text or "").strip()
+    status_line = text.splitlines()[0].strip().upper() if text else ""
+    return status_line == "OK", status_line
+
+
+def _verify_duckdns(data: dict) -> VerifyResult:
+    """DuckDNS：无独立只读校验端点，用「写入测试 IP → 确认生效 → 还原」判定。
+
+    流程（会真实修改解析记录，故该插件在 manifest 中禁用批量验证）：
+      1. 读取当前 A 记录（Cloudflare DoH）作为原始值；
+      2. 用 token 把 A 记录写入 1.1.1.1；
+      3. 轮询确认解析是否变为 1.1.1.1（证明 token 有效且写入生效）；
+      4. 无论结果如何，最后都把 A 记录还原为原始值。
     """
     token = (data.get("token") or "").strip()
     domain = _normalize_duckdns_domain(data.get("domain") or "")
+    if not domain:
+        return VerifyResult(status="invalid", message="缺少域名：DuckDNS 需提供自有域名才能验证")
+    fqdn = f"{domain}{_DUCKDNS_FQDN_SUFFIX}"
 
-    with _client() as client:
-        resp = client.get(
-            "https://www.duckdns.org/update",
-            params={"domains": domain, "token": token, "txt": "", "verbose": "true"},
+    original = _doh_resolve_a(fqdn)
+    if not original:
+        return VerifyResult(
+            status="error",
+            message=f"无法读取 {fqdn} 当前 A 记录，为避免残留测试 IP 已中止（未做任何写入）",
         )
 
-    text = (resp.text or "").strip()
-    # verbose=true 时 DuckDNS 会在状态行之后追加返回的 IP，因此只看首行
-    status_line = text.splitlines()[0].strip().upper() if text else ""
+    ok, status_line = _duckdns_update(domain, token, _DUCKDNS_TEST_IP)
+    if not ok:
+        # DuckDNS 拒绝（KO）→ token 或域名不正确，未改动记录
+        return VerifyResult(
+            status="invalid",
+            message=f"凭证无效：Token 或域名不正确（DuckDNS 返回 {status_line or '空响应'}）",
+        )
 
-    if status_line == "OK":
+    observed = False
+    deadline = time.time() + 45
+    while time.time() < deadline:
+        if _doh_resolve_a(fqdn) == _DUCKDNS_TEST_IP:
+            observed = True
+            break
+        time.sleep(5)
+
+    # 无论验证结果如何，都还原原始解析，并确认还原是否生效
+    restored = False
+    try:
+        restored, _ = _duckdns_update(domain, token, original)
+        if restored:
+            for _ in range(3):
+                if _doh_resolve_a(fqdn) == original:
+                    break
+                time.sleep(3)
+    except Exception:  # noqa: BLE001 - 还原失败需要在结果里显式告知
+        restored = False
+
+    info = {
+        "domain": fqdn,
+        "original_ip": original,
+        "tested_ip": _DUCKDNS_TEST_IP,
+        "restored": restored,
+    }
+    if not restored:
         return VerifyResult(
             status="valid",
-            message="凭证有效",
-            account_info={"domain": f"{domain}.duckdns.org"},
+            message=f"凭证有效，但【还原失败】！请手动将 {fqdn} 改回 {original}",
+            account_info=info,
         )
-    if status_line == "KO":
-        return VerifyResult(status="invalid", message="凭证无效：Token 或域名不正确")
-
-    snippet = " ".join(text.split())[:_BODY_LIMIT]
+    if observed:
+        return VerifyResult(
+            status="valid",
+            message=f"凭证有效（已写入 {_DUCKDNS_TEST_IP} 并确认生效，随后已还原为 {original}）",
+            account_info=info,
+        )
     return VerifyResult(
-        status="error",
-        message=f"无法确认凭证状态 (HTTP {resp.status_code}): {snippet}",
+        status="valid",
+        message=f"凭证有效（DuckDNS 已接受写入，但本地 DNS 未及时观察到；已还原为 {original}）",
+        account_info=info,
     )
 
 

@@ -76,25 +76,21 @@ def verify_one(plugins, item):
     return item, plugin.verify(data)
 
 
-# 网络层不可达的特征串（出口被墙/超时/解析失败），用于把 error 归为 NETERR 而非 FAIL
+# 网络层不可达/环境问题的特征串，用于把 error 归为 NETERR 而非 FAIL
 _NETWORK_ERROR_HINTS = (
     "Network is unreachable", "ConnectError", "请求超时", "ConnectTimeout",
     "timed out", "Timeout", "getaddrinfo", "Name or service not known",
-    "Connection refused", "Connection reset", "网络请求失败",
+    "Connection refused", "Connection reset", "网络请求失败", "地域限制",
+    "ahead of the server",
 )
-
-# 已知从本机出口不可达（被墙）的厂商，凭据有效也记为 NETERR
-NETWORK_BLOCKED_VENDORS = {
-    "gemini", "openai", "binance", "discord", "godaddy",
-    "huggingface", "telegram", "okx", "nvidia",
-}
 
 
 def judge(item, result) -> str:
     """返回 PASS / FAIL / NETERR / SKIP 之一。"""
     expected = item["expected"]
-    if item["vendor"] in NETWORK_BLOCKED_VENDORS and expected == "valid":
-        return "PASS" if result.status == "valid" else "NETERR"
+    # 已被服务端拒绝但原因属环境/白名单（如 Binance IP 未白名单），无法据此判断密钥真伪
+    if expected == "ip_restricted":
+        return "SKIP"
     if result.status == "error" and any(h in (result.message or "") for h in _NETWORK_ERROR_HINTS):
         return "NETERR"
     if expected == "valid":

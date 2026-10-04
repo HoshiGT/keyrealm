@@ -13,6 +13,7 @@ from . import database as db
 from . import logger
 from . import mcp_server
 from . import plugin_manager
+from . import proxy as proxy_config
 from . import scheduler
 from . import tray
 from .crypto import (
@@ -413,6 +414,7 @@ def list_plugins() -> list:
     plugins = plugin_manager.list_installed_plugins()
     for record in plugins:
         record["icon_image"] = plugin_manager.get_icon_image(record)
+        record["batch_verify"] = bool(record.get("batch_verify", 1))
     return plugins
 
 
@@ -610,6 +612,30 @@ def confirm_close_action(action: str, remember: bool = False) -> dict:
         if _close_hide_cb:
             _close_hide_cb()
     return {"ok": True, "action": action}
+
+
+# ── 验证代理 ───────────────────────────────────────────────
+
+def get_proxy() -> dict:
+    """返回当前验证代理配置（供"系统设置"展示）。"""
+    return {"proxy": db.get_setting("verify_proxy", "").strip()}
+
+
+def set_proxy(proxy: str) -> dict:
+    """持久化验证代理并立即生效（写入环境变量 VAULT_PROXY 供插件读取）。
+
+    传空字符串表示直连。环境变量 VAULT_PROXY 若由外部设置则优先生效。
+    """
+    value = (proxy or "").strip()
+    if not proxy_config.is_valid(value):
+        return {"ok": False, "message": "代理地址需带协议前缀，如 socks5://127.0.0.1:10808"}
+    db.set_setting("verify_proxy", value)
+    effective = proxy_config.apply_proxy(value)
+    if value and effective != value:
+        _log.info("验证代理已保存为 %s，但外部环境变量 VAULT_PROXY=%s 优先", value, effective)
+    else:
+        _log.info("验证代理已设置为 %s", value or "(直连)")
+    return {"ok": True, "proxy": value, "effective": effective or ""}
 
 
 # ── Logging ───────────────────────────────────────────────

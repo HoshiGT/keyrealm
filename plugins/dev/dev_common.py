@@ -11,6 +11,7 @@ Weights & Biases（实验跟踪）。
 """
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -80,8 +81,17 @@ def _body_snippet(response: httpx.Response) -> str:
     return " ".join(text.split())[:_BODY_LIMIT]
 
 
+def _proxy() -> Optional[str]:
+    """验证代理：优先 VAULT_PROXY（应用设置写入），其次标准代理环境变量。"""
+    for key in ("VAULT_PROXY", "ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"):
+        value = os.environ.get(key)
+        if value:
+            return value
+    return None
+
+
 def _client() -> httpx.Client:
-    return httpx.Client(timeout=TIMEOUT, follow_redirects=True)
+    return httpx.Client(timeout=TIMEOUT, follow_redirects=True, proxy=_proxy())
 
 
 def _unconfirmed(status: int, snippet: str) -> VerifyResult:
