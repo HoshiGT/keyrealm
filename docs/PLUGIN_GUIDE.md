@@ -26,6 +26,43 @@ plugins/
 │   ├── firecrawl/
 │   ├── tavily/
 │   └── coze/
+├── dns/                        # 类别目录（域名解析）
+│   ├── category.json
+│   ├── dns_common.py
+│   ├── dnspod/
+│   ├── duckdns/
+│   └── godaddy/
+├── dev/                        # 类别目录（开发者平台）
+│   ├── category.json
+│   ├── dev_common.py
+│   ├── github/
+│   ├── huggingface/
+│   └── wandb/
+├── im/                         # 类别目录（即时通讯）
+│   ├── category.json
+│   ├── im_common.py
+│   ├── feishu/
+│   ├── dingtalk/
+│   ├── telegram/
+│   ├── discord/
+│   ├── qq_bot/
+│   └── wechat_ilink/
+├── cloud/                      # 类别目录（云服务商）
+│   ├── category.json
+│   ├── cloud_common.py
+│   ├── aliyun/
+│   ├── tencentcloud/
+│   └── cloudflare/
+├── exchange/                   # 类别目录（交易所）
+│   ├── category.json
+│   ├── exchange_common.py
+│   ├── ht/
+│   ├── okx/
+│   └── binance/
+├── mail/                       # 类别目录（邮箱）
+│   ├── category.json
+│   ├── mail_common.py
+│   └── smtp/
 └── my_flat_plugin/             # 也支持根级平铺插件（无类别）
     ├── manifest.json
     └── plugin.py
@@ -173,6 +210,22 @@ glm（智谱）、glm_anthropic、doubao（豆包）、tongyi（通义）、wenx
 openai_compatible、anthropic_compatible（两类兼容中转）。
 
 **api/ 类别（3 个）**：firecrawl（网页抓取）、tavily（搜索）、coze（字节扣子）。
+
+**dns/ 类别（3 个）**：dnspod、duckdns、godaddy。
+
+**dev/ 类别（3 个）**：github（令牌）、huggingface、wandb（Weights & Biases）。
+
+**im/ 类别（6 个）**：feishu（飞书）、dingtalk（钉钉）、telegram、discord（Webhook）、
+qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）。
+
+**cloud/ 类别（3 个）**：aliyun（阿里云 AK/SK）、tencentcloud（腾讯云 SecretId/Key）、
+cloudflare（API Token 或 Global API Key）。
+
+**exchange/ 类别（3 个）**：ht（华泰证券）、okx、binance。
+
+**mail/ 类别（1 个）**：smtp（通用 SMTP，覆盖 Gmail / QQ / 163 / 126 等）。
+
+> 说明：`duckdns`、`wechat_ilink`、`ht` 因校验接口是写操作或无公开接口，仅保存、不做联网验证。
 
 ---
 

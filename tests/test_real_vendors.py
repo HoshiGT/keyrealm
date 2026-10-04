@@ -17,18 +17,28 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KEYS_PATH = os.path.join(BASE_DIR, "data", "real_keys.json")
 
-# 子插件通过 `from llm_common import ...` / `from api_common import ...`
-# 复用类别共享模块，需把类别目录加入 sys.path（与 plugin_base 的加载行为一致）
-for _category in ("llm", "api"):
-    _cat_dir = os.path.join(BASE_DIR, "plugins", _category)
-    if os.path.isdir(_cat_dir) and _cat_dir not in sys.path:
+# 子插件通过 `from <category>_common import ...` 复用类别共享模块，
+# 需把所有类别目录加入 sys.path（与 plugin_base 的加载行为一致）
+PLUGINS_DIR = os.path.join(BASE_DIR, "plugins")
+_CATEGORIES = (
+    sorted(
+        d
+        for d in os.listdir(PLUGINS_DIR)
+        if os.path.isdir(os.path.join(PLUGINS_DIR, d))
+    )
+    if os.path.isdir(PLUGINS_DIR)
+    else []
+)
+for _category in _CATEGORIES:
+    _cat_dir = os.path.join(PLUGINS_DIR, _category)
+    if _cat_dir not in sys.path:
         sys.path.insert(0, _cat_dir)
 
 
 def plugin_path_for(vendor: str) -> str:
-    """vendor 名即子插件目录名，先查 llm 类别再查 api 类别。"""
-    for category in ("llm", "api"):
-        path = os.path.join(BASE_DIR, "plugins", category, vendor, "plugin.py")
+    """vendor 名即子插件目录名，跨所有类别查找 plugins/<类别>/<vendor>/plugin.py。"""
+    for category in _CATEGORIES:
+        path = os.path.join(PLUGINS_DIR, category, vendor, "plugin.py")
         if os.path.exists(path):
             return path
     raise KeyError(f"未找到厂商 {vendor} 对应的子插件目录")
@@ -58,27 +68,43 @@ def mask(key: str) -> str:
 
 
 def verify_one(plugins, item):
-    """按 vendor 选择子插件调用 verify（各子插件入参结构一致）。"""
+    """调用子插件 verify。data 支持任意多字段；缺省回退到 base_url/api_key。"""
     plugin = plugins[item["vendor"]]
-    result = plugin.verify(
-        {"base_url": item["base_url"], "api_key": item["api_key"]}
-    )
-    return item, result
+    data = item.get("data")
+    if not data:
+        data = {"base_url": item.get("base_url", ""), "api_key": item.get("api_key", "")}
+    return item, plugin.verify(data)
+
+
+# 网络层不可达的特征串（出口被墙/超时/解析失败），用于把 error 归为 NETERR 而非 FAIL
+_NETWORK_ERROR_HINTS = (
+    "Network is unreachable", "ConnectError", "请求超时", "ConnectTimeout",
+    "timed out", "Timeout", "getaddrinfo", "Name or service not known",
+    "Connection refused", "Connection reset", "网络请求失败",
+)
+
+# 已知从本机出口不可达（被墙）的厂商，凭据有效也记为 NETERR
+NETWORK_BLOCKED_VENDORS = {
+    "gemini", "openai", "binance", "discord", "godaddy",
+    "huggingface", "telegram", "okx", "nvidia",
+}
 
 
 def judge(item, result) -> str:
     """返回 PASS / FAIL / NETERR / SKIP 之一。"""
     expected = item["expected"]
-    # 以下端点从当前网络不可达（被墙/超时），记为 NETERR 而非失败
-    NETWORK_BLOCKED_VENDORS = {"gemini", "openai"}
-    if item["vendor"] in NETWORK_BLOCKED_VENDORS:
+    if item["vendor"] in NETWORK_BLOCKED_VENDORS and expected == "valid":
         return "PASS" if result.status == "valid" else "NETERR"
-
+    if result.status == "error" and any(h in (result.message or "") for h in _NETWORK_ERROR_HINTS):
+        return "NETERR"
     if expected == "valid":
         return "PASS" if result.status == "valid" else "FAIL"
     if expected == "overdue":
         # 欠费应被识别为 invalid（不可用）
         return "PASS" if result.status == "invalid" else "FAIL"
+    if expected == "invalid":
+        return "PASS" if result.status == "invalid" else "FAIL"
+    # 无法联网验证 / 未知预期：跳过
     return "SKIP"
 
 
@@ -90,14 +116,28 @@ def main() -> None:
     with open(KEYS_PATH, "r", encoding="utf-8") as f:
         items = json.load(f)
 
-    plugins = load_plugins(items)
-    print(f"共 {len(items)} 个真实 Key（{len(plugins)} 个子插件），开始验证…\n")
+    # 仅验证新增类别（ONLY_NEW=1 时），便于增量复测
+    if os.environ.get("ONLY_NEW") == "1":
+        _prefixes = ("dns_", "dev_", "im_", "cloud_", "exchange_", "mail_")
+        items = [it for it in items if str(it.get("credential_type", "")).startswith(_prefixes)]
 
-    stats = {"PASS": 0, "FAIL": 0, "NETERR": 0, "SKIP": 0}
+    # expected=="skip" 的条目不调用 verify：这些服务要么无公开校验接口，
+    # 要么校验本身是写操作（如 DuckDNS 的 update 会改写解析记录）。
+    skipped = [it for it in items if it.get("expected") == "skip"]
+    active = [it for it in items if it.get("expected") != "skip"]
+
+    plugins = load_plugins(active)
+    print(f"共 {len(items)} 个真实 Key（{len(plugins)} 个子插件），"
+          f"{len(active)} 条验证、{len(skipped)} 条跳过…\n")
+
+    stats = {"PASS": 0, "FAIL": 0, "NETERR": 0, "SKIP": len(skipped)}
     failures = []
 
+    for it in skipped:
+        print(f"[{'SKIP':6s}] {it['vendor']:<22s} -> 跳过：{it.get('note', '')}")
+
     with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = [pool.submit(verify_one, plugins, item) for item in items]
+        futures = [pool.submit(verify_one, plugins, item) for item in active]
         for fut in as_completed(futures):
             item, result = fut.result()
             verdict = judge(item, result)
@@ -107,7 +147,7 @@ def main() -> None:
             if result.account_info and "balance" in result.account_info:
                 bal = f" 余额={result.account_info['balance']}{result.account_info.get('currency','')}"
             line = (
-                f"[{verdict:6s}] {item['vendor']:<22s} {mask(item['api_key']):<14s} "
+                f"[{verdict:6s}] {item['vendor']:<22s} {mask(item.get('api_key', '')):<14s} "
                 f"-> {result.status:<7s} {result.message}{bal}"
             )
             print(line)
@@ -121,7 +161,7 @@ def main() -> None:
     if failures:
         print("\n失败明细：")
         for item, result in failures:
-            print(f"  - {item['vendor']} {mask(item['api_key'])} "
+            print(f"  - {item['vendor']} {mask(item.get('api_key', ''))} "
                   f"期望={item['expected']} 实际={result.status}: {result.message}")
 
     sys.exit(1 if stats["FAIL"] else 0)

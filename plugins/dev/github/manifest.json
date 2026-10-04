@@ -1,0 +1,24 @@
+{
+  "name": "GitHub",
+  "version": "1.0.0",
+  "credential_type": "dev_github",
+  "author": "Credential Vault",
+  "description": "验证 GitHub 令牌有效性",
+  "icon": "🐙",
+  "fields": [
+    {
+      "key": "token",
+      "label": "Token",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "ghp_… / gho_…"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

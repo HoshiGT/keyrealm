@@ -1,0 +1,47 @@
+{
+  "name": "Cloudflare",
+  "version": "1.0.0",
+  "credential_type": "cloud_cloudflare",
+  "author": "Credential Vault",
+  "description": "验证 Cloudflare API Token 或 Global API Key 有效性",
+  "icon": "🛡️",
+  "fields": [
+    {
+      "key": "auth_mode",
+      "label": "认证方式",
+      "type": "select",
+      "required": false,
+      "default": "token",
+      "options": ["token", "global"]
+    },
+    {
+      "key": "api_token",
+      "label": "API Token",
+      "type": "password",
+      "required": false,
+      "sensitive": true,
+      "placeholder": "token 模式填写"
+    },
+    {
+      "key": "email",
+      "label": "账号邮箱",
+      "type": "text",
+      "required": false,
+      "placeholder": "global 模式填写"
+    },
+    {
+      "key": "global_api_key",
+      "label": "Global API Key",
+      "type": "password",
+      "required": false,
+      "sensitive": true,
+      "placeholder": "global 模式填写"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

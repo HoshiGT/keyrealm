@@ -1,0 +1,24 @@
+{
+  "name": "HuggingFace",
+  "version": "1.0.0",
+  "credential_type": "dev_huggingface",
+  "author": "Credential Vault",
+  "description": "验证 HuggingFace 访问令牌有效性",
+  "icon": "🤗",
+  "fields": [
+    {
+      "key": "token",
+      "label": "Token",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "hf_…"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

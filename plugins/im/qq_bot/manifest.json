@@ -1,0 +1,31 @@
+{
+  "name": "QQ 频道机器人",
+  "version": "1.0.0",
+  "credential_type": "im_qq_bot",
+  "author": "Credential Vault",
+  "description": "验证 QQ 频道机器人 AppID / ClientSecret 有效性",
+  "icon": "🐧",
+  "fields": [
+    {
+      "key": "app_id",
+      "label": "App ID",
+      "type": "text",
+      "required": true,
+      "placeholder": "机器人 AppID"
+    },
+    {
+      "key": "client_secret",
+      "label": "Client Secret",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "机器人密钥"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

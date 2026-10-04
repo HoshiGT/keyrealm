@@ -1,0 +1,32 @@
+{
+  "name": "腾讯云",
+  "version": "1.0.0",
+  "credential_type": "cloud_tencentcloud",
+  "author": "Credential Vault",
+  "description": "验证腾讯云 SecretId/SecretKey 有效性（STS GetCallerIdentity）",
+  "icon": "🐧",
+  "fields": [
+    {
+      "key": "secret_id",
+      "label": "SecretId",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "AKID…"
+    },
+    {
+      "key": "secret_key",
+      "label": "SecretKey",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "请输入 SecretKey"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

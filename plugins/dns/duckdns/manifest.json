@@ -1,0 +1,31 @@
+{
+  "name": "DuckDNS",
+  "version": "1.0.0",
+  "credential_type": "dns_duckdns",
+  "author": "Credential Vault",
+  "description": "验证 DuckDNS Token 与域名（会向 DuckDNS 触发一次真实的更新请求）",
+  "icon": "🦆",
+  "fields": [
+    {
+      "key": "token",
+      "label": "Token",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "DuckDNS 账号 Token"
+    },
+    {
+      "key": "domain",
+      "label": "域名",
+      "type": "text",
+      "required": true,
+      "placeholder": "xxx.duckdns.org"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

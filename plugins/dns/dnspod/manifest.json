@@ -1,0 +1,31 @@
+{
+  "name": "DNSPod",
+  "version": "1.0.0",
+  "credential_type": "dns_dnspod",
+  "author": "Credential Vault",
+  "description": "验证 DNSPod API Token 有效性并统计名下域名数量",
+  "icon": "🅳",
+  "fields": [
+    {
+      "key": "dp_id",
+      "label": "DNSPod ID",
+      "type": "text",
+      "required": true,
+      "placeholder": "DNSPod 的 ID"
+    },
+    {
+      "key": "dp_key",
+      "label": "API Token",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "DNSPod 的 API Token"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

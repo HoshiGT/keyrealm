@@ -1,0 +1,31 @@
+{
+  "name": "微信 iLink Bot",
+  "version": "1.0.0",
+  "credential_type": "im_wechat_ilink",
+  "author": "Credential Vault",
+  "description": "保存微信 iLink Bot 账号与凭据（暂无公开校验接口）",
+  "icon": "📲",
+  "fields": [
+    {
+      "key": "account",
+      "label": "账号",
+      "type": "text",
+      "required": true,
+      "placeholder": "...@im.bot"
+    },
+    {
+      "key": "credential",
+      "label": "凭据",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "iLink Bot 凭据"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "name": "通用 SMTP 邮箱",
+  "version": "1.0.0",
+  "credential_type": "mail_smtp",
+  "author": "Credential Vault",
+  "description": "通过 SMTP 登录验证邮箱账号与授权码（Gmail / QQ / 163 / 126 等）",
+  "icon": "✉️",
+  "fields": [
+    {
+      "key": "host",
+      "label": "SMTP 服务器",
+      "type": "text",
+      "required": true,
+      "placeholder": "smtp.qq.com"
+    },
+    {
+      "key": "port",
+      "label": "端口",
+      "type": "number",
+      "required": true,
+      "default": 465,
+      "placeholder": "465"
+    },
+    {
+      "key": "username",
+      "label": "邮箱账号",
+      "type": "text",
+      "required": true,
+      "placeholder": "邮箱账号 / 发件地址"
+    },
+    {
+      "key": "password",
+      "label": "授权码",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "授权码 / 应用专用密码"
+    },
+    {
+      "key": "ssl",
+      "label": "使用 SSL",
+      "type": "checkbox",
+      "required": false,
+      "default": true
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

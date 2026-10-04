@@ -1,0 +1,24 @@
+{
+  "name": "华泰证券（涨乐）",
+  "version": "1.0.0",
+  "credential_type": "exchange_ht",
+  "author": "Credential Vault",
+  "description": "保存华泰证券（涨乐）API 凭证（暂无公开联网校验接口）",
+  "icon": "📈",
+  "fields": [
+    {
+      "key": "api_key",
+      "label": "API Key",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "ht_…"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

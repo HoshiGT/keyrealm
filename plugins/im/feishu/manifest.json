@@ -1,0 +1,31 @@
+{
+  "name": "飞书应用",
+  "version": "1.0.0",
+  "credential_type": "im_feishu",
+  "author": "Credential Vault",
+  "description": "验证飞书应用 App ID / App Secret 有效性",
+  "icon": "🕊️",
+  "fields": [
+    {
+      "key": "app_id",
+      "label": "App ID",
+      "type": "text",
+      "required": true,
+      "placeholder": "cli_..."
+    },
+    {
+      "key": "app_secret",
+      "label": "App Secret",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "应用密钥"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}
