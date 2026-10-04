@@ -83,9 +83,10 @@ def _verify(data: dict) -> VerifyResult:
     return _probe(base_url, api_key)
 
 
+@guarded
 def verify(data: dict) -> VerifyResult:
     """验证 API Key 是否有效。保证不抛出异常。"""
-    return guarded(lambda: _verify(data or {}))
+    return _verify(data or {})
 
 
 def get_display_summary(data: dict) -> str:

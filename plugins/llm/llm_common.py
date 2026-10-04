@@ -24,7 +24,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -97,21 +97,27 @@ def body_snippet(response: httpx.Response) -> str:
     return " ".join(text.split())[:_BODY_LIMIT]
 
 
-def guarded(fn: Callable[[], VerifyResult]) -> VerifyResult:
-    """运行探针并把异常收敛为 VerifyResult。
+def guarded(fn):
+    """装饰器：兜底 verify/validate 未预期异常 → error 结果，保证不抛出。
 
     异常消息只暴露异常类型名，避免把 URL（部分厂商密钥在 query 中）
-    或响应正文带进错误提示。插件边界必须兜底，不得向上抛异常。
+    或响应正文带进错误提示。
     """
-    try:
-        return fn()
-    except httpx.TimeoutException:
-        return VerifyResult(status="error", message=f"请求超时（{int(TIMEOUT)} 秒）")
-    except httpx.HTTPError as exc:
-        return VerifyResult(status="error", message=f"网络请求失败（{type(exc).__name__}）")
-    except Exception as exc:  # noqa: BLE001 - 插件边界，必须兜底
-        log(f"verify 未预期异常: {type(exc).__name__}")
-        return VerifyResult(status="error", message=f"插件执行异常（{type(exc).__name__}）")
+
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except httpx.TimeoutException:
+            return VerifyResult(status="error", message=f"请求超时（{int(TIMEOUT)} 秒）")
+        except httpx.HTTPError as exc:
+            return VerifyResult(status="error", message=f"网络请求失败（{type(exc).__name__}）")
+        except Exception as exc:  # noqa: BLE001 - 插件边界，必须兜底
+            log(f"verify 未预期异常: {type(exc).__name__}")
+            return VerifyResult(status="error", message=f"插件执行异常（{type(exc).__name__}）")
+
+    wrapper.__name__ = getattr(fn, "__name__", "wrapper")
+    wrapper.__doc__ = getattr(fn, "__doc__", None)
+    return wrapper
 
 
 # ── 协议级探针（通用，不含厂商专属逻辑） ─────────────────
