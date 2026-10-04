@@ -116,14 +116,8 @@ class VaultApi:
     def get_mcp_token(self):
         return api.get_mcp_token()
 
-    def rotate_mcp_token(self, tools_allowed=None, expires_days=None):
-        return api.rotate_mcp_token(tools_allowed or [], expires_days)
-
-    def revoke_mcp_token(self):
-        return api.revoke_mcp_token()
-
-    def update_mcp_token_scope(self, tools_allowed):
-        return api.update_mcp_token_scope(tools_allowed or [])
+    def rotate_mcp_token(self):
+        return api.rotate_mcp_token()
 
     # ── Schedules ─────────────────────────────────────────
     def list_schedules(self):

@@ -102,26 +102,10 @@ export const useMcpStore = defineStore('mcp', {
       return this.token
     },
 
-    async rotateToken(payload = {}) {
-      const rotated = await api.rotateMcpToken(
-        payload.tools_allowed || [],
-        payload.expires_days ?? null,
-      )
+    async rotateToken() {
+      const rotated = await api.rotateMcpToken()
       await Promise.all([this.fetchToken(), this.fetchStatus()])
       return rotated
-    },
-
-    async revokeToken() {
-      const result = await api.revokeMcpToken()
-      this.token = null
-      await this.fetchStatus()
-      return result
-    },
-
-    async updateTokenScope(toolsAllowed) {
-      const result = await api.updateMcpTokenScope(toolsAllowed)
-      if (this.token) this.token.tools_allowed = [...toolsAllowed]
-      return result
     },
 
     async refreshAll() {

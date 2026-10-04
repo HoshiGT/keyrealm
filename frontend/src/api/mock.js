@@ -137,10 +137,8 @@ function createState() {
     mcpToken: {
       id: 1,
       token_prefix: 'cv_a3f2',
-      tools_allowed: [],
       created_at: daysAgo(2),
       last_used_at: minutesAgo(2),
-      expires_at: null,
     },
     schedules: [
       { id: 1, name: '每日全量验证', trigger_type: 'cron', trigger_args: { hour: 2, minute: 0 }, target_scope: 'all', target_id: null, enabled: true, last_run_at: daysAgo(1), next_run_at: daysAgo(-1), created_at: daysAgo(20) },
@@ -512,42 +510,31 @@ export function createMockApi() {
 
     async get_mcp_token() {
       await delay()
-      if (!state.mcpToken) return { exists: false }
+      if (!state.mcpToken) {
+        state.mcpToken = {
+          id: nextId(),
+          token_prefix: `cv_${Math.random().toString(36).slice(2, 6)}`,
+          created_at: iso(),
+          last_used_at: null,
+        }
+      }
       return { exists: true, ...clone(state.mcpToken) }
     },
 
-    async rotate_mcp_token(toolsAllowed = [], expiresDays = null) {
+    async rotate_mcp_token() {
       await delay(300)
       const secret = `cv_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`
-      const record = {
+      state.mcpToken = {
         id: nextId(),
         token_prefix: secret.slice(0, 7),
-        tools_allowed: clone(toolsAllowed) || [],
         created_at: iso(),
         last_used_at: null,
-        expires_at: expiresDays ? iso(new Date(Date.now() + Number(expiresDays) * 86_400_000)) : null,
       }
-      state.mcpToken = record            // 轮换：新 token 覆盖旧的
       return {
-        id: record.id,
+        id: state.mcpToken.id,
         token: secret,                   // 明文仅此一次
-        token_prefix: record.token_prefix,
-        tools_allowed: clone(record.tools_allowed),
-        expires_at: record.expires_at,
+        token_prefix: state.mcpToken.token_prefix,
       }
-    },
-
-    async revoke_mcp_token() {
-      await delay(140)
-      state.mcpToken = null
-      return { ok: true }
-    },
-
-    async update_mcp_token_scope(toolsAllowed) {
-      await delay(140)
-      if (!state.mcpToken) return { ok: false, message: '当前没有活跃 Token' }
-      state.mcpToken.tools_allowed = clone(toolsAllowed) || []
-      return { ok: true }
     },
 
     // ── 定时计划 ──────────────────────────────────────────

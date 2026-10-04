@@ -180,13 +180,16 @@ Agent 发起 SSE 连接
 
 **Token 格式**：`cv_` + 32 位随机十六进制（共 35 字符），数据库中只存 SHA-256 哈希，明文仅在创建 / 轮换时展示一次。
 
-MCP 全局只保留**一个活跃 Token**，通过「轮换」更换（撤销旧 Token 并签发新 Token）。
+MCP 全局只保留**一个活跃 Token**，且**默认即存在**（无则自动创建），仅提供「轮换」
+（作废旧 Token 并签发新 Token，明文仅展示一次）。
 
-**权限控制（双层）**：
-1. **全局工具开关**（`mcp_permissions` 表）：管理员在 MCP 设置页统一控制
-2. **Token 级范围**（`mcp_tokens.tools_allowed`）：当前 Token 可限定可调用的工具子集
+**权限控制**：
+1. **全局工具开关**（`mcp_permissions` 表）：在 MCP 设置页统一控制，是唯一的权限配置入口
+2. **Token 级范围**（`mcp_tokens.tools_allowed`）：鉴权层仍支持按 Token 限定工具子集，
+   但界面不再暴露该配置——默认空值表示继承全局开关
 
-两层均通过才允许调用，任一层拒绝则返回 `permission_denied`。
+调用需同时通过全局开关与 Token 范围（当前默认继承全局，等价于只受全局开关约束），
+任一层拒绝则返回 `permission_denied`。
 
 详见 [MCP_API.md](MCP_API.md)。
 

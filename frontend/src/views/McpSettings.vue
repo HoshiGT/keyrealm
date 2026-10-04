@@ -5,16 +5,15 @@ import { CircleCheck, CircleClose, Refresh, VideoPause, VideoPlay } from '@eleme
 
 import { useMcpStore } from '@/stores/mcp'
 import { useAppStore } from '@/stores/app'
-import { formatDateTime, formatRelative } from '@/utils/format'
 import { copyText } from '@/utils/clipboard'
 import TokenDialog from '@/components/TokenDialog.vue'
 
 const mcpStore = useMcpStore()
 const appStore = useAppStore()
 
-const tokenDialog = ref(false)
-const scopeDialog = ref(false)
-const scopeTools = ref([])
+// 轮换结果（明文）展示弹窗
+const revealDialog = ref(false)
+const revealedToken = ref(null)
 
 onMounted(() => {
   mcpStore.refreshAll().catch((err) => ElMessage.error(err.message || '加载 MCP 状态失败'))
@@ -70,33 +69,23 @@ async function togglePermission(toolName, enabled) {
   }
 }
 
-async function handleRevoke() {
+async function handleRotate() {
   try {
     await ElMessageBox.confirm(
-      '确认撤销当前 Token？撤销后使用该 Token 的 Agent 将立即失去访问权限。',
-      '撤销 Token',
-      { type: 'warning', confirmButtonText: '确认撤销', cancelButtonText: '取消' },
+      '轮换将立即作废旧 Token，使用旧 Token 的客户端需更新为新 Token。确认轮换？',
+      '轮换 Token',
+      { type: 'warning', confirmButtonText: '确认轮换', cancelButtonText: '取消' },
     )
-    await mcpStore.revokeToken()
-    await appStore.refreshTray()
-    ElMessage.success('Token 已撤销')
-  } catch (err) {
-    if (err !== 'cancel') ElMessage.error(err.message || '撤销失败')
+  } catch {
+    return
   }
-}
-
-function openScopeDialog() {
-  scopeTools.value = [...((mcpStore.token && mcpStore.token.tools_allowed) || [])]
-  scopeDialog.value = true
-}
-
-async function saveScope() {
   try {
-    await mcpStore.updateTokenScope(scopeTools.value)
-    ElMessage.success('Token 权限范围已更新')
-    scopeDialog.value = false
+    const result = await mcpStore.rotateToken()
+    revealedToken.value = result
+    revealDialog.value = true
+    await appStore.refreshTray()
   } catch (err) {
-    ElMessage.error(err.message || '更新失败')
+    ElMessage.error(err.message || '轮换失败')
   }
 }
 
@@ -133,6 +122,13 @@ async function copyClientConfig() {
         <el-descriptions-item label="传输协议">SSE (Server-Sent Events)</el-descriptions-item>
         <el-descriptions-item label="鉴权方式">Bearer Token</el-descriptions-item>
       </el-descriptions>
+
+      <div class="token-row">
+        <span class="token-label">访问 Token</span>
+        <code class="mono">{{ mcpStore.token ? mcpStore.token.token_prefix + '…' : '—' }}</code>
+        <span class="text-muted token-hint">明文仅在轮换时展示一次，数据库只保存哈希与前缀</span>
+        <el-button size="small" :icon="Refresh" @click="handleRotate">轮换 Token</el-button>
+      </div>
 
       <div class="server-actions">
         <el-button
@@ -192,95 +188,8 @@ async function copyClientConfig() {
       </el-table>
     </el-card>
 
-    <!-- 访问 Token（单 Token + 轮换） -->
-    <el-card shadow="never">
-      <template #header>
-        <div class="card-header">
-          <span>访问 Token</span>
-          <el-button type="primary" size="small" :icon="Refresh" @click="tokenDialog = true">
-            {{ mcpStore.token ? '轮换 Token' : '生成 Token' }}
-          </el-button>
-        </div>
-      </template>
-
-      <el-empty v-if="!mcpStore.token" description="暂无活跃 Token，点击右上角生成" />
-
-      <template v-else>
-        <el-alert type="warning" :closable="false" class="mb-12">
-          Token 明文仅在生成 / 轮换时展示一次；轮换后旧 Token 立即失效，数据库只保存其哈希与前缀。
-        </el-alert>
-
-        <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="Token 前缀">
-            <code class="mono">{{ mcpStore.token.token_prefix }}…</code>
-          </el-descriptions-item>
-          <el-descriptions-item label="工具范围">
-            <el-tag
-              v-if="!mcpStore.token.tools_allowed || !mcpStore.token.tools_allowed.length"
-              size="small"
-              type="info"
-            >
-              继承全局
-            </el-tag>
-            <el-tooltip v-else :content="mcpStore.token.tools_allowed.join(', ')" placement="top">
-              <el-tag size="small">{{ mcpStore.token.tools_allowed.length }} 个工具</el-tag>
-            </el-tooltip>
-          </el-descriptions-item>
-          <el-descriptions-item label="创建时间">
-            {{ formatDateTime(mcpStore.token.created_at) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="最后使用">
-            {{ formatRelative(mcpStore.token.last_used_at, '从未') }}
-          </el-descriptions-item>
-          <el-descriptions-item label="过期时间">
-            <span v-if="!mcpStore.token.expires_at" class="text-muted">永不过期</span>
-            <span v-else>{{ formatDateTime(mcpStore.token.expires_at) }}</span>
-          </el-descriptions-item>
-        </el-descriptions>
-
-        <div class="server-actions">
-          <el-button @click="openScopeDialog">编辑范围</el-button>
-          <el-button type="danger" plain @click="handleRevoke">撤销 Token</el-button>
-        </div>
-      </template>
-    </el-card>
-
-    <!-- Token 生成 / 轮换对话框 -->
-    <TokenDialog
-      v-model="tokenDialog"
-      :rotating="!!mcpStore.token"
-      @created="appStore.refreshTray()"
-    />
-
-    <!-- 工具范围编辑对话框 -->
-    <el-dialog v-model="scopeDialog" title="编辑 Token 工具范围" width="520px">
-      <el-alert type="info" :closable="false" class="mb-12">
-        不选择任何工具 = 继承全局权限（全局开关决定）。选择后仅允许调用的工具。
-      </el-alert>
-      <el-select
-        v-model="scopeTools"
-        multiple
-        filterable
-        collapse-tags
-        collapse-tags-tooltip
-        placeholder="不选 = 继承全局"
-        class="full-width"
-      >
-        <el-option
-          v-for="option in mcpStore.toolOptions"
-          :key="option.value"
-          :label="option.label"
-          :value="option.value"
-        >
-          <span>{{ option.label }}</span>
-          <span class="option-desc">{{ option.description }}</span>
-        </el-option>
-      </el-select>
-      <template #footer>
-        <el-button @click="scopeDialog = false">取消</el-button>
-        <el-button type="primary" @click="saveScope">保存</el-button>
-      </template>
-    </el-dialog>
+    <!-- Token 轮换结果（明文仅展示一次） -->
+    <TokenDialog v-model="revealDialog" :token="revealedToken" />
   </div>
 </template>
 
@@ -323,17 +232,24 @@ async function copyClientConfig() {
   margin-left: 6px;
 }
 
-.mb-12 {
-  margin-bottom: 12px;
+.token-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 16px;
 }
 
-.full-width {
-  width: 100%;
-}
-
-.option-desc {
-  float: right;
+.token-label {
+  font-size: 13px;
   color: var(--el-text-color-secondary);
+}
+
+.token-hint {
   font-size: 12px;
+}
+
+.token-row .el-button {
+  margin-left: auto;
 }
 </style>

@@ -161,10 +161,7 @@ export const api = {
   listMcpPermissions: () => call('list_mcp_permissions'),
   setMcpPermission: (toolName, enabled) => call('set_mcp_permission', toolName, enabled),
   getMcpToken: () => call('get_mcp_token'),
-  rotateMcpToken: (toolsAllowed = [], expiresDays = null) =>
-    call('rotate_mcp_token', toolsAllowed, expiresDays),
-  revokeMcpToken: () => call('revoke_mcp_token'),
-  updateMcpTokenScope: (toolsAllowed) => call('update_mcp_token_scope', toolsAllowed),
+  rotateMcpToken: () => call('rotate_mcp_token'),
 
   // ── 定时计划 ────────────────────────────────────────────
   listSchedules: () => call('list_schedules'),

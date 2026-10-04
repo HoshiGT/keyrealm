@@ -103,22 +103,15 @@ class PluginInfo(BaseModel):
 
 
 # ── MCP Token（单 Token + 轮换）────────────────────────────
+# Token 始终存在（无则自动创建），仅提供"轮换"；工具范围统一由全局开关控制。
 
 class McpToken(BaseModel):
     """当前活跃 Token 的元数据（不含明文）。"""
     exists: bool = True
     id: int
     token_prefix: str
-    tools_allowed: list[str] = Field(default_factory=list)
     created_at: Optional[datetime] = None
     last_used_at: Optional[datetime] = None
-    expires_at: Optional[datetime] = None
-
-
-class McpTokenRotate(BaseModel):
-    """轮换 Token 的入参。"""
-    tools_allowed: list[str] = Field(default_factory=list)  # 空 = 继承全局
-    expires_days: Optional[int] = None
 
 
 class McpTokenRotated(BaseModel):
@@ -126,8 +119,6 @@ class McpTokenRotated(BaseModel):
     id: int
     token: str          # 明文，仅展示一次
     token_prefix: str
-    tools_allowed: list[str] = Field(default_factory=list)
-    expires_at: Optional[datetime] = None
 
 
 # ── MCP 权限 ──────────────────────────────────────────────

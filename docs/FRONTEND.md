@@ -206,86 +206,46 @@ App.vue
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  MCP Server 设置                                            │
+│  MCP 服务                                      🟢 运行中     │
 │                                                             │
-│  服务状态：🟢 运行中   地址：http://localhost:8765/sse      │
-│  端口：[ 8765 ]   [ 重启 MCP Server ]                       │
+│  服务地址：http://localhost:8765/sse            [ 复制 ]     │
+│  活跃 Token：1 个   传输协议：SSE   鉴权：Bearer Token      │
 │                                                             │
-│  ── 访问令牌 ──                          [ + 生成新 Token ] │
+│  访问 Token  cv_a3f2…  明文仅轮换时展示   [ 轮换 Token ]    │
 │                                                             │
+│  [ 停止服务 ]   [ 刷新 ]   [ 复制客户端配置 ]                │
+│                                                             │
+│  ── 客户端配置示例（点击复制）──                            │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ Claude Desktop        cv_a3f2...   全部工具          │   │
-│  │ 最后使用：2分钟前       创建：2026-10-01             │   │
-│  │                              [ 修改范围 ] [ 吊销 ]   │   │
-│  ├─────────────────────────────────────────────────────┤   │
-│  │ Cursor（只读）        cv_b7e1...   只读工具          │   │
-│  │ 最后使用：1小时前       创建：2026-10-02             │   │
-│  │                              [ 修改范围 ] [ 吊销 ]   │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-│  ── 全局工具权限 ──                                         │
-│                                                             │
-│  只读工具（建议开启）                                        │
-│  ✅ vault_list_credentials    列出凭据                      │
-│  ✅ vault_verify_credential   触发验证                      │
-│  ✅ vault_list_groups         列出分组                      │
-│  ✅ vault_list_plugins        列出插件                      │
-│                                                             │
-│  写操作工具（需信任 Agent）                                  │
-│  ⬜ vault_get_credential      获取凭据详情（掩码）          │
-│  ⬜ vault_create_credential   创建凭据                      │
-│  ⬜ vault_update_credential   修改凭据                      │
-│  ⬜ vault_delete_credential   删除凭据                      │
-│  ⬜ vault_batch_verify        批量验证                      │
-│  ⬜ vault_create_group        创建分组                      │
-│  ⬜ vault_install_plugin      安装插件                      │
-│                                                             │
-│  ⚠️ 高危工具                                                │
-│  ⬜ vault_get_secret          获取明文密钥（需二次确认）     │
-│                                                             │
-│  ── 客户端配置（点击复制）──                                │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │ {                                                   │   │
-│  │   "mcpServers": {                                   │   │
-│  │     "credential-vault": {                           │   │
-│  │       "url": "http://localhost:8765/sse",           │   │
-│  │       "headers": {                                  │   │
-│  │         "Authorization": "Bearer cv_<your_token>"   │   │
-│  │       }                                             │   │
-│  │     }                                               │   │
-│  │   }                                                 │   │
-│  │ }                                                   │   │
+│  │ { "mcpServers": { "credential-vault": {             │   │
+│  │     "url": "http://localhost:8765/sse",             │   │
+│  │     "headers": { "Authorization": "Bearer cv_..." } │   │
+│  │ } } }                                               │   │
 │  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
+
+── 工具权限（全局开关）──  关闭后所有 Token 均无法调用该工具
+
+✅ vault_list_credentials    列出凭据
+✅ vault_verify_credential   触发验证
+✅ vault_list_groups         列出分组
+✅ vault_list_plugins        列出插件
+⬜ vault_get_credential      获取凭据详情（掩码）
+⬜ vault_create_credential   创建凭据
+⬜ vault_update_credential   修改凭据
+⬜ vault_delete_credential   删除凭据
+⬜ vault_batch_verify        批量验证
+⬜ vault_create_group        创建分组
+⬜ vault_install_plugin       安装插件
+⬜ vault_get_secret          获取明文密钥（需二次确认）⚠️
 ```
 
-**生成 / 轮换 Token 弹窗**（MCP 全局仅一个活跃 Token，通过轮换更换）：
+> Token **默认即存在、且只需轮换**：不再有"生成 Token"入口，也不在 Token 上单独配置工具范围
+> （统一由上面的「工具权限」全局开关控制）。
+
+**轮换 Token**：点击「轮换 Token」→ 二次确认（"旧 Token 立即失效"）→ 展示一次性明文。
 
 ```
-┌─────────────────────────────────────┐
-│  轮换 Token                    [×]  │
-│                                     │
-│  ⚠️ 轮换后当前 Token 立即失效，请    │
-│     及时更新已配置的客户端。         │
-│                                     │
-│  工具范围                           │
-│  ○ 继承全局权限（推荐）             │
-│  ● 自定义范围                       │
-│  ┌─────────────────────────────┐   │
-│  │ ☑ vault_list_credentials    │   │
-│  │ ☑ vault_verify_credential   │   │
-│  │ ☑ vault_list_groups         │   │
-│  │ ☐ vault_create_credential   │   │
-│  │ ☐ vault_get_secret  ⚠️      │   │
-│  └─────────────────────────────┘   │
-│                                     │
-│  过期时间                           │
-│  ○ 永不过期  ● 30天  ○ 90天  ○ 自定义 │
-│                                     │
-│       [ 取消 ]   [ 轮换 ]           │
-└─────────────────────────────────────┘
-
-轮换后（仅展示一次）：
 ┌─────────────────────────────────────┐
 │  ✅ Token 已轮换               [×]  │
 │                                     │
@@ -440,16 +400,14 @@ await window.pywebview.api.confirm_close_action('quit', true)
   // 全局工具权限
   permissions: {},           // { tool_name: bool }
 
-  // 当前活跃 Token（全局唯一，无则为 null）
-  token: null,               // { exists, id, token_prefix, tools_allowed, created_at, last_used_at, expires_at }
+  // 当前活跃 Token（全局唯一，默认即存在）
+  token: null,               // { exists, id, token_prefix, created_at, last_used_at }
 
   // 操作
   fetchPermissions(),
   setPermission(toolName, enabled),
   fetchToken(),
-  rotateToken({ tools_allowed, expires_days }),  // 撤销旧 Token 并签发新的，返回明文（仅一次）
-  revokeToken(),
-  updateTokenScope(tools_allowed),               // 仅改范围，不轮换
+  rotateToken(),             // 作废旧 Token 并签发新的，返回明文（仅一次）
   start() / stop(),
 }
 ```

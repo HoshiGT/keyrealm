@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Union
 
 from . import database as db
@@ -416,19 +415,39 @@ def set_mcp_permission(tool_name: str, enabled: bool) -> dict:
     return {"ok": True}
 
 
-def get_mcp_token() -> dict:
-    """返回当前活跃 MCP Token 的元数据（不含明文）；无活跃 Token 时 exists=False。"""
+def _new_mcp_token() -> dict:
+    """生成并落库一个新的 MCP Token。工具范围统一继承「工具权限」全局开关，默认永不过期。"""
+    token = generate_token()
+    token_prefix = token[:8]
+    record = db.create_mcp_token(
+        name="default",
+        token_hash=hash_token(token),
+        token_prefix=token_prefix,
+        tools_allowed=[],
+        expires_at=None,
+    )
+    return {"record": record, "token": token, "token_prefix": token_prefix}
+
+
+def ensure_mcp_token() -> Optional[dict]:
+    """确保存在一个活跃 Token（无则创建），返回活跃 Token 记录（不含明文）。"""
     record = db.get_active_mcp_token()
+    if record:
+        return record
+    return _new_mcp_token()["record"]
+
+
+def get_mcp_token() -> dict:
+    """返回当前活跃 Token 的元数据（不含明文）；无则自动创建一个。"""
+    record = ensure_mcp_token()
     if not record:
         return {"exists": False}
     return {
         "exists": True,
         "id": record["id"],
         "token_prefix": record["token_prefix"],
-        "tools_allowed": record.get("tools_allowed", []),
         "created_at": record.get("created_at"),
         "last_used_at": record.get("last_used_at"),
-        "expires_at": record.get("expires_at"),
     }
 
 
@@ -442,49 +461,17 @@ def _push_mcp_status():
     })
 
 
-def rotate_mcp_token(tools_allowed: list = None, expires_days: Optional[int] = None) -> dict:
+def rotate_mcp_token() -> dict:
     """轮换 MCP Token：撤销现有活跃 Token 并签发新的（明文仅返回一次）。"""
     db.revoke_active_mcp_tokens()
-    token = generate_token()
-    token_hash = hash_token(token)
-    token_prefix = token[:8]
-    expires_at = None
-    if expires_days:
-        expires_at = (datetime.now(timezone.utc) + timedelta(days=expires_days)).isoformat()
-
-    record = db.create_mcp_token(
-        name="default",
-        token_hash=token_hash,
-        token_prefix=token_prefix,
-        tools_allowed=tools_allowed or [],
-        expires_at=expires_at,
-    )
+    created = _new_mcp_token()
     _push_mcp_status()
-    _log.info("已轮换 MCP Token（前缀 %s…）", token_prefix)
+    _log.info("已轮换 MCP Token（前缀 %s…）", created["token_prefix"])
     return {
-        "id": record["id"],
-        "token": token,          # 明文仅此一次
-        "token_prefix": token_prefix,
-        "tools_allowed": record.get("tools_allowed", []),
-        "expires_at": expires_at,
+        "id": created["record"]["id"],
+        "token": created["token"],          # 明文仅此一次
+        "token_prefix": created["token_prefix"],
     }
-
-
-def revoke_mcp_token() -> dict:
-    """撤销当前活跃 MCP Token。"""
-    db.revoke_active_mcp_tokens()
-    _push_mcp_status()
-    _log.info("已撤销 MCP Token")
-    return {"ok": True}
-
-
-def update_mcp_token_scope(tools_allowed: list) -> dict:
-    """更新当前活跃 Token 的工具范围（不改变明文）。"""
-    record = db.get_active_mcp_token()
-    if not record:
-        return {"ok": False, "message": "当前没有活跃 MCP Token"}
-    db.update_token_scope(record["id"], tools_allowed or [])
-    return {"ok": True}
 
 
 # ── Schedules ─────────────────────────────────────────────
