@@ -35,12 +35,14 @@ CREATE TABLE settings (
 
 | key | 说明 | 示例值 |
 |-----|------|--------|
-| `schema_version` | 数据库版本号 | `"2"` |
+| `schema_version` | 数据库版本号 | `"3"` |
 | `salt` | PBKDF2 盐值（base64） | `"a3f2..."` |
 | `verify_token` | 主密码验证密文（base64） | `"x9k1..."` |
 | `mcp_port` | MCP Server 端口 | `"8765"` |
 | `auto_verify` | 保存时自动验证 | `"true"` |
 | `log_level` | 日志级别 | `"INFO"` |
+| `verify_proxy` | 验证代理（空 = 直连；http/https/socks5） | `"socks5://127.0.0.1:10808"` |
+| `close_action` | 关闭主窗口行为 | `"ask"` |
 | `close_action` | 关闭窗口行为（ask / quit / background） | `"ask"` |
 
 ---
@@ -114,12 +116,14 @@ CREATE TABLE plugins (
     author          TEXT DEFAULT '',
     description     TEXT DEFAULT '',
     credential_type TEXT NOT NULL UNIQUE,  -- 插件唯一标识，如 "llm_openai"
+    icon            TEXT DEFAULT '🔑',     -- emoji 或插件目录内图片文件名（如 logo.png）
     fields_schema   TEXT NOT NULL,         -- JSON：字段定义（来自 manifest.json）
     plugin_path     TEXT NOT NULL,         -- 插件目录路径（plugins/<类别>/<服务>/）
-    category        TEXT DEFAULT '',       -- 类别目录名（llm / api，空 = 根级平铺插件）
+    category        TEXT DEFAULT '',       -- 类别目录名（llm / api / dns / …，空 = 根级平铺插件）
     category_name   TEXT DEFAULT '',       -- 类别显示名（来自 category.json）
     is_builtin      INTEGER DEFAULT 0,    -- 1=内置，0=用户安装
     enabled         INTEGER DEFAULT 1,
+    batch_verify    INTEGER DEFAULT 1,    -- 1=参与批量验证；0=禁用（仅手动，v3 新增）
     installed_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
@@ -269,9 +273,10 @@ schedules (target_id → groups.id 或 NULL)
 
 ## 迁移策略
 
-`settings.schema_version` 记录当前版本（当前为 **2**）。应用启动时按版本号顺序执行迁移：
+`settings.schema_version` 记录当前版本（当前为 **3**）。应用启动时按版本号顺序执行迁移：
 
 - **v1 → v2**：`credentials` 新增 `last_valid_at`；`plugins` 新增 `category` / `category_name`；
   凭据类型从整包命名（`llm_api_key` / `api_service`）迁移为子插件命名
   （`llm_<vendor>` / `api_<service>`）；回填 `last_valid_at`；删除 `verification_history` 表；
   移除 `vault_install_plugin` 权限记录。
+- **v2 → v3**：`plugins` 新增 `batch_verify`（默认 1）；`settings` 新增 `verify_proxy`（验证代理）。

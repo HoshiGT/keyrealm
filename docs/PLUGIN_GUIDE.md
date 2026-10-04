@@ -10,8 +10,8 @@ Credential Vault 的插件用于**验证一类凭据的有效性**（如某家 L
 
 ```
 plugins/
-├── llm/                        # 类别目录（LLM 对话模型）
-│   ├── category.json           # 类别元数据：{"name": "LLM 对话模型", "icon": "🤖"}
+├── llm/                        # 类别目录（LLM 模型）
+│   ├── category.json           # 类别元数据：{"name": "LLM 模型", "icon": "🤖"}
 │   ├── llm_common.py           # 类别共享模块（可选）：协议处理、厂商配置
 │   ├── openai/                 # 一个服务 = 一个独立子插件
 │   │   ├── manifest.json
@@ -237,7 +237,8 @@ cloudflare（API Token 或 Global API Key）。
 
 **mail/ 类别（1 个）**：smtp（通用 SMTP，覆盖 Gmail / QQ / 163 / 126 等）。
 
-> 说明：`duckdns`、`wechat_ilink`、`ht` 因校验接口是写操作或无公开接口，仅保存、不做联网验证。
+> 说明：`duckdns` 的校验本身是写操作（先写入 `1.1.1.1` 确认生效再还原原值），
+> `wechat_ilink` 与 `ht` 无公开校验接口——三者均标记 `batch_verify: false`，只能手动单个验证。
 
 ---
 
@@ -255,6 +256,14 @@ sys.modules["p"] = mod
 spec.loader.exec_module(mod)
 print(mod.verify({"base_url": "https://api.deepseek.com/v1", "api_key": "sk-..."}))
 ```
+
+- 批量真实凭据测试：`data/real_keys.json`（含真实密钥，已 `.gitignore`）中每条可携带任意字段的
+  `data` 字典；运行 `python tests/test_real_vendors.py` 会跨全部类别自动发现插件并逐一验证。
+  常用开关：
+  - `ONLY_NEW=1`：仅验证新增类别（dns / dev / im / cloud / exchange / mail）；
+  - `VAULT_PROXY=socks5://127.0.0.1:10808`：让校验走代理（telegram / discord / huggingface 等被墙厂商必需）；
+  - 条目 `expected` 取值：`valid` / `invalid` / `overdue`（按 invalid 判定）/ `ip_restricted` / `skip`。
+    其中 `expected: "skip"` 的条目**不会调用 verify**（用于有写副作用或无校验接口的类型）。
 
 - 旧版本（zip 安装时代）的 `data/installed_plugins/` 运行期缓存会在启动时由
   `migrate_legacy_installed_plugins()` 一次性迁移/清理，无需手工处理。

@@ -110,17 +110,21 @@ plugins/
 │   │   └── plugin.py
 │   ├── deepseek/
 │   └── …                     # 共 18 个 LLM 子插件
-└── api/
-    ├── category.json
-    ├── api_common.py
-    ├── firecrawl/
-    ├── tavily/
-    └── coze/                 # 共 3 个 API 服务子插件
+├── api/                      # API 服务类别（firecrawl / tavily / coze，共 3 个）
+├── dns/                      # 域名解析：dnspod / duckdns / godaddy
+├── dev/                      # 开发者平台：github / huggingface / wandb
+├── im/                       # 即时通讯：feishu / dingtalk / telegram / discord / qq_bot / wechat_ilink
+├── cloud/                    # 云服务商：aliyun / tencentcloud / cloudflare
+├── exchange/                 # 交易所：ht / okx / binance
+└── mail/                     # 邮箱：smtp（通用 SMTP，覆盖 Gmail/QQ/163/126）
 ```
+
+每个类别目录结构一致：`category.json` + 可选 `<类别>_common.py` + 各服务子目录（`manifest.json` + `plugin.py`）。
 
 - **一个服务 = 一个独立子插件**：各自持有 `manifest.json`（字段 schema、credential_type）与薄 `plugin.py`；删除任一子插件目录不影响其他子插件运行。根目录下直接含 `manifest.json` 的目录视为无类别的平铺插件。
 - **类别共享模块**：同类别子插件通过 `from llm_common import ...` 复用协议处理器；加载子插件时临时将其目录与类别目录注入 `sys.path`（见 plugin_base.load_plugin_module）。
-- **同步流程**：启动时 `sync_plugins()` 扫描两层结构 → upsert plugins 表（含 category / category_name）→ 清理已消失插件的记录与模块缓存。
+- **同步流程**：启动时 `sync_plugins()` 扫描两层结构 → upsert plugins 表（含 category / category_name / batch_verify）→ 清理已消失插件的记录与模块缓存。
+- **批量验证开关**：manifest 的 `batch_verify`（默认 true）落库到 plugins.batch_verify；调度器批量时跳过为 false 的类型（无法自动化或有写副作用，如 duckdns / wechat_ilink / ht），前端也禁用其批量按钮。
 - **旧版迁移**：`data/installed_plugins/`（zip 安装时代遗留）启动时由 `migrate_legacy_installed_plugins()` 一次性迁移/清理。
 
 **插件模块约定**：必须暴露 `verify(data)`；可选 `validate(data)`、`get_display_summary(data)`。`verify` 返回值鸭子类型兼容 VerifyResult / dataclass / dict。
@@ -142,6 +146,7 @@ plugins/
 调度器触发
     │
     ▼ 查询目标凭据（全部 / 指定分组 / 指定类型）
+    │   （自动剔除 batch_verify=false 的类型，计为「跳过」）
     │
     ▼ 并发调用各插件的 verify()（线程池，最大 10 并发）
     │
@@ -150,6 +155,8 @@ plugins/
     │
     ▼ 通过 pywebview 事件通知前端刷新
 ```
+
+**验证代理**：插件发起校验请求时的代理由 `backend/proxy.py` 统一管理——它把「系统设置」中的代理写入环境变量 `VAULT_PROXY`，各 `<类别>_common.py` 的 `_client()` 读取该变量（外部同名环境变量优先）。见 `docs/PLUGIN_GUIDE.md` 第 2.1 节。
 
 ---
 

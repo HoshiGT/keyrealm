@@ -276,6 +276,9 @@ claude mcp add credential-vault \
 
 批量验证，异步执行，立即返回任务 ID。
 
+> 声明 `batch_verify: false` 的凭据类型（无法自动化验证或有写副作用，如 `dns_duckdns`、
+> `im_wechat_ilink`、`exchange_ht`）会被自动跳过，不计入本次验证范围。
+
 ```json
 // 入参
 {

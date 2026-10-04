@@ -91,6 +91,10 @@ App.vue
 表格列：凭据（图标 + 名称 + 掩码敏感值副标题，如 `sk-123…cdef`）、类型、备注、
 附加信息（余额等 account_info）、分组、状态、添加时间、最后验证、最后有效、操作。
 
+> 左侧为「凭据目录」树（可拖拽调宽、带搜索），选中节点即按类别/服务过滤。
+> 当选中服务对应插件的 `batch_verify=false`（有写副作用或无法自动化）时，
+> 「批量验证」按钮禁用，仅能逐条点击「验证」。
+
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │  凭据管理  共 24 条            [ 批量验证 ] [ + 添加凭据 ]            │
@@ -256,6 +260,10 @@ App.vue
 │  数据库位置：./data/credentials.db（项目目录内）             │
 │  [ 导出备份（JSON） ]  [ 导入备份 ]                         │
 │                                                             │
+│  ── 网络与代理 ──                                           │
+│  验证代理：[ socks5://127.0.0.1:10808            ] [ 保存 ] │
+│  留空 = 直连；支持 http/https/socks5，环境变量 VAULT_PROXY 优先
+│                                                             │
 │  ── 关于 ──                                                 │
 │  Credential Vault v0.1.0                                    │
 │  Python 3.11 | pywebview 5.1 | Vue 3.4                     │
@@ -409,6 +417,6 @@ await window.pywebview.api.confirm_close_action('quit', true)
 | `vault:credential_updated` | 凭据状态变化 | `{id, status, status_detail}` |
 | `vault:credentials_changed` | 凭据增删 | `{}` |
 | `vault:batch_verify_progress` | 批量验证进度 | `{done, total, current_id}` |
-| `vault:batch_verify_done` | 批量验证完成 | `{results: [...]}` |
+| `vault:batch_verify_done` | 批量验证完成 | `{total, valid, invalid, error, skipped}`（skipped = 因 `batch_verify=false` 被跳过的条数） |
 | `vault:mcp_status` | MCP 服务状态变化 | `{status, port}` |
 | `vault:close_confirm` | 用户点击关闭且关闭行为为"询问" | `{}`（前端弹出退出/后台选择框） |
