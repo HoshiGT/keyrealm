@@ -88,6 +88,7 @@ export const useVaultStore = defineStore('vault', {
           id: `type:${plugin.credential_type}`,
           label: plugin.name,
           icon: plugin.icon || '🔑',
+          icon_image: plugin.icon_image || null,
           credential_type: plugin.credential_type,
           category: key,
           count: plugin.credential_count || 0,

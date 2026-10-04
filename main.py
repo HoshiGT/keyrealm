@@ -292,8 +292,12 @@ def main():
     # 绑定关闭事件
     _window.events.closing += _on_closing
 
-    # 启动 pywebview（阻塞主线程）
-    webview.start(debug=False)
+    # 启动 pywebview（阻塞主线程）。
+    # private_mode=False + 固定 storage_path：持久化 localStorage（列顺序、
+    # 目录树状态等用户偏好），否则每次启动 WebView2 使用临时配置全部丢失。
+    webview_dir = db.DATA_DIR / "webview"
+    webview_dir.mkdir(parents=True, exist_ok=True)
+    webview.start(debug=False, private_mode=False, storage_path=str(webview_dir))
     log.info("应用退出")
 
 

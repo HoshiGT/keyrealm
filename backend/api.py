@@ -410,7 +410,10 @@ def delete_group(group_id: int) -> dict:
 # ── Plugins ───────────────────────────────────────────────
 
 def list_plugins() -> list:
-    return plugin_manager.list_installed_plugins()
+    plugins = plugin_manager.list_installed_plugins()
+    for record in plugins:
+        record["icon_image"] = plugin_manager.get_icon_image(record)
+    return plugins
 
 
 # ── MCP ───────────────────────────────────────────────────

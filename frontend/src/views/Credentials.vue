@@ -2,12 +2,12 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Edit, Expand, Fold, Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Delete, Edit, Expand, Fold, Plus, Refresh, Search, SetUp } from '@element-plus/icons-vue'
 
 import CredentialForm from '@/components/CredentialForm.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { useVaultStore } from '@/stores/vault'
-import { STATUS_OPTIONS, formatRelative } from '@/utils/format'
+import { STATUS_OPTIONS, formatDateTimeFull } from '@/utils/format'
 
 const route = useRoute()
 const router = useRouter()
@@ -24,6 +24,14 @@ const statusOptions = STATUS_OPTIONS
 
 const groupOptions = computed(() => vaultStore.groupOptions)
 const hasPlugins = computed(() => vaultStore.plugins.length > 0)
+
+// 添加凭据时的默认服务：跟随目录树当前选中项
+// （选中具体服务 → 该服务；选中类别 → 类别下第一个服务）
+const createDefaultType = computed(() => {
+  if (filters.credential_type) return filters.credential_type
+  if (filters.credential_types && filters.credential_types.length) return filters.credential_types[0]
+  return ''
+})
 
 const scopeArgs = computed(() => {
   if (filters.credential_type) return ['type', null, filters.credential_type]
@@ -43,6 +51,12 @@ function typeLabel(type) {
 function typeIcon(type) {
   const plugin = pluginFor(type)
   return plugin && plugin.icon ? plugin.icon : '🔑'
+}
+
+/** 插件自定义图标（manifest icon 指向图片文件时后端返回 data URL） */
+function iconImage(type) {
+  const plugin = pluginFor(type)
+  return plugin && plugin.icon_image ? plugin.icon_image : ''
 }
 
 /** 凭据单元格副标题：掩码后的敏感值（如 sk-123…cdef） */
@@ -155,44 +169,83 @@ function resetTree() {
   if (treeRef.value) treeRef.value.setCurrentKey('all')
 }
 
-// ── 表头拖拽排序（原生 HTML5 DnD，顺序持久化 localStorage）──
+// ── 列配置：顺序（拖拽）与可见性（列设置），均持久化 localStorage ──
 
 const COLUMN_DEFS = [
-  { key: 'credential', label: '凭据', minWidth: 230 },
+  { key: 'credential', label: '凭据', minWidth: 230, locked: true },
   { key: 'type', label: '类型', minWidth: 140 },
   { key: 'notes', label: '备注', minWidth: 130 },
   { key: 'extra', label: '附加信息', minWidth: 170 },
   { key: 'group', label: '分组', width: 110 },
   { key: 'status', label: '状态', width: 100 },
-  { key: 'created_at', label: '添加时间', width: 120 },
-  { key: 'last_verified', label: '最后验证', width: 120 },
-  { key: 'last_valid', label: '最后有效', width: 120 },
-  { key: 'actions', label: '操作', width: 190 },
+  { key: 'created_at', label: '添加时间', width: 170 },
+  { key: 'last_verified', label: '最后验证', width: 170 },
+  { key: 'last_valid', label: '最后有效', width: 170 },
+  { key: 'actions', label: '操作', width: 190, locked: true },
 ]
 
 const COLUMN_ORDER_KEY = 'vault.credentials.columnOrder'
+const COLUMN_VISIBLE_KEY = 'vault.credentials.visibleColumns'
+const ALL_COLUMN_KEYS = COLUMN_DEFS.map((def) => def.key)
 
 function loadColumnOrder() {
   try {
     const saved = JSON.parse(localStorage.getItem(COLUMN_ORDER_KEY) || '[]')
     if (Array.isArray(saved)) {
-      const known = saved.filter((key) => COLUMN_DEFS.some((def) => def.key === key))
-      const missing = COLUMN_DEFS.map((def) => def.key).filter((key) => !known.includes(key))
+      const known = saved.filter((key) => ALL_COLUMN_KEYS.includes(key))
+      const missing = ALL_COLUMN_KEYS.filter((key) => !known.includes(key))
       if (known.length) return [...known, ...missing]
     }
   } catch {
     // 忽略损坏的本地配置
   }
-  return COLUMN_DEFS.map((def) => def.key)
+  return [...ALL_COLUMN_KEYS]
+}
+
+function loadVisibleColumns() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(COLUMN_VISIBLE_KEY) || 'null')
+    if (Array.isArray(saved)) {
+      const known = saved.filter((key) => ALL_COLUMN_KEYS.includes(key))
+      if (known.length) return known
+    }
+  } catch {
+    // 忽略损坏的本地配置
+  }
+  return [...ALL_COLUMN_KEYS]
 }
 
 const columnOrder = ref(loadColumnOrder())
+const visibleKeys = ref(loadVisibleColumns())
+
+// 锁定列（凭据/操作）始终可见
+const effectiveVisible = computed(() => {
+  const locked = COLUMN_DEFS.filter((def) => def.locked).map((def) => def.key)
+  return [...new Set([...visibleKeys.value, ...locked])]
+})
+
 const orderedColumns = computed(() =>
-  columnOrder.value.map((key) => COLUMN_DEFS.find((def) => def.key === key)).filter(Boolean),
+  columnOrder.value
+    .filter((key) => effectiveVisible.value.includes(key))
+    .map((key) => COLUMN_DEFS.find((def) => def.key === key))
+    .filter(Boolean),
 )
+
+function handleVisibleChange(values) {
+  visibleKeys.value = values
+  localStorage.setItem(COLUMN_VISIBLE_KEY, JSON.stringify(values))
+  nextTick(setupHeaderDrag)
+}
+
+// ── 表头拖拽排序：以列 key 标识（label-class-name），避免索引错位 ──
 
 const tableRef = ref(null)
 let dragCleanup = []
+
+function columnKeyOf(th) {
+  const cls = Array.from(th.classList).find((name) => name.startsWith('vault-th-'))
+  return cls ? cls.slice('vault-th-'.length) : null
+}
 
 function setupHeaderDrag() {
   dragCleanup.forEach((fn) => fn())
@@ -201,13 +254,14 @@ function setupHeaderDrag() {
   if (!tableEl) return
   const ths = Array.from(
     tableEl.querySelectorAll('.el-table__header-wrapper thead th'),
-  ).filter((th) => !th.classList.contains('gutter'))
-  ths.forEach((th, index) => {
+  ).filter((th) => columnKeyOf(th))
+  ths.forEach((th) => {
+    const targetKey = columnKeyOf(th)
     th.draggable = true
     th.classList.add('is-draggable')
     const onDragStart = (event) => {
       event.dataTransfer.effectAllowed = 'move'
-      event.dataTransfer.setData('text/plain', String(index))
+      event.dataTransfer.setData('text/plain', targetKey)
       th.classList.add('is-dragging')
     }
     const onDragEnd = () => th.classList.remove('is-dragging')
@@ -220,11 +274,14 @@ function setupHeaderDrag() {
     const onDrop = (event) => {
       event.preventDefault()
       th.classList.remove('is-drag-over')
-      const from = Number(event.dataTransfer.getData('text/plain'))
-      if (!Number.isInteger(from) || from === index) return
+      const fromKey = event.dataTransfer.getData('text/plain')
+      if (!fromKey || fromKey === targetKey) return
       const next = [...columnOrder.value]
-      const [moved] = next.splice(from, 1)
-      next.splice(index, 0, moved)
+      const fromIndex = next.indexOf(fromKey)
+      const toIndex = next.indexOf(targetKey)
+      if (fromIndex === -1 || toIndex === -1) return
+      next.splice(fromIndex, 1)
+      next.splice(next.indexOf(targetKey), 0, fromKey)
       columnOrder.value = next
       localStorage.setItem(COLUMN_ORDER_KEY, JSON.stringify(next))
       nextTick(setupHeaderDrag)
@@ -372,6 +429,29 @@ onMounted(async () => {
       <h2 class="section-title">凭据管理</h2>
       <span class="text-muted">共 {{ vaultStore.credentials.length }} 条</span>
       <div class="spacer" />
+      <el-popover placement="bottom-end" :width="200" trigger="click">
+        <template #reference>
+          <el-button :icon="SetUp">列设置</el-button>
+        </template>
+        <div class="column-settings">
+          <div class="column-settings-title">显示列</div>
+          <el-checkbox-group
+            :model-value="visibleKeys"
+            @update:model-value="handleVisibleChange"
+          >
+            <el-checkbox
+              v-for="def in COLUMN_DEFS"
+              :key="def.key"
+              :value="def.key"
+              :disabled="!!def.locked"
+              class="column-settings-item"
+            >
+              {{ def.label }}
+            </el-checkbox>
+          </el-checkbox-group>
+          <div class="column-settings-hint">表头可拖拽调整顺序</div>
+        </div>
+      </el-popover>
       <el-button :icon="Refresh" :loading="batchStarting" @click="batchVerify">批量验证</el-button>
       <el-button type="primary" :icon="Plus" @click="openCreate">添加凭据</el-button>
     </div>
@@ -422,7 +502,8 @@ onMounted(async () => {
         >
           <template #default="{ data }">
             <span class="tree-node">
-              <span class="tree-icon">{{ data.icon }}</span>
+              <img v-if="data.icon_image" class="tree-icon-img" :src="data.icon_image" alt="" />
+              <span v-else class="tree-icon">{{ data.icon }}</span>
               <span class="tree-label">{{ data.label }}</span>
               <span v-if="data.count !== undefined" class="tree-count">{{ data.count }}</span>
             </span>
@@ -444,10 +525,12 @@ onMounted(async () => {
             :label="col.label"
             :width="col.width"
             :min-width="col.minWidth"
+            :label-class-name="`vault-th-${col.key}`"
           >
             <template v-if="col.key === 'credential'" #default="{ row }">
               <div class="credential-cell">
-                <span class="credential-icon">{{ typeIcon(row.credential_type) }}</span>
+                <img v-if="iconImage(row.credential_type)" class="credential-icon-img" :src="iconImage(row.credential_type)" alt="" />
+                <span v-else class="credential-icon">{{ typeIcon(row.credential_type) }}</span>
                 <div class="credential-text">
                   <div class="credential-name">{{ row.name }}</div>
                   <div class="credential-sub mono">{{ maskedSubtitle(row) || row.credential_type }}</div>
@@ -477,15 +560,15 @@ onMounted(async () => {
             </template>
 
             <template v-else-if="col.key === 'created_at'" #default="{ row }">
-              <span class="text-muted">{{ formatRelative(row.created_at) }}</span>
+              <span class="text-muted mono">{{ formatDateTimeFull(row.created_at) }}</span>
             </template>
 
             <template v-else-if="col.key === 'last_verified'" #default="{ row }">
-              <span class="text-muted">{{ formatRelative(row.last_verified_at) }}</span>
+              <span class="text-muted mono">{{ formatDateTimeFull(row.last_verified_at) }}</span>
             </template>
 
             <template v-else-if="col.key === 'last_valid'" #default="{ row }">
-              <span class="text-muted">{{ formatRelative(row.last_valid_at) }}</span>
+              <span class="text-muted mono">{{ formatDateTimeFull(row.last_valid_at) }}</span>
             </template>
 
             <template v-else-if="col.key === 'actions'" #default="{ row }">
@@ -508,7 +591,7 @@ onMounted(async () => {
       </el-card>
     </div>
 
-    <CredentialForm v-model="formVisible" :credential="editing" @saved="load" />
+    <CredentialForm v-model="formVisible" :credential="editing" :default-type="createDefaultType" @saved="load" />
   </div>
 </template>
 
@@ -616,6 +699,20 @@ onMounted(async () => {
   line-height: 1;
 }
 
+.credential-icon-img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.tree-icon-img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
 .credential-name {
   font-weight: 600;
 }
@@ -640,6 +737,25 @@ onMounted(async () => {
 
 .action-cell .el-button {
   margin-left: 0;
+}
+
+/* 列设置弹层 */
+.column-settings-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.column-settings-item {
+  display: flex;
+  margin-right: 0;
+  height: 28px;
+}
+
+.column-settings-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 /* 表头拖拽提示样式 */

@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import base64
 import json
 import shutil
 import sys
@@ -53,6 +54,44 @@ _LEGACY_BUILTIN_TYPES = ("llm_api_key", "api_service")
 
 # 内存中的插件模块缓存  credential_type -> module
 _loaded_modules: dict[str, Any] = {}
+
+# manifest icon 字段支持图片文件名（相对于插件目录），解析为 data URL 后的缓存
+_ICON_IMAGE_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+    ".ico": "image/x-icon",
+    ".gif": "image/gif",
+}
+_icon_image_cache: dict[str, Optional[str]] = {}
+
+
+def get_icon_image(record: dict) -> Optional[str]:
+    """插件自定义图标：manifest 的 icon 为插件目录内图片文件时读取为 data URL。
+
+    icon 不是图片文件名（如 emoji）时返回 None，前端回退到默认展示。
+    """
+    icon = (record.get("icon") or "").strip()
+    ext = Path(icon).suffix.lower()
+    if not icon or ext not in _ICON_IMAGE_MIME:
+        return None
+    ct = record.get("credential_type", "")
+    if ct in _icon_image_cache:
+        return _icon_image_cache[ct]
+    result: Optional[str] = None
+    try:
+        plugin_dir = Path(record["plugin_path"]).resolve()
+        path = (plugin_dir / icon).resolve()
+        # 防目录穿越：图标文件必须位于插件目录内
+        if path.is_relative_to(plugin_dir) and path.is_file():
+            b64 = base64.b64encode(path.read_bytes()).decode()
+            result = f"data:{_ICON_IMAGE_MIME[ext]};base64,{b64}"
+    except Exception as e:
+        _log.warning("插件图标读取失败 %s: %s", ct, e)
+    _icon_image_cache[ct] = result
+    return result
 
 
 def _scan_plugin_dirs() -> list[tuple[Path, str, dict]]:
@@ -102,6 +141,7 @@ def sync_plugins():
     - 已存在目录 → 更新记录并重载模块（改完重启/刷新即生效）；
     - 磁盘上已消失的目录 → 移除模块与数据库记录（删除即卸载，凭据保留）。
     """
+    _icon_image_cache.clear()
     found: set[str] = set()
     for plugin_dir, category, cat_meta in _scan_plugin_dirs():
         try:
