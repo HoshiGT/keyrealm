@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Edit, Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Delete, Edit, Expand, Fold, Plus, Refresh, Search } from '@element-plus/icons-vue'
 
 import CredentialForm from '@/components/CredentialForm.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
@@ -81,6 +81,45 @@ function notesOf(row) {
 
 const treeRef = ref(null)
 const selectedNode = ref('all')
+
+// 树的展开/收起状态由本组件自行维护（持久化 localStorage），
+// 避免凭据保存后 treeData 重建导致已收起的节点被重新展开。
+const TREE_EXPANDED_KEY = 'vault.credentials.treeExpanded'
+const TREE_COLLAPSED_KEY = 'vault.credentials.treeCollapsed'
+
+const expandedKeys = ref(JSON.parse(localStorage.getItem(TREE_EXPANDED_KEY) || '[]'))
+const treeCollapsed = ref(localStorage.getItem(TREE_COLLAPSED_KEY) === '1')
+
+function persistExpanded() {
+  localStorage.setItem(TREE_EXPANDED_KEY, JSON.stringify(expandedKeys.value))
+}
+
+function collectExpandable(nodes, acc = []) {
+  nodes.forEach((node) => {
+    if (node.children && node.children.length) {
+      acc.push(node.id)
+      collectExpandable(node.children, acc)
+    }
+  })
+  return acc
+}
+
+function handleNodeExpand(node) {
+  if (!expandedKeys.value.includes(node.id)) {
+    expandedKeys.value.push(node.id)
+    persistExpanded()
+  }
+}
+
+function handleNodeCollapse(node) {
+  expandedKeys.value = expandedKeys.value.filter((key) => key !== node.id)
+  persistExpanded()
+}
+
+function toggleTreeCollapsed() {
+  treeCollapsed.value = !treeCollapsed.value
+  localStorage.setItem(TREE_COLLAPSED_KEY, treeCollapsed.value ? '1' : '0')
+}
 
 const treeData = computed(() => {
   const children = []
@@ -311,6 +350,11 @@ watch(
 
 onMounted(async () => {
   await load()
+  // 首次使用（无本地记录）时默认展开全部节点
+  if (!expandedKeys.value.length) {
+    expandedKeys.value = collectExpandable(treeData.value)
+    persistExpanded()
+  }
   nextTick(() => {
     if (treeRef.value) treeRef.value.setCurrentKey('all')
     setupHeaderDrag()
@@ -352,16 +396,29 @@ onMounted(async () => {
     </el-card>
 
     <div class="content-row">
-      <el-card shadow="never" class="tree-card">
+      <el-card shadow="never" class="tree-card" :class="{ collapsed: treeCollapsed }">
+        <div class="tree-header">
+          <span v-if="!treeCollapsed" class="tree-title">凭据目录</span>
+          <el-button
+            text
+            size="small"
+            :icon="treeCollapsed ? Expand : Fold"
+            :title="treeCollapsed ? '展开目录' : '收起目录'"
+            @click="toggleTreeCollapsed"
+          />
+        </div>
         <el-tree
+          v-show="!treeCollapsed"
           ref="treeRef"
           :data="treeData"
           :props="treeProps"
           node-key="id"
           highlight-current
-          default-expand-all
+          :default-expanded-keys="expandedKeys"
           :expand-on-click-node="false"
           @node-click="handleNodeClick"
+          @node-expand="handleNodeExpand"
+          @node-collapse="handleNodeCollapse"
         >
           <template #default="{ data }">
             <span class="tree-node">
@@ -432,17 +489,19 @@ onMounted(async () => {
             </template>
 
             <template v-else-if="col.key === 'actions'" #default="{ row }">
-              <el-button
-                size="small"
-                type="primary"
-                plain
-                :loading="verifyingId === row.id"
-                @click="verifyRow(row)"
-              >
-                验证
-              </el-button>
-              <el-button size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
-              <el-button size="small" type="danger" plain :icon="Delete" @click="removeRow(row)" />
+              <div class="action-cell">
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  :loading="verifyingId === row.id"
+                  @click="verifyRow(row)"
+                >
+                  验证
+                </el-button>
+                <el-button size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
+                <el-button size="small" type="danger" plain :icon="Delete" @click="removeRow(row)" />
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -484,6 +543,33 @@ onMounted(async () => {
 .tree-card {
   width: 230px;
   flex-shrink: 0;
+  transition: width 0.2s ease;
+}
+
+.tree-card.collapsed {
+  width: 48px;
+}
+
+.tree-card.collapsed :deep(.el-card__body) {
+  padding: 8px 6px;
+}
+
+.tree-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.tree-card.collapsed .tree-header {
+  justify-content: center;
+  margin-bottom: 0;
+}
+
+.tree-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
 }
 
 .tree-card :deep(.el-card__body) {
@@ -542,6 +628,18 @@ onMounted(async () => {
 
 .mono {
   font-family: 'JetBrains Mono', 'Consolas', monospace;
+}
+
+/* 操作列按钮：flex 布局对齐，清除 Element Plus 相邻按钮的默认左间距 */
+.action-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.action-cell .el-button {
+  margin-left: 0;
 }
 
 /* 表头拖拽提示样式 */
