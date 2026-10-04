@@ -213,6 +213,20 @@ def get_display_summary(data):
 - `account_info` 为可选 dict，验证通过后回传账户信息（见「附加信息」约定），前端凭据列表会展示。
 - 插件模块**不应导入 backend 包**，保持可脱离主程序独立运行（便于直接脚本调试）。
 
+### 3.1 可选「简易操作」（actions / run_action）
+
+插件可选实现两个函数，为凭据提供额外操作（前端凭据行的「操作」按钮）：
+
+- `actions(data) -> list[dict]`：声明可用操作，每项形如
+  `{"id": "chat", "name": "简单对话", "kind": "chat", "model": "<默认模型>"}`；
+  返回空列表表示无操作（前端不显示按钮）。
+- `run_action(action_id, params, data) -> dict`：执行操作，返回
+  `{"ok": True, "output": "..."}` 或 `{"ok": False, "error": "..."}`。
+
+例：LLM 厂商插件复用 `llm_common.chat_completion(base_url, api_key, model, messages, protocol)`
+提供「简单对话」；DNS / SMTP 等类型可按需实现自己的操作。前端按 `kind` 渲染界面
+（`chat` 为对话气泡；其它 kind 暂以通用占位显示）。
+
 ---
 
 ## 4. 编写一个新插件（以新增 OpenAI 兼容服务为例）

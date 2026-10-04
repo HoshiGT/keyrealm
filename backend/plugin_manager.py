@@ -31,7 +31,9 @@ from . import logger
 from .paths import app_dir
 from .plugin_base import (
     VerifyResult,
+    call_actions,
     call_display_summary,
+    call_run_action,
     call_validate,
     call_verify,
     load_manifest,
@@ -373,6 +375,26 @@ def get_display_summary(credential_type: str, data: dict) -> str:
     if module is None:
         return ""
     return call_display_summary(module, data)
+
+
+def has_actions(credential_type: str) -> bool:
+    """该插件是否声明了「简易操作」（可选能力）。"""
+    module = get_module(credential_type)
+    return bool(module is not None and hasattr(module, "actions"))
+
+
+def plugin_actions(credential_type: str, data: dict) -> list:
+    """该插件对给定凭据可用的操作列表。"""
+    module = get_module(credential_type)
+    return call_actions(module, data) if module else []
+
+
+def run_plugin_action(credential_type: str, action_id: str, params: dict, data: dict) -> dict:
+    """执行插件的某个操作。"""
+    module = get_module(credential_type)
+    if module is None:
+        return {"ok": False, "error": "插件未安装或加载失败"}
+    return call_run_action(module, action_id, params, data)
 
 
 def list_installed_plugins() -> list[dict]:

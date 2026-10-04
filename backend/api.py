@@ -422,7 +422,40 @@ def list_plugins() -> list:
     for record in plugins:
         record["icon_image"] = plugin_manager.get_icon_image(record)
         record["batch_verify"] = bool(record.get("batch_verify", 1))
+        record["has_actions"] = plugin_manager.has_actions(record["credential_type"])
     return plugins
+
+
+def list_credential_actions(credential_id: int) -> list:
+    """某凭据对应插件声明的「简易操作」列表（可选能力）。"""
+    key = _get_key()
+    if key is None:
+        return []
+    cred = db.get_credential(credential_id)
+    if not cred:
+        return []
+    try:
+        data = decrypt_dict(key, cred["data_encrypted"])
+    except Exception:
+        data = {}
+    return plugin_manager.plugin_actions(cred["credential_type"], data)
+
+
+def run_credential_action(credential_id: int, action_id: str, params: Optional[dict] = None) -> dict:
+    """执行某凭据的插件操作。"""
+    key = _get_key()
+    if key is None:
+        return {"error": "vault_locked"}
+    cred = db.get_credential(credential_id)
+    if not cred:
+        return {"ok": False, "error": "凭据不存在"}
+    try:
+        data = decrypt_dict(key, cred["data_encrypted"])
+    except Exception:
+        data = {}
+    return plugin_manager.run_plugin_action(
+        cred["credential_type"], action_id, params or {}, data
+    )
 
 
 def delete_plugin(credential_type: str) -> dict:

@@ -151,6 +151,8 @@ export const api = {
     ),
   deleteCredential: (id) => call('delete_credential', id),
   verifyCredential: (id) => call('verify_credential', id),
+  listCredentialActions: (id) => call('list_credential_actions', id),
+  runCredentialAction: (id, actionId, params) => call('run_credential_action', id, actionId, params),
   batchVerify: (scope = 'all', groupId = null, credentialType = null, credentialIds = null) =>
     call('batch_verify', scope, groupId, credentialType, credentialIds),
   checkDuplicateCredential: (credentialType, data) =>

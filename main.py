@@ -95,6 +95,12 @@ class VaultApi:
     def list_available_plugins(self):
         return api.list_available_plugins()
 
+    def list_credential_actions(self, credential_id: int):
+        return api.list_credential_actions(credential_id)
+
+    def run_credential_action(self, credential_id: int, action_id: str, params=None):
+        return api.run_credential_action(credential_id, action_id, params)
+
     def install_plugin(self, category: str, service: str):
         return api.install_plugin(category, service)
 

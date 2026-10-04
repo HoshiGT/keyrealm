@@ -8,6 +8,7 @@ import CredentialForm from '@/components/CredentialForm.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { useVaultStore } from '@/stores/vault'
 import { STATUS_OPTIONS, formatDateTimeFull } from '@/utils/format'
+import api from '@/api'
 import { inlineIcon } from '@/utils/pluginIcon'
 
 const route = useRoute()
@@ -78,6 +79,69 @@ async function startPickedBatch() {
     ElMessage.error(err.message || '批量验证启动失败')
   } finally {
     batchStarting.value = false
+  }
+}
+
+// ── 简易操作（插件可选能力，例如 LLM 简单对话）──
+const actionDialog = ref({
+  visible: false,
+  credentialId: null,
+  actionId: '',
+  kind: '',
+  title: '',
+  model: '',
+  messages: [],
+  input: '',
+  busy: false,
+  error: '',
+})
+
+async function openActions(row) {
+  let actions = []
+  try {
+    actions = await api.listCredentialActions(row.id)
+  } catch (err) {
+    ElMessage.error(err.message || '获取操作失败')
+    return
+  }
+  const action = (actions || []).find((a) => a.kind === 'chat') || (actions || [])[0]
+  if (!action) {
+    ElMessage.info('该凭据暂无可用操作')
+    return
+  }
+  actionDialog.value = {
+    visible: true,
+    credentialId: row.id,
+    actionId: action.id,
+    kind: action.kind || '',
+    title: `${action.name || '操作'} · ${row.name}`,
+    model: action.model || '',
+    messages: [],
+    input: '',
+    busy: false,
+    error: '',
+  }
+}
+
+async function sendChat() {
+  const dialog = actionDialog.value
+  const text = (dialog.input || '').trim()
+  if (!text || dialog.busy) return
+  dialog.messages.push({ role: 'user', content: text })
+  dialog.input = ''
+  dialog.busy = true
+  dialog.error = ''
+  try {
+    const res = await api.runCredentialAction(dialog.credentialId, dialog.actionId, {
+      model: dialog.model,
+      messages: dialog.messages.map((m) => ({ role: m.role, content: m.content })),
+    })
+    if (res && res.ok) dialog.messages.push({ role: 'assistant', content: res.output })
+    else dialog.error = (res && res.error) || '执行失败'
+  } catch (err) {
+    dialog.error = err.message || '执行失败'
+  } finally {
+    dialog.busy = false
   }
 }
 
@@ -842,6 +906,13 @@ onMounted(async () => {
             <template v-else-if="col.key === 'actions'" #default="{ row }">
               <div class="action-cell">
                 <el-button
+                  v-if="pluginFor(row.credential_type)?.has_actions"
+                  size="small"
+                  @click="openActions(row)"
+                >
+                  操作
+                </el-button>
+                <el-button
                   size="small"
                   type="primary"
                   plain
@@ -923,6 +994,48 @@ onMounted(async () => {
         删除插件「{{ ctxMenu.name }}」
       </div>
     </div>
+
+    <el-dialog
+      v-model="actionDialog.visible"
+      :title="actionDialog.title"
+      width="640px"
+      :close-on-click-modal="false"
+    >
+      <template v-if="actionDialog.kind === 'chat'">
+        <div class="chat-model">
+          <span class="text-muted">模型</span>
+          <el-input v-model="actionDialog.model" size="small" placeholder="模型名（可修改）" />
+        </div>
+        <div class="chat-box">
+          <div
+            v-for="(msg, index) in actionDialog.messages"
+            :key="index"
+            class="chat-msg"
+            :class="msg.role"
+          >
+            <div class="chat-bubble">{{ msg.content }}</div>
+          </div>
+          <el-empty
+            v-if="!actionDialog.messages.length"
+            description="输入一句话开始对话"
+            :image-size="50"
+          />
+        </div>
+        <div v-if="actionDialog.error" class="chat-error">{{ actionDialog.error }}</div>
+        <div class="chat-input">
+          <el-input
+            v-model="actionDialog.input"
+            type="textarea"
+            :rows="2"
+            resize="none"
+            placeholder="输入消息，Enter 发送（Shift+Enter 换行）"
+            @keydown.enter.exact.prevent="sendChat"
+          />
+          <el-button type="primary" :loading="actionDialog.busy" @click="sendChat">发送</el-button>
+        </div>
+      </template>
+      <el-empty v-else description="该操作暂无可视化界面" :image-size="60" />
+    </el-dialog>
 
     <CredentialForm v-model="formVisible" :credential="editing" :default-type="createDefaultType" @saved="load" />
   </div>
@@ -1172,6 +1285,66 @@ onMounted(async () => {
 
 .ctx-item.is-danger {
   color: var(--el-color-danger);
+}
+
+.chat-model {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.chat-model :deep(.el-input) {
+  max-width: 280px;
+}
+
+.chat-box {
+  height: 320px;
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-fill-color-blank);
+}
+
+.chat-msg {
+  display: flex;
+  margin-bottom: 8px;
+}
+
+.chat-msg.user {
+  justify-content: flex-end;
+}
+
+.chat-bubble {
+  max-width: 78%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--el-fill-color-light);
+}
+
+.chat-msg.user .chat-bubble {
+  background: var(--el-color-primary-light-8);
+}
+
+.chat-error {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--el-color-danger);
+}
+
+.chat-input {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chat-input :deep(.el-textarea) {
+  flex: 1;
 }
 
 /* 操作列按钮：flex 布局对齐，清除 Element Plus 相邻按钮的默认左间距 */

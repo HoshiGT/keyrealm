@@ -111,7 +111,8 @@ function buildPlugins() {
       category_name: 'LLM 模型',
       category_icon: '🤖',
       rel_path: `llm/${vendor}`,
-      batch_verify: true,      enabled: true,
+      batch_verify: true,
+      has_actions: true,      enabled: true,
       installed_at: daysAgo(30),
       credential_count: 0,
       fields_schema: makeFieldsSchema(vendor.endsWith('_compatible')),
@@ -740,6 +741,25 @@ export function createMockApi() {
       }
       state.proxy = value
       return { ok: true, proxy: value, effective: value }
+    },
+
+    // ── 简易操作（插件可选能力）────────────────────────────
+    async list_credential_actions(credentialId) {
+      await delay(60)
+      const cred = state.credentials.find((c) => c.id === Number(credentialId))
+      if (!cred) return []
+      const plugin = state.plugins.find((p) => p.credential_type === cred.credential_type)
+      return plugin && plugin.has_actions
+        ? [{ id: 'chat', name: '简单对话', kind: 'chat', model: 'mock-model' }]
+        : []
+    },
+
+    async run_credential_action(credentialId, actionId, params) {
+      await delay(400)
+      requireUnlocked()
+      const messages = (params && params.messages) || []
+      const last = messages.length ? messages[messages.length - 1].content : ''
+      return { ok: true, output: `（Mock 回复）你说的是：「${last}」` }
     },
 
     // ── 备份 / 恢复 ────────────────────────────────────────

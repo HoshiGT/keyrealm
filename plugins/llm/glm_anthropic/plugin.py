@@ -4,7 +4,7 @@
 """
 from __future__ import annotations
 
-from llm_common import VerifyResult, guarded, probe_anthropic_chat
+from llm_common import VerifyResult, guarded, probe_anthropic_chat, chat_completion
 
 NAME = "智谱 GLM (Anthropic)"
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/anthropic"
@@ -41,6 +41,34 @@ def _verify(data: dict) -> VerifyResult:
 def verify(data: dict) -> VerifyResult:
     """验证 API Key 是否有效。保证不抛出异常。"""
     return _verify(data or {})
+
+
+# ── 可选操作：简单对话 ──────────────────────────────────
+
+def actions(data: dict) -> list[dict]:
+    """声明可用操作（凭据含 API Key 时才提供简单对话）。"""
+    if not (data or {}).get("api_key"):
+        return []
+    return [{"id": "chat", "name": "简单对话", "kind": "chat", "model": CHAT_MODEL}]
+
+
+def run_action(action_id: str, params: dict, data: dict) -> dict:
+    """执行操作：简单对话。"""
+    if action_id != "chat":
+        return {"ok": False, "error": "未知操作"}
+    data = data or {}
+    base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
+    if not base_url:
+        return {"ok": False, "error": "需要填写 Base URL"}
+    params = params or {}
+    return chat_completion(
+        base_url,
+        (data.get("api_key") or "").strip(),
+        params.get("model") or CHAT_MODEL,
+        params.get("messages") or [],
+        protocol="anthropic",
+    )
+
 
 
 def get_display_summary(data: dict) -> str:

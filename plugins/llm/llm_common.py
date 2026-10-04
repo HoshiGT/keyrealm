@@ -120,6 +120,63 @@ def guarded(fn):
     return wrapper
 
 
+# ── 可选操作：简单对话（供厂商插件声明 actions/run_action 复用）────
+
+def chat_completion(base_url: str, api_key: str, model: str, messages: list,
+                    protocol: str = "openai", max_tokens: int = 512) -> dict:
+    """发起一次简单对话。返回 {"ok": bool, "output": str} 或 {"ok": False, "error": str}。"""
+    if not model:
+        return {"ok": False, "error": "未指定模型"}
+    if not api_key:
+        return {"ok": False, "error": "缺少 API Key"}
+    root = base_url.rstrip("/")
+    try:
+        with make_client() as client:
+            if protocol == "anthropic":
+                resp = client.post(
+                    root + "/v1/messages",
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json",
+                    },
+                    json={"model": model, "max_tokens": max_tokens, "messages": messages},
+                )
+            else:
+                resp = client.post(
+                    root + "/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={"model": model, "messages": messages, "max_tokens": max_tokens},
+                )
+    except httpx.TimeoutException:
+        return {"ok": False, "error": f"请求超时（{int(TIMEOUT)} 秒）"}
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": f"网络请求失败（{type(exc).__name__}）"}
+    except Exception as exc:  # noqa: BLE001 - 操作边界兜底
+        return {"ok": False, "error": f"执行异常（{type(exc).__name__}）"}
+
+    status = resp.status_code
+    payload = safe_json(resp)
+    if status == 200 and isinstance(payload, dict):
+        if protocol == "anthropic":
+            blocks = payload.get("content")
+            if isinstance(blocks, list):
+                text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict))
+                if text.strip():
+                    return {"ok": True, "output": text.strip()}
+        else:
+            choices = payload.get("choices")
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                message = choices[0].get("message")
+                if isinstance(message, dict) and message.get("content"):
+                    return {"ok": True, "output": str(message["content"]).strip()}
+        return {"ok": False, "error": "响应中没有可读内容"}
+    if status in (401, 403):
+        return {"ok": False, "error": f"鉴权失败 (HTTP {status})"}
+    snippet = body_snippet(resp)
+    return {"ok": False, "error": f"HTTP {status}" + (f": {snippet}" if snippet else "")}
+
+
 # ── 协议级探针（通用，不含厂商专属逻辑） ─────────────────
 
 def probe_openai_models(base_url: str, api_key: str) -> VerifyResult:

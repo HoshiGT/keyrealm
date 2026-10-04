@@ -188,3 +188,30 @@ def call_display_summary(module: Any, data: dict) -> str:
         return str(module.get_display_summary(data))
     except Exception:
         return ""
+
+
+# ── 可选「简易操作」接口 ──────────────────────────────────
+# 插件可选实现：
+#   actions(data) -> list[dict]      声明可用操作，每项 {"id","name",...}
+#   run_action(action_id, params, data) -> dict   执行操作，返回 {"ok", "output", "error"}
+
+def call_actions(module: Any, data: dict) -> list:
+    """调用插件的可选 actions(data)；未实现或异常时返回空列表。"""
+    if not hasattr(module, "actions"):
+        return []
+    try:
+        result = module.actions(data or {})
+        return result if isinstance(result, list) else []
+    except Exception:
+        return []
+
+
+def call_run_action(module: Any, action_id: str, params: dict, data: dict) -> dict:
+    """调用插件的可选 run_action(...)；保证返回 dict 且不抛异常。"""
+    if not hasattr(module, "run_action"):
+        return {"ok": False, "error": "该插件不支持操作"}
+    try:
+        result = module.run_action(action_id, params or {}, data or {})
+        return result if isinstance(result, dict) else {"ok": False, "error": "插件返回了非预期结果"}
+    except Exception as e:
+        return {"ok": False, "error": f"操作失败: {e}"}
