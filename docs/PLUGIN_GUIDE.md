@@ -207,7 +207,9 @@ def get_display_summary(data):
 - `verify(data)` 的返回值做鸭子类型处理，接受：
   - `VerifyResult` 风格的 dataclass（`status` / `message` / `account_info`）；
   - 普通 `dict`，如 `{"status": "valid", "message": "…", "account_info": {...}}`。
-- `status` 取值：`valid`（有效）/ `invalid`（无效、欠费）/ `error`（网络等异常）。
+- `status` 取值：`valid`（有效）/ `invalid`（凭据无效）/ `error`（网络等异常）。
+  **欠费（余额不足/负余额/402/限流欠费）不算失效**：仍判 `valid`，把欠费原因写进 `message`、
+  负余额写进 `account_info`（前端「附加信息」会展示余额）。
 - `account_info` 为可选 dict，验证通过后回传账户信息（见「附加信息」约定），前端凭据列表会展示。
 - 插件模块**不应导入 backend 包**，保持可脱离主程序独立运行（便于直接脚本调试）。
 

@@ -79,8 +79,10 @@ def _verify(data: dict) -> VerifyResult:
                 info["usage_rate"] = balance["usage_rate"]
             result.account_info = info
             if balance["balance"] < 0:
-                result.status = "invalid"
-                result.message = f"账户欠费（余额 {balance['balance']} {balance['currency']}）"
+                # 欠费不算失效：凭据本身有效，仅账户余额不足
+                result.message = (
+                    f"凭证有效，但账户欠费（余额 {balance['balance']} {balance['currency']}）"
+                )
 
     return result
 

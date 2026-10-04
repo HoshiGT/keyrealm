@@ -96,8 +96,8 @@ def judge(item, result) -> str:
     if expected == "valid":
         return "PASS" if result.status == "valid" else "FAIL"
     if expected == "overdue":
-        # 欠费应被识别为 invalid（不可用）
-        return "PASS" if result.status == "invalid" else "FAIL"
+        # 欠费不算失效：凭据本身有效，仅余额不足，应按 valid 判定
+        return "PASS" if result.status == "valid" else "FAIL"
     if expected == "invalid":
         return "PASS" if result.status == "invalid" else "FAIL"
     # 无法联网验证 / 未知预期：跳过

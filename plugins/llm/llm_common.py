@@ -209,10 +209,12 @@ def _interpret_chat(resp: httpx.Response) -> VerifyResult:
         return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
     if status == 429:
         if _looks_insufficient_balance(snippet):
-            return VerifyResult(status="invalid", message="账户欠费或无可用资源包")
+            # 欠费不算失效：密钥本身有效，仅账户余额不足
+            return VerifyResult(status="valid", message="凭证有效，但账户欠费或无可用资源包")
         return VerifyResult(status="valid", message="凭证有效，但触发速率限制 (HTTP 429)")
     if status == 402:
-        return VerifyResult(status="invalid", message="账户欠费或无可用额度 (HTTP 402)")
+        # 402 Payment Required：欠费不算失效
+        return VerifyResult(status="valid", message="凭证有效，但账户欠费或无可用额度 (HTTP 402)")
     return _unconfirmed(status, snippet)
 
 
