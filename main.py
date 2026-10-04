@@ -158,6 +158,13 @@ class VaultApi:
     def set_proxy(self, proxy: str):
         return api.set_proxy(proxy)
 
+    # ── 备份 / 恢复 ───────────────────────────────────────
+    def export_backup(self, scope: str = "all", encrypted: bool = True):
+        return api.export_backup(scope, encrypted)
+
+    def import_backup(self):
+        return api.import_backup()
+
     # ── Logging ───────────────────────────────────────────
     def get_log_config(self):
         return api.get_log_config()

@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime
 from typing import Any, Optional, Union
 
+from . import backup
 from . import database as db
 from . import logger
 from . import mcp_server
@@ -670,6 +672,86 @@ def set_proxy(proxy: str) -> dict:
     else:
         _log.info("验证代理已设置为 %s", value or "(直连)")
     return {"ok": True, "proxy": value, "effective": effective or ""}
+
+
+# ── 备份 / 恢复 ────────────────────────────────────────────
+
+def _file_dialog(kind: str, default_name: str = "") -> Optional[str]:
+    """打开系统文件对话框，返回所选路径（取消或无窗口时返回 None）。"""
+    if _window is None:
+        return None
+    try:
+        import webview
+
+        dialog_type = webview.SAVE_DIALOG if kind == "save" else webview.OPEN_DIALOG
+        kwargs: dict = {"file_types": ("JSON 备份 (*.json)", "所有文件 (*.*)")}
+        if kind == "save":
+            kwargs["save_filename"] = default_name
+        result = _window.create_file_dialog(dialog_type, **kwargs)
+        if isinstance(result, (list, tuple)):
+            return result[0] if result else None
+        return result
+    except Exception as e:
+        _log.warning("文件对话框打开失败: %s", e)
+        return None
+
+
+def export_backup(scope: str = "all", encrypted: bool = True) -> dict:
+    """导出备份到用户选择的文件。encrypted=True 时敏感值沿用密文（需同一主密码导入）。"""
+    key = _get_key()
+    if key is None:
+        return {"error": "vault_locked"}
+    if scope not in ("all", "credentials"):
+        return {"ok": False, "message": f"无效范围：{scope}"}
+
+    path = _file_dialog(
+        "save", default_name=f"credential-vault-backup-{datetime.now():%Y%m%d-%H%M%S}.json"
+    )
+    if not path:
+        return {"ok": False, "message": "已取消"}
+
+    doc = backup.build_backup(key, scope=scope, encrypted=encrypted)
+    try:
+        backup.write_backup_file(path, doc)
+    except Exception as e:
+        return {"ok": False, "message": f"写入失败: {e}"}
+
+    _log.info("已导出备份 %s（%d 条凭据，加密=%s）", path, doc["counts"]["credentials"], encrypted)
+    return {
+        "ok": True,
+        "path": path,
+        "count": doc["counts"]["credentials"],
+        "encrypted": bool(encrypted),
+    }
+
+
+def import_backup() -> dict:
+    """从用户选择的备份文件导入（自动识别加密/明文）。"""
+    key = _get_key()
+    if key is None:
+        return {"error": "vault_locked"}
+
+    path = _file_dialog("open")
+    if not path:
+        return {"ok": False, "message": "已取消"}
+
+    try:
+        doc = backup.read_backup_file(path)
+    except Exception as e:
+        return {"ok": False, "message": f"读取失败: {e}"}
+
+    try:
+        result = backup.import_backup(key, doc)
+    except ValueError as e:
+        return {"ok": False, "message": str(e)}
+
+    # 备份里的代理设置若被导入，立即生效
+    proxy_config.apply_proxy(db.get_setting("verify_proxy", ""))
+    push_event("vault:credentials_changed")
+    push_event("vault:plugins_changed")
+    _log.info("已导入备份 %s：导入 %d 条", path, result["imported"])
+    result["path"] = path
+    return result
 
 
 # ── Logging ───────────────────────────────────────────────

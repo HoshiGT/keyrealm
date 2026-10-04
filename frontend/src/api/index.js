@@ -207,6 +207,10 @@ export const api = {
   getProxy: () => call('get_proxy'),
   setProxy: (proxy) => call('set_proxy', proxy),
 
+  // ── 备份 / 恢复 ─────────────────────────────────────────
+  exportBackup: (scope = 'all', encrypted = true) => call('export_backup', scope, encrypted),
+  importBackup: () => call('import_backup'),
+
   // ── 日志 ────────────────────────────────────────────────
   getLogConfig: () => call('get_log_config'),
   setLogLevel: (level) => call('set_log_level', level),

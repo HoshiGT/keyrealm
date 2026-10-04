@@ -742,6 +742,24 @@ export function createMockApi() {
       return { ok: true, proxy: value, effective: value }
     },
 
+    // ── 备份 / 恢复 ────────────────────────────────────────
+    async export_backup(scope = 'all', encrypted = true) {
+      await delay(140)
+      requireUnlocked()
+      const count = scope === 'all' ? state.credentials.length : state.credentials.length
+      return { ok: true, path: `/mock/credential-vault-backup-${Date.now()}.json`, count, encrypted: !!encrypted }
+    },
+
+    async import_backup() {
+      await delay(220)
+      requireUnlocked()
+      return {
+        ok: true, encrypted: false, imported: 0,
+        skipped_plugin: 0, skipped_duplicate: 0, created_groups: 0,
+        path: '/mock/credential-vault-backup.json',
+      }
+    },
+
     // ── 日志 ──────────────────────────────────────────────
     async get_log_config() {
       await delay(40)

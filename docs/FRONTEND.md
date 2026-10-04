@@ -40,6 +40,7 @@ App.vue
 │   ├── 分组管理（Groups）
 │   ├── MCP 设置（MCP）
 │   ├── 系统设置（Settings）
+│   ├── 备份（Backup）
 │   └── 关于（About）
 └── 主内容区（router-view）
 ```

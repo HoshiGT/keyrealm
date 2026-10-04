@@ -158,6 +158,8 @@ plugins/
 
 **验证代理**：插件发起校验请求时的代理由 `backend/proxy.py` 统一管理——它把「系统设置」中的代理写入环境变量 `VAULT_PROXY`，各 `<类别>_common.py` 的 `make_client()` 读取该变量（外部同名环境变量优先）。见 `docs/PLUGIN_GUIDE.md` 第 2.1 节。
 
+**备份 / 恢复**：`backend/backup.py` 负责构建/导入备份文档（JSON）。加密备份的敏感字段直接沿用库中密文，只能用同一主密码导入；明文备份可跨主密码导入（以当前主密钥重新加密写库）。导入按「类型 + 敏感值」去重，并跳过插件未安装的条目；文件读写通过 pywebview 的原生文件对话框（`api._file_dialog`）。
+
 ---
 
 ### 2.5 MCP Server（mcp_server.py）
