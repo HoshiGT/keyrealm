@@ -269,7 +269,8 @@ export function createMockApi() {
       return clone(decorate(found))
     },
 
-    async create_credential(name, credentialType, groupId = null, data = {}, autoVerify = true) {
+    // 与真实后端签名保持一致：(name, credential_type, data, group_id, auto_verify)
+    async create_credential(name, credentialType, data = {}, groupId = null, autoVerify = true) {
       await delay(180)
       requireUnlocked()
       const created = {

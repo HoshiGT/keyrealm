@@ -5,9 +5,12 @@
  * 所有方法均为异步（返回 Promise）。注入完成时会派发 `pywebviewready` 事件。
  *
  * 约定：
- *  - 后端返回 `{ ok: false, message }` 视为业务失败，这里统一抛出 ApiError，
+ *  - 后端返回 `{ ok: false, message }` 或 `{ error: '错误码', message?/details? }`
+ *    均视为业务失败，这里统一抛出 ApiError，
  *    调用方只需 try/catch 即可（无需逐处判断 res.ok）。
  *  - 后端抛出的 Python 异常会以 rejected Promise 形式到达，同样转成 ApiError。
+ *  - pywebview 桥接只支持位置参数，各方法传参顺序必须与 main.py 中
+ *    VaultApi 对应方法的签名严格一致（dev mock 也保持同样签名）。
  */
 
 const READY_EVENT = 'pywebviewready'
@@ -56,8 +59,18 @@ export function whenReady() {
 }
 
 function unwrap(result, method) {
-  if (result && typeof result === 'object' && result.ok === false) {
-    throw new ApiError(result.message || '操作失败', method)
+  if (result && typeof result === 'object' && !Array.isArray(result)) {
+    // 后端约定一：{ ok: false, message } 表示业务失败
+    if (result.ok === false) {
+      throw new ApiError(result.message || '操作失败', method)
+    }
+    // 后端约定二：{ error: '错误码', message?/details? } 同样表示失败
+    // （如 vault_locked / validation_failed / not_found），不能当成成功返回，
+    // 否则调用方会误报成功（例如凭据校验失败却提示"已创建"）。
+    if (typeof result.error === 'string') {
+      const detail = Array.isArray(result.details) ? result.details.join('；') : ''
+      throw new ApiError(result.message || detail || `操作失败（${result.error}）`, method)
+    }
   }
   return result
 }
@@ -116,13 +129,15 @@ export const api = {
       filters.search ? filters.search.trim() : null,
     ),
   getCredential: (id) => call('get_credential', id),
+  // 注意：pywebview 桥接只支持位置参数，顺序必须与后端
+  // VaultApi.create_credential(name, credential_type, data, group_id, auto_verify) 严格一致
   createCredential: (payload) =>
     call(
       'create_credential',
       payload.name,
       payload.credential_type,
-      payload.group_id ?? null,
       payload.data ?? {},
+      payload.group_id ?? null,
       payload.auto_verify !== false,
     ),
   updateCredential: (id, payload) =>

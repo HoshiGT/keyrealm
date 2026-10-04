@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 # 确保项目根目录在 sys.path
@@ -217,8 +218,12 @@ def _on_closing():
     if action == "background":
         _hide_to_tray()
         return False  # 阻止关闭，驻留托盘
-    # ask：先阻止本次关闭，通知前端弹窗让用户选择
-    api.push_event("vault:close_confirm")
+    # ask：先阻止本次关闭，通知前端弹窗让用户选择。
+    # 注意：closing 事件运行在 GUI 线程，而 evaluate_js 需要 GUI 线程执行 JS
+    # 后才能返回——同步调用会互相等待导致窗口卡死，因此放到守护线程异步推送。
+    threading.Thread(
+        target=api.push_event, args=("vault:close_confirm",), daemon=True
+    ).start()
     return False
 
 
