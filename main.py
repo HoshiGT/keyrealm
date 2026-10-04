@@ -270,9 +270,8 @@ def main():
     # 启动调度器
     scheduler.start_scheduler()
 
-    # 自动启动 MCP（如果有活跃 Token）
-    if db.count_active_tokens() > 0:
-        mcp_server.start_server()
+    # MCP 不随应用自动启动（避免每次启动都监听 8765 端口），
+    # 由用户在「MCP 设置」页手动开启；开启后最小化到托盘仍持续运行。
 
     # 创建窗口
     _window = webview.create_window(
