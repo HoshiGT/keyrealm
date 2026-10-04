@@ -36,6 +36,16 @@ function guard(promise) {
   if (promise && typeof promise.catch === 'function') promise.catch(() => {})
 }
 
+/** 窗口重新获得焦点/可见时刷新数据（覆盖后台 MCP 操作后前台未实时更新的场景） */
+function refreshOnActive() {
+  if (!appStore.unlocked) return
+  guard(vaultStore.fetchCredentials())
+  guard(vaultStore.fetchGroups())
+}
+function handleVisibility() {
+  if (document.visibilityState === 'visible') refreshOnActive()
+}
+
 onMounted(() => {
   disposers.push(
     onEvent(EVENTS.credentialUpdated, (detail) => vaultStore.applyCredentialUpdated(detail)),
@@ -59,6 +69,11 @@ onMounted(() => {
       closeDialog.value = true
     }),
   )
+
+  window.addEventListener('focus', refreshOnActive)
+  document.addEventListener('visibilitychange', handleVisibility)
+  disposers.push(() => window.removeEventListener('focus', refreshOnActive))
+  disposers.push(() => document.removeEventListener('visibilitychange', handleVisibility))
 
   guard(appStore.refreshTray())
 })

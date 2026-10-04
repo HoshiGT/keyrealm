@@ -637,6 +637,11 @@ onMounted(async () => {
           <div class="column-settings-hint">表头可拖拽调整顺序</div>
         </div>
       </el-popover>
+      <el-button
+        :icon="Refresh"
+        :loading="vaultStore.loadingCredentials"
+        @click="load"
+      >刷新</el-button>
       <el-button :icon="Refresh" :loading="batchStarting" @click="openBatchPick">批量验证</el-button>
       <el-button type="primary" :icon="Plus" @click="openCreate">添加凭据</el-button>
     </div>
