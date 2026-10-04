@@ -22,6 +22,9 @@ _log = logger.get_logger(__name__)
 _scheduler: Optional[BackgroundScheduler] = None
 _executor = ThreadPoolExecutor(max_workers=10)
 
+# 批量验证并发度（每个凭据一个任务）
+BATCH_CONCURRENCY = 8
+
 # 由 api.py 注入，用于推送事件到前端
 _event_callback: Optional[Callable] = None
 # 由 api.py 注入，用于获取解密密钥
@@ -99,16 +102,22 @@ def batch_verify(
     group_id: Optional[int] = None,
     credential_type: Optional[str] = None,
     trigger_type: str = "manual",
+    credential_ids: Optional[list] = None,
 ):
-    """批量验证，在后台线程池执行。
+    """批量验证，后台线程池**并发**执行。
 
-    禁用批量验证的插件（manifest 中 batch_verify=false）会被排除：这类插件无法
-    自动化验证或有写副作用，只能手动单个验证。
+    - 显式传入 `credential_ids` 时只验证这些凭据（前端手动勾选）；否则按 scope/group/type 取。
+    - 禁用批量验证的插件（manifest 中 batch_verify=false）会被排除：这类插件无法
+      自动化验证或有写副作用，只能手动单个验证，计入「跳过」。
     """
-    all_creds = db.list_credentials(
-        group_id=group_id if scope == "group" else None,
-        credential_type=credential_type if scope == "type" else None,
-    )
+    if credential_ids:
+        wanted = set(int(i) for i in credential_ids)
+        all_creds = [c for c in db.list_credentials() if c.get("id") in wanted]
+    else:
+        all_creds = db.list_credentials(
+            group_id=group_id if scope == "group" else None,
+            credential_type=credential_type if scope == "type" else None,
+        )
     no_batch = {
         p["credential_type"] for p in db.list_plugins()
         if not p.get("batch_verify", 1)
@@ -124,21 +133,34 @@ def batch_verify(
 
     def _run():
         valid = invalid = error = 0
-        for i, cred in enumerate(creds, 1):
-            result = verify_single_credential(cred["id"], trigger_type=trigger_type)
-            status = result.get("status", "error")
-            if status == "valid":
-                valid += 1
-            elif status == "invalid":
-                invalid += 1
-            else:
-                error += 1
-            _push_event("vault:batch_verify_progress", {
-                "current": i,
-                "total": total,
-                "credential_name": cred["name"],
-                "status": status,
-            })
+        done = 0
+        workers = min(BATCH_CONCURRENCY, total)
+        # 每个凭据一个任务并发执行；结果在 as_completed 的消费线程里单线程汇总
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            fut_cred = {
+                pool.submit(verify_single_credential, c["id"], trigger_type): c
+                for c in creds
+            }
+            for fut in as_completed(fut_cred):
+                cred = fut_cred[fut]
+                try:
+                    result = fut.result()
+                except Exception as exc:  # noqa: BLE001 - 单条异常不影响整体
+                    result = {"status": "error", "message": f"执行异常: {exc}"}
+                status = result.get("status", "error")
+                if status == "valid":
+                    valid += 1
+                elif status == "invalid":
+                    invalid += 1
+                else:
+                    error += 1
+                done += 1
+                _push_event("vault:batch_verify_progress", {
+                    "current": done,
+                    "total": total,
+                    "credential_name": cred.get("name", ""),
+                    "status": status,
+                })
         _push_event("vault:batch_verify_done", {
             "total": total, "valid": valid, "invalid": invalid, "error": error, "skipped": skipped,
         })

@@ -7,6 +7,7 @@ import {
   Expand,
   Fold,
   FolderOpened,
+  InfoFilled,
   Key,
   Setting,
   Lock,
@@ -33,6 +34,7 @@ const navItems = [
   { path: '/groups', title: '分组管理', icon: FolderOpened },
   { path: '/mcp', title: 'MCP 设置', icon: Connection },
   { path: '/settings', title: '系统设置', icon: Setting },
+  { path: '/about', title: '关于', icon: InfoFilled },
 ]
 
 const activePath = computed(() => route.path)

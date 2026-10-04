@@ -34,18 +34,52 @@ const createDefaultType = computed(() => {
   return ''
 })
 
-const scopeArgs = computed(() => {
-  if (filters.credential_type) return ['type', null, filters.credential_type]
-  if (filters.group_id) return ['group', filters.group_id, null]
-  return ['all', null, null]
-})
+// ── 批量验证：手动勾选（含一键全选）后并发验证 ──
+const batchPickVisible = ref(false)
+const batchPickIds = ref([])
 
-/** 当前筛选为单一类型、且该类型禁用批量验证时返回其名称（用于禁用批量按钮） */
-const batchBlockedName = computed(() => {
-  if (scopeArgs.value[0] !== 'type') return ''
-  const plugin = pluginFor(filters.credential_type)
-  return plugin && plugin.batch_verify === false ? plugin.name || '该类型' : ''
-})
+/** 该类型是否允许批量验证（manifest batch_verify=false 的类型只能手动单条验证） */
+function canBatchVerify(type) {
+  const plugin = pluginFor(type)
+  return !plugin || plugin.batch_verify !== false
+}
+
+const pickableCredentials = computed(() =>
+  vaultStore.credentials.filter((c) => canBatchVerify(c.credential_type)),
+)
+const pickAllChecked = computed(
+  () =>
+    pickableCredentials.value.length > 0 &&
+    batchPickIds.value.length === pickableCredentials.value.length,
+)
+const pickIndeterminate = computed(
+  () =>
+    batchPickIds.value.length > 0 &&
+    batchPickIds.value.length < pickableCredentials.value.length,
+)
+
+function openBatchPick() {
+  batchPickIds.value = pickableCredentials.value.map((c) => c.id)
+  batchPickVisible.value = true
+}
+
+function onPickAll(checked) {
+  batchPickIds.value = checked ? pickableCredentials.value.map((c) => c.id) : []
+}
+
+async function startPickedBatch() {
+  const ids = [...batchPickIds.value]
+  if (!ids.length) return
+  batchPickVisible.value = false
+  batchStarting.value = true
+  try {
+    await vaultStore.batchVerify('all', null, null, ids)
+  } catch (err) {
+    ElMessage.error(err.message || '批量验证启动失败')
+  } finally {
+    batchStarting.value = false
+  }
+}
 
 function pluginFor(type) {
   return vaultStore.pluginByType[type] || null
@@ -118,11 +152,13 @@ const ACCOUNT_INFO_LABELS = {
   account: '账号',
 }
 
-// 无展示价值、直接跳过的键（余额/币种/组织在上方单独处理）
-const ACCOUNT_INFO_SKIP = new Set([
-  'balance', 'currency', 'organization', 'object', 'auth_mode', 'ssl', 'type',
-  'usage_rate', 'usage_label',
-])
+// 除余额/使用率/组织外，其余字段的展示优先级（只取最关键的少量，保持简洁）
+const ACCOUNT_INFO_PRIORITY = [
+  'domain_count', 'workspace_count', 'model_count',
+  'login', 'username', 'name', 'email',
+  'account_id', 'user_id', 'totalEq', 'channel_id', 'server',
+]
+const EXTRA_MAX = 2
 
 /** 把 account_info 的单个值格式化为可读文本（毫秒时间戳转日期） */
 function formatAccountValue(key, value) {
@@ -147,13 +183,22 @@ function extraInfo(row) {
     if (!Number.isNaN(pct)) parts.push(`使用率 ${pct}%`)
   }
   if (info.organization) parts.push(`组织 ${info.organization}`)
-  Object.keys(info).forEach((key) => {
-    if (ACCOUNT_INFO_SKIP.has(key)) return
+  // 其余字段按优先级挑选，最多 EXTRA_MAX 项，超长值跳过——保持简洁
+  const skip = new Set(['balance', 'currency', 'organization', 'usage_rate', 'usage_label'])
+  const rest = []
+  const candidates = [...ACCOUNT_INFO_PRIORITY, ...Object.keys(info)]
+  const used = new Set()
+  for (const key of candidates) {
+    if (rest.length >= EXTRA_MAX) break
+    if (skip.has(key) || used.has(key)) continue
+    used.add(key)
     const value = info[key]
-    if (value === null || value === undefined || value === '' || typeof value === 'object') return
-    parts.push(`${ACCOUNT_INFO_LABELS[key] || key} ${formatAccountValue(key, value)}`)
-  })
-  return parts.join(' · ')
+    if (value === null || value === undefined || value === '' || typeof value === 'object') continue
+    const text = formatAccountValue(key, value)
+    if (text.length > 40) continue
+    rest.push(`${ACCOUNT_INFO_LABELS[key] || key} ${text}`)
+  }
+  return [...parts, ...rest].join(' · ')
 }
 
 function notesOf(row) {
@@ -535,17 +580,6 @@ async function removeRow(row) {
   }
 }
 
-async function batchVerify() {
-  batchStarting.value = true
-  try {
-    await vaultStore.batchVerify(...scopeArgs.value)
-  } catch (err) {
-    ElMessage.error(err.message || '批量验证启动失败')
-  } finally {
-    batchStarting.value = false
-  }
-}
-
 watch(
   () => route.query.new,
   (value) => {
@@ -603,20 +637,7 @@ onMounted(async () => {
           <div class="column-settings-hint">表头可拖拽调整顺序</div>
         </div>
       </el-popover>
-      <el-tooltip
-        :disabled="!batchBlockedName"
-        :content="`「${batchBlockedName}」不支持批量验证，请逐条手动验证`"
-        placement="bottom"
-      >
-        <span>
-          <el-button
-            :icon="Refresh"
-            :loading="batchStarting"
-            :disabled="!!batchBlockedName"
-            @click="batchVerify"
-          >批量验证</el-button>
-        </span>
-      </el-tooltip>
+      <el-button :icon="Refresh" :loading="batchStarting" @click="openBatchPick">批量验证</el-button>
       <el-button type="primary" :icon="Plus" @click="openCreate">添加凭据</el-button>
     </div>
 
@@ -784,6 +805,53 @@ onMounted(async () => {
         </el-table>
       </el-card>
     </div>
+
+    <el-dialog
+      v-model="batchPickVisible"
+      title="批量验证"
+      width="560px"
+      :close-on-click-modal="false"
+    >
+      <div class="pick-toolbar">
+        <el-checkbox
+          :model-value="pickAllChecked"
+          :indeterminate="pickIndeterminate"
+          @change="onPickAll"
+        >全选</el-checkbox>
+        <span class="pick-count text-muted">
+          已选 {{ batchPickIds.length }} / {{ pickableCredentials.length }}
+        </span>
+      </div>
+      <div class="pick-list">
+        <el-checkbox-group v-model="batchPickIds">
+          <div
+            v-for="row in vaultStore.credentials"
+            :key="row.id"
+            class="pick-row"
+            :class="{ 'is-disabled': !canBatchVerify(row.credential_type) }"
+          >
+            <el-checkbox :value="row.id" :disabled="!canBatchVerify(row.credential_type)">
+              <span class="pick-name">{{ row.name }}</span>
+              <span class="pick-type text-muted">{{ typeLabel(row.credential_type) }}</span>
+            </el-checkbox>
+            <el-tag v-if="!canBatchVerify(row.credential_type)" size="small" type="info">
+              需手动验证
+            </el-tag>
+          </div>
+        </el-checkbox-group>
+        <el-empty
+          v-if="!vaultStore.credentials.length"
+          description="暂无可验证的凭据"
+          :image-size="60"
+        />
+      </div>
+      <template #footer>
+        <el-button @click="batchPickVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!batchPickIds.length" @click="startPickedBatch">
+          验证 {{ batchPickIds.length }} 条
+        </el-button>
+      </template>
+    </el-dialog>
 
     <CredentialForm v-model="formVisible" :credential="editing" :default-type="createDefaultType" @saved="load" />
   </div>
@@ -958,6 +1026,46 @@ onMounted(async () => {
 
 .mono {
   font-family: 'JetBrains Mono', 'Consolas', monospace;
+}
+
+.pick-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.pick-count {
+  font-size: 12px;
+}
+
+.pick-list {
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 4px 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+}
+
+.pick-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.pick-row.is-disabled {
+  opacity: 0.6;
+}
+
+.pick-name {
+  font-weight: 500;
+}
+
+.pick-type {
+  margin-left: 8px;
+  font-size: 12px;
 }
 
 /* 操作列按钮：flex 布局对齐，清除 Element Plus 相邻按钮的默认左间距 */

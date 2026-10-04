@@ -124,7 +124,7 @@ plugins/
 - **一个服务 = 一个独立子插件**：各自持有 `manifest.json`（字段 schema、credential_type）与薄 `plugin.py`；删除任一子插件目录不影响其他子插件运行。根目录下直接含 `manifest.json` 的目录视为无类别的平铺插件。
 - **类别共享模块**：同类别子插件通过 `from llm_common import ...` 复用**通用工具**（`VerifyResult` / `make_client` / `safe_json` / `guarded` 等，llm 另有协议级探针）；加载子插件时临时将其目录与类别目录注入 `sys.path`（见 plugin_base.load_plugin_module）。**具体厂商逻辑在各子插件内自带，新增插件无需改动共享模块。**
 - **同步流程**：启动时 `sync_plugins()` 扫描两层结构 → upsert plugins 表（含 category / category_name / batch_verify）→ 清理已消失插件的记录与模块缓存。
-- **批量验证开关**：manifest 的 `batch_verify`（默认 true）落库到 plugins.batch_verify；调度器批量时跳过为 false 的类型（无法自动化或有写副作用，如 duckdns / wechat_ilink / ht），前端也禁用其批量按钮。
+- **批量验证开关**：manifest 的 `batch_verify`（默认 true）落库到 plugins.batch_verify；调度器与前端批量时跳过为 false 的类型（无法自动化或有写副作用，如 duckdns / wechat_ilink / ht）——前端在批量勾选弹窗中禁用其勾选。
 - **旧版迁移**：`data/installed_plugins/`（zip 安装时代遗留）启动时由 `migrate_legacy_installed_plugins()` 一次性迁移/清理。
 
 **插件模块约定**：必须暴露 `verify(data)`；可选 `validate(data)`、`get_display_summary(data)`。`verify` 返回值鸭子类型兼容 VerifyResult / dataclass / dict。
@@ -148,7 +148,7 @@ plugins/
     ▼ 查询目标凭据（全部 / 指定分组 / 指定类型）
     │   （自动剔除 batch_verify=false 的类型，计为「跳过」）
     │
-    ▼ 并发调用各插件的 verify()（线程池，最大 10 并发）
+    ▼ 并发调用各插件的 verify()（每条凭据一个任务，BATCH_CONCURRENCY=8 并发）
     │
     ▼ 更新 credentials.status / last_verified_at
     │   （status == valid 时同时更新 last_valid_at）

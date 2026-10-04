@@ -67,8 +67,8 @@ class VaultApi:
     def verify_credential(self, credential_id: int):
         return api.verify_credential(credential_id)
 
-    def batch_verify(self, scope: str = "all", group_id=None, credential_type=None):
-        return api.batch_verify(scope, group_id, credential_type)
+    def batch_verify(self, scope: str = "all", group_id=None, credential_type=None, credential_ids=None):
+        return api.batch_verify(scope, group_id, credential_type, credential_ids)
 
     def check_duplicate_credential(self, credential_type: str, data: dict):
         return api.check_duplicate_credential(credential_type, data)

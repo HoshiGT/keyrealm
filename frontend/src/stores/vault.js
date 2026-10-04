@@ -176,10 +176,10 @@ export const useVaultStore = defineStore('vault', {
     },
 
     /** 批量验证：进度与结果通过后端事件驱动（见 applyBatchProgress / applyBatchDone）。 */
-    async batchVerify(scope = 'all', groupId = null, credentialType = null) {
+    async batchVerify(scope = 'all', groupId = null, credentialType = null, credentialIds = null) {
       this.batch = { ...emptyBatch(), running: true }
       try {
-        return await api.batchVerify(scope, groupId, credentialType)
+        return await api.batchVerify(scope, groupId, credentialType, credentialIds)
       } catch (err) {
         this.batch.running = false
         throw err

@@ -342,16 +342,22 @@ def batch_verify(
     scope: str = "all",
     group_id: Optional[int] = None,
     credential_type: Optional[str] = None,
+    credential_ids: Optional[list] = None,
 ) -> dict:
     key = _get_key()
     if key is None:
         return {"error": "vault_locked"}
-    creds = db.list_credentials(
-        group_id=group_id if scope == "group" else None,
-        credential_type=credential_type if scope == "type" else None,
-    )
+    if credential_ids:
+        ids = set(int(i) for i in credential_ids)
+        creds = [c for c in db.list_credentials() if c.get("id") in ids]
+    else:
+        creds = db.list_credentials(
+            group_id=group_id if scope == "group" else None,
+            credential_type=credential_type if scope == "type" else None,
+        )
     scheduler.batch_verify(scope=scope, group_id=group_id,
-                           credential_type=credential_type, trigger_type="manual")
+                           credential_type=credential_type, trigger_type="manual",
+                           credential_ids=credential_ids)
     return {"ok": True, "total": len(creds)}
 
 

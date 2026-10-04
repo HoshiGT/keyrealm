@@ -11,8 +11,6 @@ import { formatDateTime, formatRelative } from '@/utils/format'
 const appStore = useAppStore()
 const vaultStore = useVaultStore()
 
-const APP_VERSION = '0.1.0'
-
 const WEEKDAYS = [
   { label: '周一', value: 'mon' },
   { label: '周二', value: 'tue' },
@@ -522,11 +520,6 @@ async function applyCloseAction(value) {
   }
 }
 
-/* ── 关于 ───────────────────────────────────────────── */
-const isDesktop = computed(() => typeof window !== 'undefined' && !!window.pywebview)
-const runtimeLabel = computed(() => (isDesktop.value ? '桌面端（pywebview）' : '浏览器预览（开发模式）'))
-const mcpLabel = computed(() => (appStore.tray.mcp_running ? `运行中 · 端口 ${appStore.tray.mcp_port}` : '已停止'))
-
 onMounted(async () => {
   await Promise.all([
     loadSchedules(),
@@ -754,27 +747,6 @@ onMounted(async () => {
       <div v-if="logConfig.log_file" class="log-path text-muted">日志文件：{{ logConfig.log_file }}</div>
     </el-card>
 
-    <el-card shadow="never">
-      <template #header><span>关于</span></template>
-
-      <el-descriptions :column="2" border size="small">
-        <el-descriptions-item label="应用名称">Credential Vault</el-descriptions-item>
-        <el-descriptions-item label="版本">v{{ APP_VERSION }}</el-descriptions-item>
-        <el-descriptions-item label="运行环境">{{ runtimeLabel }}</el-descriptions-item>
-        <el-descriptions-item label="MCP 服务">{{ mcpLabel }}</el-descriptions-item>
-        <el-descriptions-item label="前端技术栈">Vue 3 · Element Plus · Pinia · Vite</el-descriptions-item>
-        <el-descriptions-item label="当前状态">{{ appStore.unlocked ? '已解锁' : '已锁定' }}</el-descriptions-item>
-      </el-descriptions>
-
-      <el-alert type="info" :closable="false" show-icon class="about-alert">
-        <template #title>数据存储</template>
-        <template #default>
-          所有凭据仅保存在本机数据库中，使用由主密码派生的密钥加密。除验证时向对应服务商发起请求外，
-          任何凭据明文都不会离开本机；通过 MCP 提供给 AI Agent 的明文访问受工具权限与 Token 范围双重控制。
-        </template>
-      </el-alert>
-    </el-card>
-
     <!-- 修改主密码 -->
     <el-dialog v-model="passwordDialog" title="修改主密码" width="480px" :close-on-click-modal="false">
       <el-alert type="warning" :closable="false" show-icon class="mb-12">
@@ -993,10 +965,6 @@ onMounted(async () => {
 
 .mb-12 {
   margin-bottom: 12px;
-}
-
-.about-alert {
-  margin-top: 14px;
 }
 
 .strength {

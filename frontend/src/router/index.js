@@ -8,6 +8,7 @@ import Credentials from '@/views/Credentials.vue'
 import Groups from '@/views/Groups.vue'
 import McpSettings from '@/views/McpSettings.vue'
 import Settings from '@/views/Settings.vue'
+import About from '@/views/About.vue'
 
 // pywebview 通过 file:// 加载，必须使用 hash 模式，否则刷新/跳转会 404。
 const router = createRouter({
@@ -22,6 +23,7 @@ const router = createRouter({
         { path: 'groups', name: 'groups', component: Groups, meta: { title: '分组管理' } },
         { path: 'mcp', name: 'mcp', component: McpSettings, meta: { title: 'MCP 设置' } },
         { path: 'settings', name: 'settings', component: Settings, meta: { title: '系统设置' } },
+        { path: 'about', name: 'about', component: About, meta: { title: '关于' } },
       ],
     },
     { path: '/setup', name: 'setup', component: Setup },

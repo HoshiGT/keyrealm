@@ -441,11 +441,20 @@ export function createMockApi() {
       return { status, message, account_info: status === 'valid' ? { organization: 'Mock Org' } : null }
     },
 
-    async batch_verify(scope = 'all', groupId = null, credentialType = null) {
+    async batch_verify(scope = 'all', groupId = null, credentialType = null, credentialIds = null) {
       requireUnlocked()
-      const targets = state.credentials
-        .filter((item) => (scope === 'group' ? item.group_id === Number(groupId) : true))
-        .filter((item) => (scope === 'type' ? item.credential_type === credentialType : true))
+      const idSet = Array.isArray(credentialIds) && credentialIds.length
+        ? new Set(credentialIds.map(Number))
+        : null
+      let picked = idSet
+        ? state.credentials.filter((item) => idSet.has(item.id))
+        : state.credentials
+            .filter((item) => (scope === 'group' ? item.group_id === Number(groupId) : true))
+            .filter((item) => (scope === 'type' ? item.credential_type === credentialType : true))
+      // 与后端一致：跳过禁用批量验证的类型
+      const noBatch = new Set(state.plugins.filter((p) => p.batch_verify === false).map((p) => p.credential_type))
+      const skipped = picked.filter((item) => noBatch.has(item.credential_type)).length
+      const targets = picked.filter((item) => !noBatch.has(item.credential_type))
       let valid = 0
       let invalid = 0
       let error = 0
@@ -469,7 +478,7 @@ export function createMockApi() {
           status,
         })
       }
-      emit('vault:batch_verify_done', { total: targets.length, valid, invalid, error })
+      emit('vault:batch_verify_done', { total: targets.length, valid, invalid, error, skipped })
       emit('vault:credentials_changed', {})
       return { ok: true, total: targets.length }
     },
