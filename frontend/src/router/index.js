@@ -5,6 +5,7 @@ import AppLayout from '@/components/AppLayout.vue'
 import Setup from '@/views/Setup.vue'
 import Unlock from '@/views/Unlock.vue'
 import Credentials from '@/views/Credentials.vue'
+import PluginManager from '@/views/PluginManager.vue'
 import Groups from '@/views/Groups.vue'
 import McpSettings from '@/views/McpSettings.vue'
 import Settings from '@/views/Settings.vue'
@@ -20,6 +21,7 @@ const router = createRouter({
       redirect: '/credentials',
       children: [
         { path: 'credentials', name: 'credentials', component: Credentials, meta: { title: '凭据管理' } },
+        { path: 'plugins', name: 'plugins', component: PluginManager, meta: { title: '插件管理' } },
         { path: 'groups', name: 'groups', component: Groups, meta: { title: '分组管理' } },
         { path: 'mcp', name: 'mcp', component: McpSettings, meta: { title: 'MCP 设置' } },
         { path: 'settings', name: 'settings', component: Settings, meta: { title: '系统设置' } },

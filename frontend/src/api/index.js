@@ -102,6 +102,7 @@ export function onEvent(name, handler) {
 export const EVENTS = {
   credentialUpdated: 'vault:credential_updated',
   credentialsChanged: 'vault:credentials_changed',
+  pluginsChanged: 'vault:plugins_changed',
   batchProgress: 'vault:batch_verify_progress',
   batchDone: 'vault:batch_verify_done',
   mcpStatus: 'vault:mcp_status',
@@ -165,6 +166,9 @@ export const api = {
 
   // ── 插件（放入 plugins/ 目录即自动加载，无需手动管理）────
   listPlugins: () => call('list_plugins'),
+  deletePlugin: (credentialType) => call('delete_plugin', credentialType),
+  listAvailablePlugins: () => call('list_available_plugins'),
+  installPlugin: (category, service) => call('install_plugin', category, service),
 
   // ── MCP ─────────────────────────────────────────────────
   getMcpStatus: () => call('get_mcp_status'),

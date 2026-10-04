@@ -95,7 +95,9 @@ API-Key-Checker/
 
 ### 2.3 插件管理器（plugin_manager.py）
 
-**职责**：扫描 `plugins/` 目录、注册插件、按需加载插件模块。无安装/卸载/启停流程——**放入即加载，删除即卸载**。
+**职责**：扫描 `plugins/` 目录、注册插件、按需加载插件模块。**放入即加载，删除目录即卸载**。
+
+**插件删除 / 添加（插件管理）**：`delete_plugin(credential_type)` 删除该插件的 `plugins/` 目录、卸载模块、删除插件记录，并（默认）删除该类型下全部凭据；`list_available_plugins()` / `install_plugin()` 从内置纯净源 `plugins_builtin/`（发行包随 exe 同级提供）把插件复制回 `plugins/` 并加载。目录删除有路径越界保护。
 
 **插件目录**：`<app>/plugins/` 是唯一事实来源，采用两层结构：
 

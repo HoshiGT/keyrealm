@@ -538,6 +538,41 @@ export function createMockApi() {
       return clone(state.plugins)
     },
 
+    // 插件删除/恢复：mock 里被删的插件进入 state.removedPlugins，可再"添加"回来
+    async delete_plugin(credentialType) {
+      await delay(160)
+      requireUnlocked()
+      const idx = state.plugins.findIndex((p) => p.credential_type === credentialType)
+      if (idx === -1) return { ok: false, message: '插件不存在' }
+      const [plugin] = state.plugins.splice(idx, 1)
+      state.removedPlugins = state.removedPlugins || []
+      state.removedPlugins.push(plugin)
+      const removed = state.credentials.filter((c) => c.credential_type === credentialType).length
+      state.credentials = state.credentials.filter((c) => c.credential_type !== credentialType)
+      recomputeCounts()
+      emit('vault:credentials_changed', {})
+      emit('vault:plugins_changed', {})
+      return { ok: true, name: plugin.name, deleted_credentials: removed, deleted_dir: true }
+    },
+
+    async list_available_plugins() {
+      await delay(80)
+      return clone(state.removedPlugins || [])
+    },
+
+    async install_plugin(category, service) {
+      await delay(160)
+      requireUnlocked()
+      const list = state.removedPlugins || []
+      const idx = list.findIndex((p) => p.category === category && p.rel_path === `${category}/${service}`)
+      if (idx === -1) return { ok: false, message: '内置源中未找到该插件' }
+      const [plugin] = list.splice(idx, 1)
+      state.plugins.push(plugin)
+      recomputeCounts()
+      emit('vault:plugins_changed', {})
+      return { ok: true }
+    },
+
     // ── MCP ───────────────────────────────────────────────
     async get_mcp_status() {
       await delay(60)

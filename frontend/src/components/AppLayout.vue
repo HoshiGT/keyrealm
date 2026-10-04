@@ -7,6 +7,7 @@ import {
   Expand,
   Fold,
   FolderOpened,
+  Grid,
   InfoFilled,
   Key,
   Setting,
@@ -31,6 +32,7 @@ watch(collapsed, (value) => {
 
 const navItems = [
   { path: '/credentials', title: '凭据管理', icon: Key },
+  { path: '/plugins', title: '插件管理', icon: Grid },
   { path: '/groups', title: '分组管理', icon: FolderOpened },
   { path: '/mcp', title: 'MCP 设置', icon: Connection },
   { path: '/settings', title: '系统设置', icon: Setting },

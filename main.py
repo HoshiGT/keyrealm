@@ -89,6 +89,15 @@ class VaultApi:
     def list_plugins(self):
         return api.list_plugins()
 
+    def delete_plugin(self, credential_type: str):
+        return api.delete_plugin(credential_type)
+
+    def list_available_plugins(self):
+        return api.list_available_plugins()
+
+    def install_plugin(self, category: str, service: str):
+        return api.install_plugin(category, service)
+
     # ── MCP ───────────────────────────────────────────────
     def get_mcp_status(self):
         return api.get_mcp_status()

@@ -423,6 +423,35 @@ def list_plugins() -> list:
     return plugins
 
 
+def delete_plugin(credential_type: str) -> dict:
+    """删除插件及其凭据（前端确认后调用）。"""
+    result = plugin_manager.delete_plugin(credential_type, delete_credentials=True)
+    if result.get("ok"):
+        push_event("vault:credentials_changed")
+        push_event("vault:plugins_changed")
+    return result
+
+
+def list_available_plugins() -> list:
+    """内置源中尚未安装的插件。"""
+    available = plugin_manager.list_available_plugins()
+    for item in available:
+        item["icon_image"] = plugin_manager.get_icon_image({
+            "icon": item.get("icon", ""),
+            "credential_type": item["credential_type"],
+            "plugin_path": str(plugin_manager.BUILTIN_SOURCE_DIR / item["category"] / item["service"]),
+        })
+    return available
+
+
+def install_plugin(category: str, service: str) -> dict:
+    """从内置源恢复插件并加载。"""
+    result = plugin_manager.install_plugin(category, service)
+    if result.get("ok"):
+        push_event("vault:plugins_changed")
+    return result
+
+
 # ── MCP ───────────────────────────────────────────────────
 
 def get_mcp_status() -> dict:

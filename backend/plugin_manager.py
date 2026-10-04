@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -43,6 +44,8 @@ _log = logger.get_logger(__name__)
 # plugins/ 是插件的【唯一事实来源】，不打包进 exe，随 exe 同级以外部目录形式提供。
 BASE_DIR = app_dir()
 PLUGINS_DIR = BASE_DIR / "plugins"
+# 内置插件纯净源（随发行包提供一份）：插件管理里「添加」时从这里恢复到 plugins/
+BUILTIN_SOURCE_DIR = BASE_DIR / "plugins_builtin"
 
 # 内存中的插件模块缓存  credential_type -> module
 _loaded_modules: dict[str, Any] = {}
@@ -215,6 +218,109 @@ def sync_plugins():
 def _unload_plugin(credential_type: str):
     _loaded_modules.pop(credential_type, None)
     sys.modules.pop(f"_vault_plugin_{credential_type}", None)
+
+
+def _safe_rmtree(target: Path, root: Path) -> bool:
+    """仅当 target 位于 root 之内时删除，防止路径越界误删。"""
+    try:
+        t = target.resolve()
+        r = root.resolve()
+        if t != r and t.is_relative_to(r) and t.is_dir():
+            shutil.rmtree(t)
+            return True
+    except Exception as e:
+        _log.warning("删除插件目录失败 %s: %s", target, e)
+    return False
+
+
+def delete_plugin(credential_type: str, delete_credentials: bool = True) -> dict:
+    """删除一个插件：移除其 plugins/ 目录、卸载模块、删除插件记录。
+
+    delete_credentials=True（默认）时一并删除该类型下的全部凭据。
+    """
+    record = db.get_plugin_by_type(credential_type)
+    if not record:
+        return {"ok": False, "message": "插件不存在"}
+
+    name = record.get("name") or credential_type
+    removed = 0
+    if delete_credentials:
+        for cred in db.list_credentials(credential_type=credential_type):
+            db.delete_credential(cred["id"])
+            removed += 1
+
+    _unload_plugin(credential_type)
+    db.delete_plugin_record(credential_type)
+    # 目录删除放在最后：即便删除失败，记录也已清理，重启扫描时不会被再次加载
+    deleted_dir = _safe_rmtree(Path(record["plugin_path"]), PLUGINS_DIR)
+
+    _log.info("插件已删除 %s（凭据 %d 条，目录删除=%s）", credential_type, removed, deleted_dir)
+    return {"ok": True, "name": name, "deleted_credentials": removed, "deleted_dir": deleted_dir}
+
+
+def list_available_plugins() -> list[dict]:
+    """列出内置纯净源里、当前尚未安装（或已被删除）的插件。"""
+    installed = {p["credential_type"] for p in db.list_plugins()}
+    available: list[dict] = []
+    if not BUILTIN_SOURCE_DIR.exists():
+        return available
+    for cat_dir in sorted(BUILTIN_SOURCE_DIR.iterdir()):
+        if not cat_dir.is_dir() or cat_dir.name.startswith(("_", ".")):
+            continue
+        cat_meta: dict = {}
+        cat_file = cat_dir / "category.json"
+        if cat_file.exists():
+            try:
+                data = json.loads(cat_file.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    cat_meta = data
+            except Exception:
+                pass
+        for sub in sorted(cat_dir.iterdir()):
+            if not sub.is_dir() or sub.name.startswith(("_", ".")):
+                continue
+            manifest_file = sub / "manifest.json"
+            if not manifest_file.exists():
+                continue
+            try:
+                manifest = load_manifest(manifest_file)
+            except Exception:
+                continue
+            if manifest.credential_type in installed:
+                continue
+            available.append({
+                "category": cat_dir.name,
+                "category_name": _category_display(cat_dir.name, cat_meta),
+                "service": sub.name,
+                "credential_type": manifest.credential_type,
+                "name": manifest.name,
+                "icon": manifest.icon,
+                "description": manifest.description,
+            })
+    return available
+
+
+def install_plugin(category: str, service: str) -> dict:
+    """从内置纯净源把某个插件复制回 plugins/ 并同步加载。"""
+    src = BUILTIN_SOURCE_DIR / category / service
+    if not (src / "manifest.json").exists():
+        return {"ok": False, "message": "内置源中未找到该插件"}
+    dest = PLUGINS_DIR / category / service
+    if dest.exists():
+        return {"ok": False, "message": "该插件已存在"}
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # 连同类别元数据一并补齐（若目标类别目录尚无 category.json）
+        cat_src = BUILTIN_SOURCE_DIR / category / "category.json"
+        cat_dest = PLUGINS_DIR / category / "category.json"
+        if cat_src.exists() and not cat_dest.exists():
+            shutil.copy2(cat_src, cat_dest)
+        shutil.copytree(src, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    except Exception as e:
+        _log.error("安装插件失败 %s/%s: %s", category, service, e)
+        return {"ok": False, "message": f"安装失败: {e}"}
+    sync_plugins()
+    return {"ok": True}
 
 
 def load_plugin(credential_type: str) -> Optional[Any]:

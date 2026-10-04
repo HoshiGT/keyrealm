@@ -129,6 +129,17 @@ def assemble_release() -> Path:
     else:
         print("警告：未找到 plugins/，release/ 将不含内置插件", file=sys.stderr)
 
+    # 内置插件纯净源：与 plugins/ 同内容的一份只读副本，「插件管理 → 添加」从这里恢复
+    dest_builtin = RELEASE / "plugins_builtin"
+    if dest_builtin.exists():
+        shutil.rmtree(dest_builtin)
+    if src_plugins.exists():
+        shutil.copytree(
+            src_plugins,
+            dest_builtin,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+
     # 约定：plugins/ 是插件的唯一事实来源；data/installed_plugins/ 是旧版本
     # （zip 安装时代）遗留的运行期缓存，应用启动时由 migrate_legacy_installed_plugins()
     # 一次性迁移/清理，不随发行包分发。若用户此前从 release/ 运行过、留下了该缓存

@@ -221,6 +221,26 @@ export const useVaultStore = defineStore('vault', {
       return this.plugins
     },
 
+    /** 内置源中尚未安装的插件（插件管理页用） */
+    async fetchAvailablePlugins() {
+      const items = await api.listAvailablePlugins()
+      return Array.isArray(items) ? items : []
+    },
+
+    /** 删除插件（连同其凭据），随后刷新列表 */
+    async deletePlugin(credentialType) {
+      const result = await api.deletePlugin(credentialType)
+      await Promise.all([this.fetchPlugins(), this.fetchCredentials()])
+      return result
+    },
+
+    /** 从内置源恢复插件 */
+    async installPlugin(category, service) {
+      const result = await api.installPlugin(category, service)
+      await this.fetchPlugins()
+      return result
+    },
+
     // ── 后端事件 ──────────────────────────────────────────
     upsertCredential(credential) {
       const index = this.credentials.findIndex((item) => item.id === credential.id)

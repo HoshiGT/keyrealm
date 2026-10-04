@@ -251,6 +251,53 @@ function toggleTreeCollapsed() {
   localStorage.setItem(TREE_COLLAPSED_KEY, treeCollapsed.value ? '1' : '0')
 }
 
+// ── 目录树右键菜单：删除插件（连其凭据一并删除）──
+const ctxMenu = ref({ visible: false, x: 0, y: 0, type: '', name: '' })
+
+function onTreeContextMenu(event, data) {
+  if (!data || !data.credential_type) return // 仅服务节点（插件）可删除
+  event.preventDefault()
+  ctxMenu.value = {
+    visible: true,
+    x: event.clientX,
+    y: event.clientY,
+    type: data.credential_type,
+    name: data.label,
+  }
+}
+
+function closeCtxMenu() {
+  ctxMenu.value.visible = false
+}
+
+async function deletePluginFromTree() {
+  const { type, name } = ctxMenu.value
+  closeCtxMenu()
+  try {
+    await ElMessageBox.confirm(
+      `将删除插件「${name}」及其全部凭据（不可恢复，除非稍后在「插件管理」里重新添加该插件）。`,
+      '删除插件',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+  try {
+    const result = await vaultStore.deletePlugin(type)
+    ElMessage.success(
+      `已删除插件「${result.name || name}」，同时删除 ${result.deleted_credentials} 条凭据`,
+    )
+    resetTree()
+  } catch (err) {
+    ElMessage.error(err.message || '删除插件失败')
+  }
+}
+
 // ── 树宽度：拖拽右侧边框调整并持久化 ──
 const TREE_WIDTH_KEY = 'vault.credentials.treeWidth'
 const TREE_WIDTH_MIN = 160
@@ -711,6 +758,7 @@ onMounted(async () => {
           @node-click="handleNodeClick"
           @node-expand="handleNodeExpand"
           @node-collapse="handleNodeCollapse"
+          @node-contextmenu="onTreeContextMenu"
         >
           <template #default="{ data }">
             <el-tooltip
@@ -857,6 +905,24 @@ onMounted(async () => {
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 目录树右键菜单 -->
+    <div
+      v-if="ctxMenu.visible"
+      class="ctx-mask"
+      @click="closeCtxMenu"
+      @contextmenu.prevent="closeCtxMenu"
+    />
+    <div
+      v-if="ctxMenu.visible"
+      class="ctx-menu"
+      :style="{ left: `${ctxMenu.x}px`, top: `${ctxMenu.y}px` }"
+    >
+      <div class="ctx-item is-danger" @click="deletePluginFromTree">
+        <el-icon><Delete /></el-icon>
+        删除插件「{{ ctxMenu.name }}」
+      </div>
+    </div>
 
     <CredentialForm v-model="formVisible" :credential="editing" :default-type="createDefaultType" @saved="load" />
   </div>
@@ -1071,6 +1137,41 @@ onMounted(async () => {
 .pick-type {
   margin-left: 8px;
   font-size: 12px;
+}
+
+.ctx-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+}
+
+.ctx-menu {
+  position: fixed;
+  z-index: 3001;
+  min-width: 180px;
+  padding: 4px;
+  background: var(--el-bg-color-overlay);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+  box-shadow: var(--el-box-shadow-light);
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.ctx-item:hover {
+  background: var(--el-fill-color-light);
+}
+
+.ctx-item.is-danger {
+  color: var(--el-color-danger);
 }
 
 /* 操作列按钮：flex 布局对齐，清除 Element Plus 相邻按钮的默认左间距 */

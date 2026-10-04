@@ -36,6 +36,7 @@ window.addEventListener('vault:credential_updated', (e) => {
 App.vue
 ├── 侧边栏（Sidebar）
 │   ├── 凭据管理（Credentials）
+│   ├── 插件管理（PluginManager）
 │   ├── 分组管理（Groups）
 │   ├── MCP 设置（MCP）
 │   ├── 系统设置（Settings）
@@ -93,6 +94,7 @@ App.vue
 附加信息（余额等 account_info）、分组、状态、添加时间、最后验证、最后有效、操作。
 
 > 左侧为「凭据目录」树（可拖拽调宽、带搜索），选中节点即按类别/服务过滤。
+> **右键某个服务节点**可弹出菜单删除该插件（连同其全部凭据）。
 > 「批量验证」按钮会弹出**手动勾选对话框**（列表当前列表内凭据、支持「全选」），
 > 勾选后按所选凭据 ID **并发**验证；`batch_verify=false` 的类型（有写副作用或无法自动化）
 > 在弹窗中禁用勾选、标记「需手动验证」，只能逐条点「验证」。

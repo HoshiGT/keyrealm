@@ -53,6 +53,9 @@ onMounted(() => {
   disposers.push(
     onEvent(EVENTS.credentialsChanged, () => guard(vaultStore.fetchCredentials())),
   )
+  disposers.push(
+    onEvent(EVENTS.pluginsChanged, () => guard(vaultStore.fetchPlugins())),
+  )
   disposers.push(onEvent(EVENTS.batchProgress, (detail) => vaultStore.applyBatchProgress(detail)))
   disposers.push(
     onEvent(EVENTS.batchDone, (detail) => guard(vaultStore.applyBatchDone(detail))),
