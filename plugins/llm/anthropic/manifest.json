@@ -4,7 +4,7 @@
   "credential_type": "llm_anthropic",
   "author": "Credential Vault",
   "description": "验证 Anthropic API Key 有效性",
-  "icon": "🤖",
+  "icon": "logo.png",
   "fields": [
     {
       "key": "base_url",

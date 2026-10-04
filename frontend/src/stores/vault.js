@@ -79,7 +79,7 @@ export const useVaultStore = defineStore('vault', {
           categories[key] = {
             id: `cat:${key || 'root'}`,
             label: plugin.category_name || plugin.category || '其他',
-            icon: plugin.icon || '📁',
+            icon: plugin.category_icon || '📁',
             category: key,
             children: [],
           }

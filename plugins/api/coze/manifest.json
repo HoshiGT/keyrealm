@@ -4,7 +4,7 @@
   "credential_type": "api_coze",
   "author": "Credential Vault",
   "description": "验证 字节扣子 Coze API Key 有效性",
-  "icon": "🔌",
+  "icon": "logo.png",
   "fields": [
     {
       "key": "base_url",

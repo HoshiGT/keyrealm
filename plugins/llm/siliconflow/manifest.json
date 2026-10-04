@@ -4,7 +4,7 @@
   "credential_type": "llm_siliconflow",
   "author": "Credential Vault",
   "description": "验证 硅基流动 SiliconFlow API Key 有效性",
-  "icon": "🤖",
+  "icon": "logo.png",
   "fields": [
     {
       "key": "base_url",

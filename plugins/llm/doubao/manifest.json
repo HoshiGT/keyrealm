@@ -4,7 +4,7 @@
   "credential_type": "llm_doubao",
   "author": "Credential Vault",
   "description": "验证 字节豆包 API Key 有效性",
-  "icon": "🤖",
+  "icon": "logo.png",
   "fields": [
     {
       "key": "base_url",

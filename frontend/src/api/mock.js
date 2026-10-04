@@ -8,6 +8,8 @@
  * Mock 主密码：demo1234
  */
 
+import { PLUGIN_ICON_IMAGES } from './pluginIcons'
+
 const MOCK_PASSWORD = 'demo1234'
 const LATENCY = 120
 
@@ -80,10 +82,11 @@ function buildPlugins() {
       author: 'Credential Vault',
       description: `${name} API Key 管理与验证`,
       credential_type: `llm_${vendor}`,
-      icon: '🤖',
-      icon_image: null,
+      icon: PLUGIN_ICON_IMAGES[vendor] ? 'logo.png' : '🤖',
+      icon_image: PLUGIN_ICON_IMAGES[vendor] || null,
       category: 'llm',
       category_name: 'LLM 模型',
+      category_icon: '🤖',
       is_builtin: true,
       enabled: true,
       installed_at: daysAgo(30),
@@ -100,10 +103,11 @@ function buildPlugins() {
       author: 'Credential Vault',
       description: `${name} API Key 管理与验证`,
       credential_type: `api_${service}`,
-      icon: '🔌',
-      icon_image: null,
+      icon: PLUGIN_ICON_IMAGES[service] ? 'logo.png' : '🔌',
+      icon_image: PLUGIN_ICON_IMAGES[service] || null,
       category: 'api',
       category_name: 'API 服务',
+      category_icon: '🔌',
       is_builtin: true,
       enabled: true,
       installed_at: daysAgo(30),

@@ -67,6 +67,33 @@ _ICON_IMAGE_MIME = {
 }
 _icon_image_cache: dict[str, Optional[str]] = {}
 
+# 类别目录 category.json 的 icon 缓存（category_folder -> icon）
+_category_icon_cache: dict[str, Optional[str]] = {}
+
+
+def get_category_icon(category: str) -> Optional[str]:
+    """类别图标：读取 <类别目录>/category.json 的 icon 字段。
+
+    类别节点与插件节点图标相互独立，避免类别借用某个插件的 icon。
+    未配置时返回 None，前端回退到默认文件夹图标。
+    """
+    if not category:
+        return None
+    if category in _category_icon_cache:
+        return _category_icon_cache[category]
+    result: Optional[str] = None
+    try:
+        cat_file = BUILTIN_PLUGINS_DIR / category / "category.json"
+        if cat_file.is_file():
+            with open(cat_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and data.get("icon"):
+                result = str(data["icon"])
+    except Exception as e:
+        _log.warning("类别图标读取失败 %s: %s", category, e)
+    _category_icon_cache[category] = result
+    return result
+
 
 def get_icon_image(record: dict) -> Optional[str]:
     """插件自定义图标：manifest 的 icon 为插件目录内图片文件时读取为 data URL。
@@ -142,6 +169,7 @@ def sync_plugins():
     - 磁盘上已消失的目录 → 移除模块与数据库记录（删除即卸载，凭据保留）。
     """
     _icon_image_cache.clear()
+    _category_icon_cache.clear()
     found: set[str] = set()
     for plugin_dir, category, cat_meta in _scan_plugin_dirs():
         try:
@@ -279,4 +307,5 @@ def list_installed_plugins() -> list[dict]:
     for p in plugins:
         creds = db.list_credentials(credential_type=p["credential_type"])
         p["credential_count"] = len(creds)
+        p["category_icon"] = get_category_icon(p.get("category") or "")
     return plugins

@@ -84,7 +84,7 @@ async function handleMinimize() {
 
 <template>
   <el-container class="layout">
-    <el-aside :width="collapsed ? '64px' : '168px'" class="layout-aside">
+    <el-aside :width="collapsed ? '64px' : '152px'" class="layout-aside">
       <div class="brand" :class="{ 'is-collapsed': collapsed }">
         <img src="/favicon.svg" class="brand-logo" alt="Credential Vault" />
         <span v-show="!collapsed" class="brand-text">Credential Vault</span>
@@ -188,13 +188,32 @@ async function handleMinimize() {
 .brand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   height: 60px;
-  padding: 0 12px;
+  padding: 0 8px;
   font-weight: 700;
-  font-size: 14px;
+  font-size: 13px;
   white-space: nowrap;
   border-bottom: 1px solid var(--el-border-color);
+}
+
+.brand-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.layout-menu :deep(.el-menu-item) {
+  justify-content: center;
+  padding: 0 !important;
+}
+
+.layout-menu :deep(.el-menu-item .el-icon) {
+  margin-right: 6px;
+}
+
+.layout-menu :deep(.el-menu-item.is-active) {
+  padding-left: 0 !important;
 }
 
 .brand.is-collapsed {

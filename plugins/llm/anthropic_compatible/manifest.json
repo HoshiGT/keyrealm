@@ -4,7 +4,7 @@
   "credential_type": "llm_anthropic_compatible",
   "author": "Credential Vault",
   "description": "验证 第三方中转 (Anthropic 协议) API Key 有效性",
-  "icon": "🤖",
+  "icon": "logo.png",
   "fields": [
     {
       "key": "base_url",
