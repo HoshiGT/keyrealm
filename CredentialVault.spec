@@ -30,6 +30,13 @@ _console = os.environ.get("CV_CONSOLE") == "1"
 # 应用图标（Windows exe 需 .ico）。文件缺失时传 None，回退 PyInstaller 默认图标。
 _ICON_PATH = ROOT / "assets" / "icon.ico"
 _icon = str(_ICON_PATH) if _ICON_PATH.exists() else None
+if _icon:
+    print(f"[spec] 应用图标：{_ICON_PATH}")
+else:
+    print(
+        "[spec] 警告：未找到 assets/icon.ico，exe 将使用 PyInstaller 默认图标。"
+        "请先运行 python scripts/make_icon.py 生成图标。"
+    )
 
 datas = []
 binaries = []
@@ -85,7 +92,6 @@ hiddenimports += [
     "backend.crypto",
     "backend.database",
     "backend.mcp_server",
-    "backend.models",
     "backend.paths",
     "backend.plugin_base",
     "backend.plugin_manager",
@@ -121,7 +127,9 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # 不使用 UPX：UPX 压缩会破坏 Windows exe 内嵌的图标资源（表现为图标回退为
+    # PyInstaller 默认图标），且易触发杀软误报。体积换稳定，关闭。
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=_console,

@@ -57,6 +57,11 @@ python scripts/build.py --frontend
 #   --smoke               构建后运行 --print-paths 校验冻结路径（隐含 --console）
 ```
 
+> **exe 图标**：由 `assets/icon.ico` 提供（`scripts/make_icon.py` 生成，已入库）。构建日志会打印
+> `[spec] 应用图标：…`；若打印的是警告，则图标缺失，exe 会回退 PyInstaller 默认图标。
+> 构建已关闭 UPX（UPX 会破坏 exe 内嵌图标资源）。若替换 exe 后资源管理器仍显示旧图标，
+> 属 Windows 图标缓存，可执行 `ie4uinit.exe -show`，或把 exe 复制到新目录后再查看。
+
 构建完成后 `release/` 结构：
 
 ```
