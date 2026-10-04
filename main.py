@@ -263,8 +263,8 @@ def main():
     log.info("应用启动（frozen=%s，日志级别=%s，数据目录=%s）",
              is_frozen(), logger.get_level(), app_dir())
 
-    # 安装内置插件
-    plugin_manager.install_builtin_plugins()
+    # 装载插件（迁移旧缓存 + 扫描 plugins/）
+    plugin_manager.bootstrap_plugins()
 
     # 注入回调
     api.init_callbacks()
@@ -320,6 +320,6 @@ if __name__ == "__main__":
         print(f"app_dir          : {app_dir()}")
         print(f"frontend_index   : {_get_frontend_path()}")
         print(f"db_path          : {db.DB_PATH}")
-        print(f"builtin_plugins  : {plugin_manager.BUILTIN_PLUGINS_DIR}")
+        print(f"plugins_dir      : {plugin_manager.PLUGINS_DIR}")
         sys.exit(0)
     main()

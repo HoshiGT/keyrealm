@@ -15,7 +15,7 @@ from backend import api, crypto, plugin_manager
 
 def setup_module():
     db.init_db()
-    plugin_manager.install_builtin_plugins()
+    plugin_manager.bootstrap_plugins()
     # 直接注入测试密钥，模拟已解锁状态
     salt = crypto.generate_salt()
     api._set_key(crypto.derive_key("test-password", salt))

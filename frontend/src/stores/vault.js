@@ -217,7 +217,6 @@ export const useVaultStore = defineStore('vault', {
       this.plugins = (Array.isArray(items) ? items : []).map((plugin) => ({
         ...plugin,
         enabled: !!plugin.enabled,
-        is_builtin: !!plugin.is_builtin,
       }))
       return this.plugins
     },

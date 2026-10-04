@@ -44,7 +44,7 @@ onMounted(() => {
         <el-descriptions-item label="当前状态">
           {{ appStore.unlocked ? '已解锁' : '已锁定' }}
         </el-descriptions-item>
-        <el-descriptions-item label="内置插件">
+        <el-descriptions-item label="插件">
           {{ vaultStore.plugins.length }} 个 · {{ categoryCount }} 个类别
         </el-descriptions-item>
         <el-descriptions-item label="MCP 服务">

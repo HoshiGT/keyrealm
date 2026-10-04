@@ -346,8 +346,7 @@ claude mcp add credential-vault \
       "description": "验证 OpenAI API Key 有效性",
       "icon": "🤖",
       "category": "llm",
-      "category_name": "LLM 对话模型",
-      "is_builtin": true,
+      "category_name": "LLM 模型",
       "enabled": true,
       "credential_count": 8
     }

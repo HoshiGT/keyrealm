@@ -96,7 +96,6 @@ class PluginInfo(BaseModel):
     credential_type: str
     icon: str = "🔑"
     fields_schema: list[FieldSchema] = Field(default_factory=list)
-    is_builtin: bool = False
     enabled: bool = True
     installed_at: datetime
     credential_count: int = 0

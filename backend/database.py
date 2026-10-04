@@ -19,7 +19,7 @@ BASE_DIR = app_dir()
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "credentials.db"
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _lock = threading.Lock()
 _conn: Optional[sqlite3.Connection] = None
@@ -91,7 +91,6 @@ def init_db():
             plugin_path     TEXT NOT NULL,
             category        TEXT DEFAULT '',
             category_name   TEXT DEFAULT '',
-            is_builtin      INTEGER DEFAULT 0,
             enabled         INTEGER DEFAULT 1,
             batch_verify    INTEGER DEFAULT 1,
             installed_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -203,6 +202,13 @@ def _migrate(conn: sqlite3.Connection):
         plugin_cols = {r["name"] for r in conn.execute("PRAGMA table_info(plugins)")}
         if "batch_verify" not in plugin_cols:
             conn.execute("ALTER TABLE plugins ADD COLUMN batch_verify INTEGER DEFAULT 1")
+        conn.commit()
+
+    if from_version < 4:
+        # v4: 插件不再区分内置/外置，移除 plugins.is_builtin
+        plugin_cols = {r["name"] for r in conn.execute("PRAGMA table_info(plugins)")}
+        if "is_builtin" in plugin_cols:
+            conn.execute("ALTER TABLE plugins DROP COLUMN is_builtin")
         conn.commit()
 
 
@@ -417,7 +423,7 @@ def list_plugins(enabled_only: bool = False) -> list[dict]:
     sql = "SELECT * FROM plugins"
     if enabled_only:
         sql += " WHERE enabled=1"
-    sql += " ORDER BY is_builtin DESC, name"
+    sql += " ORDER BY name"
     with _lock:
         rows = get_conn().execute(sql).fetchall()
     results = []
@@ -444,7 +450,7 @@ def get_plugin_by_type(credential_type: str) -> Optional[dict]:
 def upsert_plugin(
     name: str, version: str, credential_type: str, fields_schema: list,
     plugin_path: str, author: str = "", description: str = "",
-    icon: str = "🔑", is_builtin: bool = False,
+    icon: str = "🔑",
     category: str = "", category_name: str = "", batch_verify: bool = True,
 ):
     with _lock:
@@ -452,8 +458,8 @@ def upsert_plugin(
         conn.execute(
             """INSERT INTO plugins (name, version, author, description, credential_type,
                                     icon, fields_schema, plugin_path, category, category_name,
-                                    batch_verify, is_builtin, enabled, installed_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?)
+                                    batch_verify, enabled, installed_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?)
                ON CONFLICT(credential_type) DO UPDATE SET
                  name=excluded.name, version=excluded.version,
                  author=excluded.author, description=excluded.description,
@@ -464,7 +470,7 @@ def upsert_plugin(
                  enabled=1""",
             (name, version, author, description, credential_type, icon,
              json.dumps(fields_schema, ensure_ascii=False), plugin_path,
-             category, category_name or category, int(batch_verify), int(is_builtin), _now()),
+             category, category_name or category, int(batch_verify), _now()),
         )
         conn.commit()
 

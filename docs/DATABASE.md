@@ -35,7 +35,7 @@ CREATE TABLE settings (
 
 | key | 说明 | 示例值 |
 |-----|------|--------|
-| `schema_version` | 数据库版本号 | `"3"` |
+| `schema_version` | 数据库版本号 | `"4"` |
 | `salt` | PBKDF2 盐值（base64） | `"a3f2..."` |
 | `verify_token` | 主密码验证密文（base64） | `"x9k1..."` |
 | `mcp_port` | MCP Server 端口 | `"8765"` |
@@ -121,12 +121,13 @@ CREATE TABLE plugins (
     plugin_path     TEXT NOT NULL,         -- 插件目录路径（plugins/<类别>/<服务>/）
     category        TEXT DEFAULT '',       -- 类别目录名（llm / api / dns / …，空 = 根级平铺插件）
     category_name   TEXT DEFAULT '',       -- 类别显示名（来自 category.json）
-    is_builtin      INTEGER DEFAULT 0,    -- 1=内置，0=用户安装
     enabled         INTEGER DEFAULT 1,
     batch_verify    INTEGER DEFAULT 1,    -- 1=参与批量验证；0=禁用（仅手动，v3 新增）
     installed_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+> 插件不再区分「内置 / 外置」，全部来自 `plugins/` 目录。
 
 **fields_schema 示例**（llm_openai 子插件）：
 ```json
@@ -273,10 +274,11 @@ schedules (target_id → groups.id 或 NULL)
 
 ## 迁移策略
 
-`settings.schema_version` 记录当前版本（当前为 **3**）。应用启动时按版本号顺序执行迁移：
+`settings.schema_version` 记录当前版本（当前为 **4**）。应用启动时按版本号顺序执行迁移：
 
 - **v1 → v2**：`credentials` 新增 `last_valid_at`；`plugins` 新增 `category` / `category_name`；
   凭据类型从整包命名（`llm_api_key` / `api_service`）迁移为子插件命名
   （`llm_<vendor>` / `api_<service>`）；回填 `last_valid_at`；删除 `verification_history` 表；
   移除 `vault_install_plugin` 权限记录。
 - **v2 → v3**：`plugins` 新增 `batch_verify`（默认 1）；`settings` 新增 `verify_proxy`（验证代理）。
+- **v3 → v4**：插件不再区分内置/外置，移除 `plugins.is_builtin`。

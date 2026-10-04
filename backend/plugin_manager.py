@@ -44,7 +44,7 @@ _log = logger.get_logger(__name__)
 # 应用根目录：开发时=项目根；冻结后=exe 同级目录。
 # plugins/ 是插件的【唯一事实来源】，不打包进 exe，随 exe 同级以外部目录形式提供。
 BASE_DIR = app_dir()
-BUILTIN_PLUGINS_DIR = BASE_DIR / "plugins"
+PLUGINS_DIR = BASE_DIR / "plugins"
 
 # 旧版本运行期缓存目录（zip 安装时代），启动时一次性迁移/清理
 _LEGACY_PLUGINS_DIR = BASE_DIR / "data" / "installed_plugins"
@@ -83,7 +83,7 @@ def get_category_icon(category: str) -> Optional[str]:
         return _category_icon_cache[category]
     result: Optional[str] = None
     try:
-        cat_file = BUILTIN_PLUGINS_DIR / category / "category.json"
+        cat_file = PLUGINS_DIR / category / "category.json"
         if cat_file.is_file():
             with open(cat_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -102,7 +102,7 @@ def _plugin_rel_path(plugin_path: str) -> str:
     try:
         return (
             Path(plugin_path).resolve()
-            .relative_to(BUILTIN_PLUGINS_DIR.resolve())
+            .relative_to(PLUGINS_DIR.resolve())
             .as_posix()
         )
     except Exception:
@@ -144,7 +144,7 @@ def _scan_plugin_dirs() -> list[tuple[Path, str, dict]]:
       category.json 提供类别显示名/图标。
     """
     results: list[tuple[Path, str, dict]] = []
-    root = BUILTIN_PLUGINS_DIR
+    root = PLUGINS_DIR
     if not root.exists():
         return results
     for entry in sorted(root.iterdir()):
@@ -203,7 +203,6 @@ def sync_plugins():
                 author=manifest.author,
                 description=manifest.description,
                 icon=manifest.icon,
-                is_builtin=True,
                 category=category,
                 category_name=_category_display(category, cat_meta),
                 batch_verify=manifest.batch_verify,
@@ -241,12 +240,12 @@ def migrate_legacy_installed_plugins():
         if entry.name in _LEGACY_BUILTIN_TYPES or not (entry / "manifest.json").exists():
             shutil.rmtree(entry, ignore_errors=True)
             continue
-        dest = BUILTIN_PLUGINS_DIR / entry.name
+        dest = PLUGINS_DIR / entry.name
         if dest.exists():
             shutil.rmtree(entry, ignore_errors=True)
             continue
         try:
-            BUILTIN_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
+            PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
             shutil.move(str(entry), str(dest))
             _log.info("旧版插件已迁移到 plugins/: %s", entry.name)
         except Exception as e:
@@ -257,8 +256,8 @@ def migrate_legacy_installed_plugins():
         pass
 
 
-def install_builtin_plugins():
-    """启动入口：迁移旧缓存并全量扫描 plugins/（保留旧函数名以便调用方兼容）。"""
+def bootstrap_plugins():
+    """启动入口：迁移旧缓存并全量扫描 plugins/。"""
     migrate_legacy_installed_plugins()
     sync_plugins()
 

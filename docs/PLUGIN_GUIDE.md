@@ -257,7 +257,7 @@ def get_display_summary(data):
 
 ---
 
-## 5. 内置插件清单
+## 5. 插件清单
 
 **llm/ 类别（18 个）**：openai、anthropic、deepseek、openrouter、gemini、minimax、
 nvidia、moonshot、siliconflow（硅基流动）、dashscope（阿里百炼）、huawei_maas、
