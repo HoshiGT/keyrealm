@@ -90,6 +90,10 @@ const actionDialog = ref({
   kind: '',
   title: '',
   model: '',
+  fields: [],
+  values: {},
+  submitLabel: '运行',
+  output: '',
   messages: [],
   input: '',
   busy: false,
@@ -109,6 +113,11 @@ async function openActions(row) {
     ElMessage.info('该凭据暂无可用操作')
     return
   }
+  const fields = action.fields || []
+  const values = {}
+  fields.forEach((f) => {
+    values[f.key] = f.default !== undefined && f.default !== null ? f.default : ''
+  })
   actionDialog.value = {
     visible: true,
     credentialId: row.id,
@@ -116,10 +125,31 @@ async function openActions(row) {
     kind: action.kind || '',
     title: `${action.name || '操作'} · ${row.name}`,
     model: action.model || '',
+    fields,
+    values,
+    submitLabel: action.submit || '运行',
+    output: '',
     messages: [],
     input: '',
     busy: false,
     error: '',
+  }
+}
+
+async function runActionForm() {
+  const dialog = actionDialog.value
+  if (dialog.busy) return
+  dialog.busy = true
+  dialog.error = ''
+  dialog.output = ''
+  try {
+    const res = await api.runCredentialAction(dialog.credentialId, dialog.actionId, { ...dialog.values })
+    if (res && res.ok) dialog.output = res.output || '（无输出）'
+    else dialog.error = (res && res.error) || '执行失败'
+  } catch (err) {
+    dialog.error = err.message || '执行失败'
+  } finally {
+    dialog.busy = false
   }
 }
 
@@ -1034,6 +1064,40 @@ onMounted(async () => {
           <el-button type="primary" :loading="actionDialog.busy" @click="sendChat">发送</el-button>
         </div>
       </template>
+      <template v-else-if="actionDialog.kind === 'form'">
+        <el-form label-width="90px" @submit.prevent>
+          <el-form-item v-for="field in actionDialog.fields" :key="field.key" :label="field.label">
+            <el-select
+              v-if="field.type === 'select'"
+              v-model="actionDialog.values[field.key]"
+              style="width: 100%"
+            >
+              <el-option v-for="opt in field.options || []" :key="opt" :label="opt" :value="opt" />
+            </el-select>
+            <el-input
+              v-else-if="field.type === 'textarea'"
+              v-model="actionDialog.values[field.key]"
+              type="textarea"
+              :rows="3"
+              :placeholder="field.placeholder || ''"
+            />
+            <el-input
+              v-else
+              v-model="actionDialog.values[field.key]"
+              :type="field.type === 'password' ? 'password' : 'text'"
+              :show-password="field.type === 'password'"
+              :placeholder="field.placeholder || ''"
+            />
+          </el-form-item>
+        </el-form>
+        <div class="actions-row">
+          <el-button type="primary" :loading="actionDialog.busy" @click="runActionForm">
+            {{ actionDialog.submitLabel }}
+          </el-button>
+        </div>
+        <div v-if="actionDialog.error" class="chat-error">{{ actionDialog.error }}</div>
+        <pre v-if="actionDialog.output" class="action-output">{{ actionDialog.output }}</pre>
+      </template>
       <el-empty v-else description="该操作暂无可视化界面" :image-size="60" />
     </el-dialog>
 
@@ -1345,6 +1409,25 @@ onMounted(async () => {
 
 .chat-input :deep(.el-textarea) {
   flex: 1;
+}
+
+.actions-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.action-output {
+  max-height: 320px;
+  margin-top: 10px;
+  padding: 10px;
+  overflow: auto;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--el-fill-color-light);
+  border-radius: 6px;
 }
 
 /* 操作列按钮：flex 布局对齐，清除 Element Plus 相邻按钮的默认左间距 */

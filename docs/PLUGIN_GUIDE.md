@@ -226,9 +226,22 @@ def get_display_summary(data):
 - `run_action(action_id, params, data) -> dict`：执行操作，返回
   `{"ok": True, "output": "..."}` 或 `{"ok": False, "error": "..."}`。
 
-例：LLM 厂商插件复用 `llm_common.chat_completion(base_url, api_key, model, messages, protocol)`
-提供「简单对话」；DNS / SMTP 等类型可按需实现自己的操作。前端按 `kind` 渲染界面
-（`chat` 为对话气泡；其它 kind 暂以通用占位显示）。
+例：LLM 厂商插件复用 `llm_protocols.chat_completion(...)` 提供「简单对话」（`kind: "chat"`）；
+DNS 插件提供「查看/修改解析记录」、SMTP 插件提供「查看收件箱」（`kind: "form"`）。
+
+**操作项（action）字段**：
+
+| 字段 | 说明 |
+|------|------|
+| `id` / `name` | 操作标识与显示名（`run_action` 按 id 分发） |
+| `kind` | 前端渲染方式：`chat`（对话气泡）或 `form`（动态表单 + 文本输出） |
+| `fields` | `kind=form` 时的输入项：`[{key,label,type(text/password/select/textarea),default,placeholder,options,required}]` |
+| `submit` | 提交按钮文案（默认「运行」） |
+| `model` | `kind=chat` 时的默认模型（可编辑） |
+
+`run_action(action_id, params, data)` 中 `params` 即用户在表单里填的值（或对话的 `{model, messages}`），
+返回 `{"ok": True, "output": "多行文本"}` 或 `{"ok": False, "error": "..."}`。
+**必须在整体 try/except 内，绝不抛异常；输出里不得回显密钥/密码/token。**
 
 ---
 

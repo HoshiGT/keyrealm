@@ -154,7 +154,8 @@ function buildPlugins() {
       category_name: catName,
       category_icon: catIcon,
       rel_path: `${cat}/${service}`,
-      batch_verify: batch,      enabled: true,
+      batch_verify: batch,
+      has_actions: service === 'smtp',      enabled: true,
       installed_at: daysAgo(30),
       credential_count: 0,
       fields_schema: makeFieldsSchema(false),
@@ -179,6 +180,7 @@ function createState() {
     { id: 4, name: 'Gemini 个人', credential_type: 'llm_gemini', group_id: 2, data_plain: { notes: '' }, secret: 'AIza-demo-dddddddddddd', status: 'error', status_detail: { message: '连接超时', duration_ms: 20000 }, last_verified_at: minutesAgo(180), last_valid_at: null, created_at: daysAgo(3), updated_at: minutesAgo(180) },
     { id: 5, name: 'Tavily 搜索', credential_type: 'api_tavily', group_id: 3, data_plain: { notes: '搜索 API' }, secret: 'tvly-demo-eeeeeeeeeeee', status: 'unknown', status_detail: {}, last_verified_at: null, last_valid_at: null, created_at: daysAgo(7), updated_at: daysAgo(7) },
     { id: 6, name: '硅基流动', credential_type: 'llm_siliconflow', group_id: 2, data_plain: { notes: '' }, secret: 'sk-demo-ffffffffffffff', status: 'valid', status_detail: { message: '验证通过', account_info: { balance: 8.5, currency: 'CNY' }, duration_ms: 260 }, last_verified_at: minutesAgo(45), last_valid_at: minutesAgo(45), created_at: daysAgo(5), updated_at: minutesAgo(45) },
+    { id: 7, name: 'SMTP - QQ 邮箱', credential_type: 'mail_smtp', group_id: null, data_plain: { host: 'smtp.qq.com', port: 465, ssl: true, username: 'demo@qq.com' }, secret: 'authcode-demo', status: 'valid', status_detail: { message: '凭证有效：SMTP 登录成功', account_info: { server: 'smtp.qq.com', port: 465 }, duration_ms: 300 }, last_verified_at: minutesAgo(30), last_valid_at: minutesAgo(30), created_at: daysAgo(2), updated_at: minutesAgo(30) },
   ]
 
   const mcpPermissions = [
@@ -748,6 +750,12 @@ export function createMockApi() {
       await delay(60)
       const cred = state.credentials.find((c) => c.id === Number(credentialId))
       if (!cred) return []
+      if (cred.credential_type === 'mail_smtp') {
+        return [{
+          id: 'inbox', name: '查看收件箱', kind: 'form', submit: '拉取',
+          fields: [{ key: 'count', label: '条数', type: 'text', default: '10' }],
+        }]
+      }
       const plugin = state.plugins.find((p) => p.credential_type === cred.credential_type)
       return plugin && plugin.has_actions
         ? [{ id: 'chat', name: '简单对话', kind: 'chat', model: 'mock-model' }]
@@ -757,6 +765,12 @@ export function createMockApi() {
     async run_credential_action(credentialId, actionId, params) {
       await delay(400)
       requireUnlocked()
+      if (actionId === 'inbox') {
+        return {
+          ok: true,
+          output: '共 3 封，显示最近 3 封（INBOX）：\n\n1. [2026-10-05 09:12] alert@x.com\n   主题：登录提醒',
+        }
+      }
       const messages = (params && params.messages) || []
       const last = messages.length ? messages[messages.length - 1].content : ''
       return { ok: true, output: `（Mock 回复）你说的是：「${last}」` }

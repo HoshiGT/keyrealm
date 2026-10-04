@@ -174,6 +174,107 @@ def verify(data: dict) -> VerifyResult:
     return _verify_smtp(data or {})
 
 
+# ── 可选操作：查看收件箱（IMAP，只读）────────────────────
+
+def _imap_host(smtp_host: str) -> str:
+    """由 SMTP 主机推导 IMAP 主机：smtp.X → imap.X，否则原样返回。"""
+    host = (smtp_host or "").strip()
+    return "imap." + host[len("smtp."):] if host.startswith("smtp.") else host
+
+
+def _decode_header(value: Optional[str]) -> str:
+    from email.header import decode_header, make_header
+
+    if not value:
+        return ""
+    try:
+        return str(make_header(decode_header(value)))
+    except Exception:  # noqa: BLE001 - 头部编码异常时按原文返回
+        return str(value)
+
+
+def actions(data: dict) -> list[dict]:
+    """声明可用操作（凭据含 host/username/password 时才提供收件箱查看）。"""
+    data = data or {}
+    if not (
+        _as_text(data.get("host"))
+        and _as_text(data.get("username"))
+        and _as_text(data.get("password"))
+    ):
+        return []
+    return [{
+        "id": "inbox",
+        "name": "查看收件箱",
+        "kind": "form",
+        "submit": "拉取",
+        "fields": [
+            {"key": "count", "label": "条数", "type": "text", "default": "10"},
+            {"key": "folder", "label": "文件夹", "type": "text", "default": "INBOX"},
+            {
+                "key": "imap_host",
+                "label": "IMAP 主机",
+                "type": "text",
+                "default": "",
+                "placeholder": "留空则按 smtp.* → imap.* 推导",
+            },
+        ],
+    }]
+
+
+def run_action(action_id: str, params: dict, data: dict) -> dict:
+    """执行操作：经 IMAP 列出最近若干封邮件（只读，不改动邮箱）。"""
+    if action_id != "inbox":
+        return {"ok": False, "error": "未知操作"}
+
+    import imaplib
+    from email.parser import BytesParser
+
+    data = data or {}
+    params = params or {}
+    host = _as_text(params.get("imap_host")) or _imap_host(_as_text(data.get("host")))
+    if not host:
+        return {"ok": False, "error": "无法确定 IMAP 主机，请填写"}
+    username = _as_text(data.get("username"))
+    password = _as_text(data.get("password"))
+    try:
+        count = max(1, min(int(_as_text(params.get("count")) or "10"), 50))
+    except ValueError:
+        count = 10
+    folder = _as_text(params.get("folder")) or "INBOX"
+
+    try:
+        conn = imaplib.IMAP4_SSL(host, 993, timeout=TIMEOUT)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"连接 IMAP 失败：{type(exc).__name__}"}
+    try:
+        try:
+            conn.login(username, password)
+        except imaplib.IMAP4.error as exc:
+            return {"ok": False, "error": f"登录失败：{exc}"}
+        conn.select(folder, readonly=True)
+        typ, found = conn.search(None, "ALL")
+        if typ != "OK" or not found:
+            return {"ok": False, "error": "搜索邮件失败或无权限"}
+        ids = found[0].split()
+        recent = ids[-count:][::-1]
+        lines = [f"共 {len(ids)} 封，显示最近 {len(recent)} 封（{folder}）：", ""]
+        for index, uid in enumerate(recent, 1):
+            typ, fetched = conn.fetch(uid, "(BODY.PEEK[HEADER])")
+            if typ != "OK" or not fetched or not fetched[0]:
+                continue
+            msg = BytesParser().parsebytes(fetched[0][1])
+            lines.append(f"{index}. [{_decode_header(msg.get('Date'))}] {_decode_header(msg.get('From'))}")
+            lines.append(f"   主题：{_decode_header(msg.get('Subject'))}")
+        return {"ok": True, "output": "\n".join(lines)}
+    except Exception as exc:  # noqa: BLE001 - 操作边界兜底
+        return {"ok": False, "error": f"读取邮件失败：{type(exc).__name__}"}
+    finally:
+        try:
+            conn.logout()
+        except Exception:
+            pass
+
+
 def get_display_summary(data: dict) -> str:
     """凭据列表中的简短展示文本（绝不回显密码）。"""
     data = data or {}
