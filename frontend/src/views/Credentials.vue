@@ -136,6 +136,74 @@ function toggleTreeCollapsed() {
   localStorage.setItem(TREE_COLLAPSED_KEY, treeCollapsed.value ? '1' : '0')
 }
 
+// ── 树宽度：拖拽右侧边框调整并持久化 ──
+const TREE_WIDTH_KEY = 'vault.credentials.treeWidth'
+const TREE_WIDTH_MIN = 160
+const TREE_WIDTH_MAX = 560
+
+function clampTreeWidth(value) {
+  return Math.min(TREE_WIDTH_MAX, Math.max(TREE_WIDTH_MIN, Math.round(value)))
+}
+
+const treeWidth = ref(clampTreeWidth(Number(localStorage.getItem(TREE_WIDTH_KEY)) || 230))
+const treeResizing = ref(false)
+
+function startTreeResize(event) {
+  event.preventDefault()
+  treeResizing.value = true
+  const startX = event.clientX
+  const startWidth = treeWidth.value
+  const onMove = (e) => {
+    treeWidth.value = clampTreeWidth(startWidth + (e.clientX - startX))
+  }
+  const onUp = () => {
+    treeResizing.value = false
+    localStorage.setItem(TREE_WIDTH_KEY, String(treeWidth.value))
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    document.body.style.userSelect = ''
+  }
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
+
+// ── 树搜索：按名称或相对路径过滤，并展开命中分支 ──
+const treeSearch = ref('')
+
+function treeNodeMatches(query, data) {
+  const q = query.toLowerCase()
+  return (data.label || '').toLowerCase().includes(q) || (data.rel_path || '').toLowerCase().includes(q)
+}
+
+function filterTreeNode(value, data) {
+  const q = (value || '').trim().toLowerCase()
+  if (!q) return true
+  if (treeNodeMatches(q, data)) return true
+  return (data.children || []).some((child) => filterTreeNode(value, child))
+}
+
+function applyTreeSearch() {
+  const tree = treeRef.value
+  if (!tree) return
+  tree.filter(treeSearch.value)
+  const q = treeSearch.value.trim().toLowerCase()
+  if (!q) return
+  const expandMatches = (nodes) => {
+    nodes.forEach((node) => {
+      const matched =
+        treeNodeMatches(q, node) || (node.children || []).some((child) => treeNodeMatches(q, child))
+      if (matched) tree.getNode(node.id)?.expand()
+      if (node.children) expandMatches(node.children)
+    })
+  }
+  expandMatches(treeData.value)
+}
+
+watch(treeSearch, () => {
+  nextTick(applyTreeSearch)
+})
+
 const treeData = computed(() => {
   const children = []
   vaultStore.pluginTree.forEach((cat) => {
@@ -146,6 +214,18 @@ const treeData = computed(() => {
 })
 
 const treeProps = { label: 'label', children: 'children' }
+
+/** 选中节点的相对路径（如 llm/deepseek），用于在目录顶部展示提示 */
+const selectedRelPath = computed(() => {
+  const map = {}
+  const walk = (nodes) =>
+    nodes.forEach((node) => {
+      map[node.id] = node.rel_path || ''
+      if (node.children) walk(node.children)
+    })
+  walk(treeData.value)
+  return map[selectedNode.value] || ''
+})
 
 function handleNodeClick(node) {
   selectedNode.value = node.id
@@ -477,9 +557,23 @@ onMounted(async () => {
     </el-card>
 
     <div class="content-row">
-      <el-card shadow="never" class="tree-card" :class="{ collapsed: treeCollapsed }">
+      <el-card
+        shadow="never"
+        class="tree-card"
+        :class="{ collapsed: treeCollapsed, resizing: treeResizing }"
+        :style="treeCollapsed ? null : { width: treeWidth + 'px' }"
+      >
         <div class="tree-header">
           <span v-if="!treeCollapsed" class="tree-title">凭据目录</span>
+          <el-input
+            v-if="!treeCollapsed"
+            v-model="treeSearch"
+            class="tree-search"
+            size="small"
+            placeholder="搜索服务"
+            clearable
+            :prefix-icon="Search"
+          />
           <el-button
             text
             size="small"
@@ -487,6 +581,13 @@ onMounted(async () => {
             :title="treeCollapsed ? '展开目录' : '收起目录'"
             @click="toggleTreeCollapsed"
           />
+        </div>
+        <div
+          v-if="!treeCollapsed && selectedRelPath"
+          class="tree-path-hint"
+          :title="`plugins/${selectedRelPath}`"
+        >
+          {{ selectedRelPath }}
         </div>
         <el-tree
           v-show="!treeCollapsed"
@@ -497,19 +598,28 @@ onMounted(async () => {
           highlight-current
           :default-expanded-keys="expandedKeys"
           :expand-on-click-node="false"
+          :filter-node-method="filterTreeNode"
           @node-click="handleNodeClick"
           @node-expand="handleNodeExpand"
           @node-collapse="handleNodeCollapse"
         >
           <template #default="{ data }">
-            <span class="tree-node">
-              <img v-if="data.icon_image" class="tree-icon-img" :src="data.icon_image" alt="" />
-              <span v-else class="tree-icon">{{ data.icon }}</span>
-              <span class="tree-label">{{ data.label }}</span>
-              <span v-if="data.count !== undefined" class="tree-count">{{ data.count }}</span>
-            </span>
+            <el-tooltip
+              :content="`plugins/${data.rel_path}`"
+              placement="right"
+              :disabled="!data.rel_path"
+              :show-after="300"
+            >
+              <span class="tree-node">
+                <img v-if="data.icon_image" class="tree-icon-img" :src="data.icon_image" alt="" />
+                <span v-else class="tree-icon">{{ data.icon }}</span>
+                <span class="tree-label">{{ data.label }}</span>
+                <span v-if="data.count !== undefined" class="tree-count">{{ data.count }}</span>
+              </span>
+            </el-tooltip>
           </template>
         </el-tree>
+        <div v-if="!treeCollapsed" class="tree-resizer" @mousedown="startTreeResize" />
       </el-card>
 
       <el-card shadow="never" class="table-card">
@@ -625,9 +735,13 @@ onMounted(async () => {
 }
 
 .tree-card {
-  width: 230px;
   flex-shrink: 0;
+  position: relative;
   transition: width 0.2s ease;
+}
+
+.tree-card.resizing {
+  transition: none;
 }
 
 .tree-card.collapsed {
@@ -641,7 +755,7 @@ onMounted(async () => {
 .tree-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   margin-bottom: 6px;
 }
 
@@ -651,9 +765,44 @@ onMounted(async () => {
 }
 
 .tree-title {
+  flex-shrink: 0;
   font-size: 13px;
   font-weight: 600;
   color: var(--el-text-color-secondary);
+}
+
+.tree-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.tree-search :deep(.el-input__wrapper) {
+  padding: 0 8px;
+}
+
+.tree-path-hint {
+  margin-bottom: 6px;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.tree-resizer:hover,
+.tree-card.resizing .tree-resizer {
+  background: var(--el-color-primary-light-7);
 }
 
 .tree-card :deep(.el-card__body) {

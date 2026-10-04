@@ -95,6 +95,20 @@ def get_category_icon(category: str) -> Optional[str]:
     return result
 
 
+def _plugin_rel_path(plugin_path: str) -> str:
+    """插件目录相对 plugins/ 的路径（如 llm/deepseek），供前端作为提示展示。"""
+    if not plugin_path:
+        return ""
+    try:
+        return (
+            Path(plugin_path).resolve()
+            .relative_to(BUILTIN_PLUGINS_DIR.resolve())
+            .as_posix()
+        )
+    except Exception:
+        return Path(plugin_path).name
+
+
 def get_icon_image(record: dict) -> Optional[str]:
     """插件自定义图标：manifest 的 icon 为插件目录内图片文件时读取为 data URL。
 
@@ -308,4 +322,5 @@ def list_installed_plugins() -> list[dict]:
         creds = db.list_credentials(credential_type=p["credential_type"])
         p["credential_count"] = len(creds)
         p["category_icon"] = get_category_icon(p.get("category") or "")
+        p["rel_path"] = _plugin_rel_path(p.get("plugin_path") or "")
     return plugins

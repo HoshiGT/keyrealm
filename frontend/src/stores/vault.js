@@ -82,6 +82,7 @@ export const useVaultStore = defineStore('vault', {
             label: plugin.category_name || plugin.category || '其他',
             icon: plugin.category_icon || '📁',
             category: key,
+            rel_path: key,
             children: [],
           }
         }
@@ -92,6 +93,7 @@ export const useVaultStore = defineStore('vault', {
           icon_image: plugin.icon_image || null,
           credential_type: plugin.credential_type,
           category: key,
+          rel_path: plugin.rel_path || '',
           count: plugin.credential_count || 0,
         })
       })
