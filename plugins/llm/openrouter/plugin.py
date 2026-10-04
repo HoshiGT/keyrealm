@@ -1,16 +1,129 @@
-"""OpenRouter API Key 验证插件（plugins/llm/ 类别下的独立子插件）。"""
-from llm_common import display_summary, validate_common, verify_vendor
+"""OpenRouter API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
 
-VENDOR = "openrouter"
+协议：GET /auth/key（返回 key 信息与用量，plan 类账号带 limit/usage）
+余额：GET /credits（total_credits - total_usage → 余额与使用率）
+"""
+from __future__ import annotations
+
+from typing import Any, Optional
+
+from llm_common import VerifyResult, body_snippet, guarded, make_client, safe_json
+
+NAME = "OpenRouter"
+DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+PROTOCOL = "openrouter"
+AUTH_KEY_PATH = "/auth/key"
+# 余额端点（best-effort，仅认证通过后查询）
+BALANCE_URL = "https://openrouter.ai/api/v1/credits"
 
 
-def validate(data):
-    return validate_common(VENDOR, data)
+def validate(data: dict) -> list[str]:
+    """校验配置，返回错误列表（空列表表示通过）。"""
+    if not data:
+        return ["配置数据为空"]
+
+    errors: list[str] = []
+    if not (data.get("api_key") or "").strip():
+        errors.append("API Key 不能为空")
+    if not DEFAULT_BASE_URL and not (data.get("base_url") or "").strip():
+        errors.append(f"厂商「{NAME}」需要填写 Base URL")
+    return errors
 
 
-def verify(data):
-    return verify_vendor(VENDOR, data)
+def _probe_auth_key(base_url: str, api_key: str) -> VerifyResult:
+    url = base_url.rstrip("/") + AUTH_KEY_PATH
+    with make_client() as client:
+        resp = client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+    status = resp.status_code
+    payload = safe_json(resp)
+    if status == 200:
+        # 单 key 限额：有 limit 时给出剩余额度与使用率（plan 类账号）
+        info: dict[str, Any] = {}
+        d = payload.get("data") if isinstance(payload, dict) else None
+        if isinstance(d, dict):
+            limit, usage, remaining = d.get("limit"), d.get("usage"), d.get("limit_remaining")
+            if isinstance(remaining, (int, float)):
+                info["balance"] = remaining
+                info["currency"] = "USD"
+            if isinstance(limit, (int, float)) and isinstance(usage, (int, float)) and limit > 0:
+                info["usage_rate"] = max(0.0, min(1.0, usage / limit))
+        return VerifyResult(status="valid", message="凭证有效", account_info=info or None)
+    if status in (401, 403):
+        return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
+    message = f"无法确认凭证状态 (HTTP {status})"
+    snippet = body_snippet(resp)
+    if snippet:
+        message = f"{message}: {snippet}"
+    return VerifyResult(status="error", message=message)
 
 
-def get_display_summary(data):
-    return display_summary(VENDOR, data)
+def _parse_balance(payload: dict) -> Optional[dict]:
+    """解析 /credits 响应，返回 {"balance": float, "currency": str, "usage_rate": float}。"""
+    data = payload.get("data")
+    if isinstance(data, dict):
+        try:
+            total = float(data.get("total_credits", 0))
+            used = float(data.get("total_usage", 0))
+        except (TypeError, ValueError):
+            return None
+        if total <= 0:
+            return None  # 免费额度账号无余额概念
+        result: dict[str, Any] = {"balance": round(total - used, 6), "currency": "USD"}
+        result["usage_rate"] = max(0.0, min(1.0, used / total))
+        return result
+    return None
+
+
+def _fetch_balance(api_key: str) -> Optional[dict]:
+    """查询余额（best-effort），失败返回 None。"""
+    try:
+        with make_client() as client:
+            resp = client.get(BALANCE_URL, headers={"Authorization": f"Bearer {api_key}"})
+        if resp.status_code != 200:
+            return None
+        payload = safe_json(resp)
+        if not isinstance(payload, dict):
+            return None
+        return _parse_balance(payload)
+    except Exception:
+        return None
+
+
+def _verify(data: dict) -> VerifyResult:
+    api_key = (data.get("api_key") or "").strip()
+    if not api_key:
+        return VerifyResult(status="invalid", message="API Key 为空")
+
+    base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
+    if not base_url:
+        return VerifyResult(status="error", message=f"厂商「{NAME}」需要填写 Base URL")
+
+    result = _probe_auth_key(base_url, api_key)
+
+    # 认证成功：查询余额，负余额标记欠费
+    if result.status == "valid":
+        balance = _fetch_balance(api_key)
+        if balance:
+            info = dict(result.account_info or {})
+            info["balance"] = balance["balance"]
+            info["currency"] = balance["currency"]
+            if balance.get("usage_rate") is not None:
+                info["usage_rate"] = balance["usage_rate"]
+            result.account_info = info
+            if balance["balance"] < 0:
+                result.status = "invalid"
+                result.message = f"账户欠费（余额 {balance['balance']} {balance['currency']}）"
+
+    return result
+
+
+def verify(data: dict) -> VerifyResult:
+    """验证 API Key 是否有效。保证不抛出异常。"""
+    return guarded(lambda: _verify(data or {}))
+
+
+def get_display_summary(data: dict) -> str:
+    """凭据列表中的简短展示文本。"""
+    data = data or {}
+    base_url = data.get("base_url") or DEFAULT_BASE_URL
+    return f"{NAME} | {base_url}"

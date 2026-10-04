@@ -1,16 +1,86 @@
-"""Google Gemini API Key 验证插件（plugins/llm/ 类别下的独立子插件）。"""
-from llm_common import display_summary, validate_common, verify_vendor
+"""Google Gemini API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
 
-VENDOR = "gemini"
+协议：GET {base}/models?key=<API_KEY>（密钥走 query 参数）。
+注意：密钥在 URL 中，异常兜底（guarded）只暴露异常类型名，避免泄漏。
+"""
+from __future__ import annotations
+
+from typing import Optional
+
+from llm_common import VerifyResult, body_snippet, guarded, make_client, safe_json
+
+NAME = "Google Gemini"
+DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+PROTOCOL = "gemini"
 
 
-def validate(data):
-    return validate_common(VENDOR, data)
+def validate(data: dict) -> list[str]:
+    """校验配置，返回错误列表（空列表表示通过）。"""
+    if not data:
+        return ["配置数据为空"]
+
+    errors: list[str] = []
+    if not (data.get("api_key") or "").strip():
+        errors.append("API Key 不能为空")
+    if not DEFAULT_BASE_URL and not (data.get("base_url") or "").strip():
+        errors.append(f"厂商「{NAME}」需要填写 Base URL")
+    return errors
 
 
-def verify(data):
-    return verify_vendor(VENDOR, data)
+def _org_info(payload) -> Optional[dict]:
+    """从响应中提取组织信息（Gemini 通常无此字段，保持与其它协议一致的输出）。"""
+    if not isinstance(payload, dict):
+        return None
+    info = {}
+    for key in ("organization", "org_id"):
+        if payload.get(key):
+            info[key] = payload[key]
+    return info or None
 
 
-def get_display_summary(data):
-    return display_summary(VENDOR, data)
+def _probe(base_url: str, api_key: str) -> VerifyResult:
+    url = base_url.rstrip("/") + "/models"
+    with make_client() as client:
+        resp = client.get(url, params={"key": api_key})
+    status = resp.status_code
+    payload = safe_json(resp)
+    if status == 200:
+        return VerifyResult(
+            status="valid",
+            message="凭证有效",
+            account_info=_org_info(payload),
+        )
+    # Google 无效 key 返回 400（INVALID_ARGUMENT）或 403
+    if status in (400, 401, 403):
+        return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
+    if status == 429:
+        return VerifyResult(status="valid", message="凭证有效，但触发速率限制 (HTTP 429)")
+    message = f"无法确认凭证状态 (HTTP {status})"
+    snippet = body_snippet(resp)
+    if snippet:
+        message = f"{message}: {snippet}"
+    return VerifyResult(status="error", message=message)
+
+
+def _verify(data: dict) -> VerifyResult:
+    api_key = (data.get("api_key") or "").strip()
+    if not api_key:
+        return VerifyResult(status="invalid", message="API Key 为空")
+
+    base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
+    if not base_url:
+        return VerifyResult(status="error", message=f"厂商「{NAME}」需要填写 Base URL")
+
+    return _probe(base_url, api_key)
+
+
+def verify(data: dict) -> VerifyResult:
+    """验证 API Key 是否有效。保证不抛出异常。"""
+    return guarded(lambda: _verify(data or {}))
+
+
+def get_display_summary(data: dict) -> str:
+    """凭据列表中的简短展示文本。"""
+    data = data or {}
+    base_url = data.get("base_url") or DEFAULT_BASE_URL
+    return f"{NAME} | {base_url}"

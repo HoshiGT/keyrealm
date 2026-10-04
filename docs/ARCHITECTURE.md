@@ -104,7 +104,7 @@ API-Key-Checker/
 plugins/
 ├── llm/                      # 类别目录
 │   ├── category.json         # 类别显示名 / 图标
-│   ├── llm_common.py         # 类别共享模块（协议处理器、厂商配置）
+│   ├── llm_common.py         # 类别共享模块（只放通用工具，不含厂商逻辑）
 │   ├── openai/               # 服务子插件（独立，可单独删除）
 │   │   ├── manifest.json
 │   │   └── plugin.py
@@ -122,7 +122,7 @@ plugins/
 每个类别目录结构一致：`category.json` + 可选 `<类别>_common.py` + 各服务子目录（`manifest.json` + `plugin.py`）。
 
 - **一个服务 = 一个独立子插件**：各自持有 `manifest.json`（字段 schema、credential_type）与薄 `plugin.py`；删除任一子插件目录不影响其他子插件运行。根目录下直接含 `manifest.json` 的目录视为无类别的平铺插件。
-- **类别共享模块**：同类别子插件通过 `from llm_common import ...` 复用协议处理器；加载子插件时临时将其目录与类别目录注入 `sys.path`（见 plugin_base.load_plugin_module）。
+- **类别共享模块**：同类别子插件通过 `from llm_common import ...` 复用**通用工具**（`VerifyResult` / `make_client` / `safe_json` / `guarded` 等，llm 另有协议级探针）；加载子插件时临时将其目录与类别目录注入 `sys.path`（见 plugin_base.load_plugin_module）。**具体厂商逻辑在各子插件内自带，新增插件无需改动共享模块。**
 - **同步流程**：启动时 `sync_plugins()` 扫描两层结构 → upsert plugins 表（含 category / category_name / batch_verify）→ 清理已消失插件的记录与模块缓存。
 - **批量验证开关**：manifest 的 `batch_verify`（默认 true）落库到 plugins.batch_verify；调度器批量时跳过为 false 的类型（无法自动化或有写副作用，如 duckdns / wechat_ilink / ht），前端也禁用其批量按钮。
 - **旧版迁移**：`data/installed_plugins/`（zip 安装时代遗留）启动时由 `migrate_legacy_installed_plugins()` 一次性迁移/清理。
@@ -156,7 +156,7 @@ plugins/
     ▼ 通过 pywebview 事件通知前端刷新
 ```
 
-**验证代理**：插件发起校验请求时的代理由 `backend/proxy.py` 统一管理——它把「系统设置」中的代理写入环境变量 `VAULT_PROXY`，各 `<类别>_common.py` 的 `_client()` 读取该变量（外部同名环境变量优先）。见 `docs/PLUGIN_GUIDE.md` 第 2.1 节。
+**验证代理**：插件发起校验请求时的代理由 `backend/proxy.py` 统一管理——它把「系统设置」中的代理写入环境变量 `VAULT_PROXY`，各 `<类别>_common.py` 的 `make_client()` 读取该变量（外部同名环境变量优先）。见 `docs/PLUGIN_GUIDE.md` 第 2.1 节。
 
 ---
 
@@ -362,5 +362,5 @@ AI Agent（Claude Desktop / Cursor）
 
 - **新凭据类型**：在 `plugins/` 下新增子插件目录（manifest.json + plugin.py），重启即自动加载，无需修改主程序
 - **新 MCP 工具**：在 `mcp_server.py` 中注册，自动出现在权限管理页
-- **新验证厂商**：在 `plugins/llm/llm_common.py` 的 `VENDOR_CONFIGS` 注册厂商（协议驱动），并添加对应子插件目录
+- **新验证厂商**：新建 `plugins/llm/<厂商>/`（`manifest.json` + `plugin.py`），照抄同级子插件、自带端点与判定，**无需修改 `llm_common.py`**；重启即加载
 - **数据库迁移**：`database.py` 中维护 `SCHEMA_VERSION`，启动时自动执行迁移脚本
