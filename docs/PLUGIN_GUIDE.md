@@ -12,7 +12,8 @@ Credential Vault 的插件用于**验证一类凭据的有效性**（如某家 L
 plugins/
 ├── llm/                        # 类别目录（LLM 模型）
 │   ├── category.json           # 类别元数据：{"name": "LLM 模型", "icon": "🤖"}
-│   ├── llm_common.py           # 类别共享模块（可选）：只放通用工具，不含厂商逻辑
+│   ├── llm_common.py           # 类别共享模块：底层通用工具 + 子插件原型接口
+│   ├── llm_protocols.py        # 协议级工具（探针 / 简单对话等），供子插件按需复用
 │   ├── openai/                 # 一个服务 = 一个独立子插件
 │   │   ├── manifest.json
 │   │   └── plugin.py
@@ -195,11 +196,13 @@ def get_display_summary(data):
 
 要点：
 
-- **`<类别>_common.py` 只放通用工具**：`VerifyResult`、`TIMEOUT`、`log`、`proxy`、
-  `make_client`（读 `VAULT_PROXY` 的 httpx 客户端）、`safe_json`、`body_snippet`、
-  `guarded`（异常兜底，只暴露类型名）；`llm_common` 另提供四个**协议级探针**
-  （openai/anthropic 的 models/chat）。加载子插件时框架会把插件目录与类别目录注入
-  `sys.path`，故可直接 `from llm_common import …`。
+- **`<类别>_common.py` 只放底层通用工具 + 原型接口**：`VerifyResult`、`TIMEOUT`、`log`、`proxy`、
+  `make_client`、`safe_json`、`body_snippet`、`guarded`，以及子插件应实现的
+  `validate`/`verify`/`get_display_summary`/`actions`/`run_action` 原型声明。
+  **协议级、跨服务完全相同的工具**（如 `llm_protocols.py` 的 `probe_*` 探针与
+  `chat_completion`）另建**独立工具模块**，由需要的子插件按需引用；
+  **厂商/服务专属逻辑**（端点、字段、余额解析、签名等）写在各子插件自己的 `plugin.py` 里，
+  服务之间允许重复（刻意为之）。加载子插件时框架会把插件目录与类别目录注入 `sys.path`。
 - **端点、字段、判定、余额、签名等具体逻辑写在各子插件自己的 `plugin.py` 里**，
   **新增服务插件无需修改任何上层/`common` 文件**——照抄同级子插件即可。
 - `verify` 用 `guarded(...)` 包住，保证不抛异常；异常只暴露类型名（有些服务密钥在

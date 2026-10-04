@@ -4,7 +4,8 @@ NIM 无 /models 公开列表，改用 chat 探针（消耗极小额度，可识�
 """
 from __future__ import annotations
 
-from llm_common import VerifyResult, guarded, probe_openai_chat, chat_completion
+from llm_common import VerifyResult, guarded
+from llm_protocols import probe_openai_chat, chat_completion
 
 NAME = "NVIDIA NIM"
 DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"

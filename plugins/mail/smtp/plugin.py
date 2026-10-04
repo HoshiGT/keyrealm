@@ -21,9 +21,9 @@ from __future__ import annotations
 import smtplib
 import socket
 import ssl
-from typing import Optional
+from typing import Any, Optional
 
-from mail_common import VerifyResult, _as_bool, _as_port, _as_text, guarded
+from mail_common import VerifyResult, guarded
 
 SERVICE_NAME = "通用 SMTP 邮箱"
 
@@ -33,6 +33,39 @@ TIMEOUT = 15.0
 # SSL 与非 SSL 的默认端口
 DEFAULT_SSL_PORT = 465
 DEFAULT_STARTTLS_PORT = 587
+
+
+# ── 取值辅助（兼容前端 checkbox→bool、number→int、text→str）──
+
+def _as_text(value: Any) -> str:
+    """统一转字符串并去除首尾空白（避免密码/账号带入多余空格）。"""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else ""
+    return str(value).strip()
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    """checkbox 可能为 bool / 数字 / 字符串，逐一兼容。"""
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in ("1", "true", "yes", "on", "y")
+
+
+def _as_port(value: Any, default: int) -> int:
+    """端口兼容 int / 数字字符串；非法或越界时回落默认值。"""
+    if value is None or value == "":
+        return default
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return default
+    return port if 1 <= port <= 65535 else default
 
 
 def _safe_quit(server: Optional[smtplib.SMTP]) -> None:

@@ -6,7 +6,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from llm_common import VerifyResult, guarded, make_client, probe_openai_models, safe_json, chat_completion
+from llm_common import VerifyResult, guarded, make_client, safe_json
+from llm_protocols import probe_openai_models, chat_completion
 
 NAME = "月之暗面 Moonshot"
 DEFAULT_BASE_URL = "https://api.moonshot.cn/v1"

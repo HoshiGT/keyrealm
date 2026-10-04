@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Optional
 
 from llm_common import VerifyResult, body_snippet, guarded, make_client, safe_json
+from llm_protocols import chat_completion
 
 NAME = "Google Gemini"
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
@@ -78,6 +79,33 @@ def _verify(data: dict) -> VerifyResult:
 def verify(data: dict) -> VerifyResult:
     """验证 API Key 是否有效。保证不抛出异常。"""
     return _verify(data or {})
+
+
+# ── 可选操作：简单对话 ──────────────────────────────────
+CHAT_MODEL = "gemini-2.0-flash"
+
+
+def actions(data: dict) -> list[dict]:
+    """声明可用操作（凭据含 API Key 时才提供简单对话）。"""
+    if not (data or {}).get("api_key"):
+        return []
+    return [{"id": "chat", "name": "简单对话", "kind": "chat", "model": CHAT_MODEL}]
+
+
+def run_action(action_id: str, params: dict, data: dict) -> dict:
+    """执行操作：简单对话（Gemini generateContent）。"""
+    if action_id != "chat":
+        return {"ok": False, "error": "未知操作"}
+    data = data or {}
+    params = params or {}
+    base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
+    return chat_completion(
+        base_url,
+        (data.get("api_key") or "").strip(),
+        params.get("model") or CHAT_MODEL,
+        params.get("messages") or [],
+        protocol="gemini",
+    )
 
 
 def get_display_summary(data: dict) -> str:

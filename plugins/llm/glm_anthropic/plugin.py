@@ -4,7 +4,8 @@
 """
 from __future__ import annotations
 
-from llm_common import VerifyResult, guarded, probe_anthropic_chat, chat_completion
+from llm_common import VerifyResult, guarded
+from llm_protocols import probe_anthropic_chat, chat_completion
 
 NAME = "智谱 GLM (Anthropic)"
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/anthropic"

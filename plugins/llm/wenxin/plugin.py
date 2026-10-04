@@ -5,9 +5,10 @@
 """
 from __future__ import annotations
 
-from typing import Any
+import httpx
+from typing import Any, Optional
 
-from llm_common import VerifyResult, body_snippet, guarded, make_client, safe_json
+from llm_common import TIMEOUT, VerifyResult, body_snippet, guarded, make_client, safe_json
 
 NAME = "百度文心"
 DEFAULT_BASE_URL = "https://aip.baidubce.com"
@@ -87,6 +88,96 @@ def _verify(data: dict) -> VerifyResult:
 def verify(data: dict) -> VerifyResult:
     """验证 API Key 是否有效。保证不抛出异常。"""
     return _verify(data or {})
+
+
+# ── 可选操作：简单对话 ──────────────────────────────────
+CHAT_MODEL = "ernie-4.0-8k"
+# 模型 → 文心聊天端点后缀（不同模型对应不同 endpoint）
+_CHAT_ENDPOINTS = {
+    "ernie-4.0-8k": "completions_pro",
+    "ernie-3.5-8k": "completions",
+    "ernie-speed-8k": "ernie-speed-8k",
+    "ernie-lite-8k": "ernie-lite-8k",
+    "ernie-tiny-8k": "ernie-tiny-8k",
+}
+
+
+def _get_access_token(base_url: str, api_key: str) -> tuple[Optional[str], Optional[str]]:
+    """OAuth 换取 access_token；返回 (token, error)。"""
+    client_id, client_secret = _split_key(api_key)
+    if not client_id or not client_secret:
+        return None, "凭证格式应为 API_KEY|SECRET_KEY"
+    url = base_url.rstrip("/") + "/oauth/2.0/token"
+    try:
+        with make_client() as client:
+            resp = client.post(
+                url,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                },
+            )
+    except httpx.TimeoutException:
+        return None, f"请求超时（{int(TIMEOUT)} 秒）"
+    except httpx.HTTPError as exc:
+        return None, f"网络请求失败（{type(exc).__name__}）"
+    payload = safe_json(resp)
+    if isinstance(payload, dict):
+        if payload.get("access_token"):
+            return payload["access_token"], None
+        if payload.get("error"):
+            return None, f"鉴权失败: {payload.get('error_description') or payload['error']}"
+    return None, f"获取 access_token 失败 (HTTP {resp.status_code})"
+
+
+def actions(data: dict) -> list[dict]:
+    """声明可用操作（凭据含 API Key 时才提供简单对话）。"""
+    if not (data or {}).get("api_key"):
+        return []
+    return [{"id": "chat", "name": "简单对话", "kind": "chat", "model": CHAT_MODEL}]
+
+
+def run_action(action_id: str, params: dict, data: dict) -> dict:
+    """执行操作：简单对话（文心 ERNIE，需先以 OAuth 换 token）。"""
+    if action_id != "chat":
+        return {"ok": False, "error": "未知操作"}
+    data = data or {}
+    params = params or {}
+    base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
+    model = (params.get("model") or CHAT_MODEL).strip()
+    endpoint = _CHAT_ENDPOINTS.get(model)
+    if not endpoint:
+        return {
+            "ok": False,
+            "error": f"不支持的文心模型：{model}（支持：{', '.join(_CHAT_ENDPOINTS)}）",
+        }
+
+    token, err = _get_access_token(base_url, (data.get("api_key") or "").strip())
+    if err:
+        return {"ok": False, "error": err}
+
+    url = f"{base_url.rstrip('/')}/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/{endpoint}"
+    try:
+        with make_client() as client:
+            resp = client.post(
+                url,
+                params={"access_token": token},
+                headers={"Content-Type": "application/json"},
+                json={"messages": params.get("messages") or []},
+            )
+    except httpx.TimeoutException:
+        return {"ok": False, "error": f"请求超时（{int(TIMEOUT)} 秒）"}
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": f"网络请求失败（{type(exc).__name__}）"}
+    payload = safe_json(resp)
+    if isinstance(payload, dict):
+        if payload.get("result"):
+            return {"ok": True, "output": str(payload["result"]).strip()}
+        if payload.get("error_msg"):
+            return {"ok": False, "error": f"{payload.get('error_code')}: {payload['error_msg']}"}
+    return {"ok": False, "error": f"HTTP {resp.status_code}"}
 
 
 def get_display_summary(data: dict) -> str:

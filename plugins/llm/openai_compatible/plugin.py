@@ -8,7 +8,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from llm_common import VerifyResult, guarded, make_client, probe_openai_models, safe_json, chat_completion
+from llm_common import VerifyResult, guarded, make_client, safe_json
+from llm_protocols import probe_openai_models, chat_completion
 
 NAME = "第三方中转 (OpenAI 兼容)"
 DEFAULT_BASE_URL = ""

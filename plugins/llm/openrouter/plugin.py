@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from llm_common import VerifyResult, body_snippet, guarded, make_client, safe_json, chat_completion
+from llm_common import VerifyResult, body_snippet, guarded, make_client, safe_json
+from llm_protocols import chat_completion
 
 NAME = "OpenRouter"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"

@@ -1,7 +1,8 @@
 """华为云 ModelArts MaaS API Key 验证插件（plugins/llm/ 类别下的独立子插件）。"""
 from __future__ import annotations
 
-from llm_common import VerifyResult, guarded, probe_openai_models, chat_completion
+from llm_common import VerifyResult, guarded
+from llm_protocols import probe_openai_models, chat_completion
 
 NAME = "华为云 ModelArts MaaS"
 DEFAULT_BASE_URL = "https://api-ap-southeast-1.modelarts-maas.com/v2"

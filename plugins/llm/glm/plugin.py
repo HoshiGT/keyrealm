@@ -4,7 +4,8 @@ GLM 无公开 /models 接口，改用 chat 探针：可识别 429 中的余额�
 """
 from __future__ import annotations
 
-from llm_common import VerifyResult, guarded, probe_openai_chat, chat_completion
+from llm_common import VerifyResult, guarded
+from llm_protocols import probe_openai_chat, chat_completion
 
 NAME = "智谱 GLM"
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"

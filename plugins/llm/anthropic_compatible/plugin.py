@@ -4,7 +4,8 @@ Base URL 无默认值，必须由用户填写（如 https://relay.example.com）
 """
 from __future__ import annotations
 
-from llm_common import VerifyResult, guarded, probe_anthropic_models, chat_completion
+from llm_common import VerifyResult, guarded
+from llm_protocols import probe_anthropic_models, chat_completion
 
 NAME = "第三方中转 (Anthropic 协议)"
 DEFAULT_BASE_URL = ""
