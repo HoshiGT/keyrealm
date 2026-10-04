@@ -84,7 +84,7 @@ def test_type_scoped_schedule_reads_target_id_as_credential_type():
         schedule = {
             "id": 999,
             "target_scope": "type",
-            "target_id": "llm_api_key",  # 前端把类型名存进 target_id
+            "target_id": "llm_openai",  # 前端把类型名存进 target_id
         }
         scheduler._run_schedule(schedule)
     finally:
@@ -92,7 +92,7 @@ def test_type_scoped_schedule_reads_target_id_as_credential_type():
         db.update_schedule = orig_update
 
     assert captured["scope"] == "type"
-    assert captured["credential_type"] == "llm_api_key", \
+    assert captured["credential_type"] == "llm_openai", \
         f"type-scoped 计划未正确读取 credential_type: {captured}"
     assert captured["group_id"] is None
 
@@ -124,14 +124,14 @@ def test_target_id_roundtrips_int_and_str():
     g = db.create_schedule(name="grp", trigger_type="interval", trigger_args={"hours": 1},
                            target_scope="group", target_id=7)
     t = db.create_schedule(name="typ", trigger_type="interval", trigger_args={"hours": 1},
-                           target_scope="type", target_id="llm_api_key")
+                           target_scope="type", target_id="llm_openai")
 
     g_read = next(s for s in db.list_schedules() if s["id"] == g["id"])
     t_read = next(s for s in db.list_schedules() if s["id"] == t["id"])
 
     assert g_read["target_id"] == 7 and isinstance(g_read["target_id"], int), \
         f"分组 target_id 应为 int 7，实际 {g_read['target_id']!r}"
-    assert t_read["target_id"] == "llm_api_key" and isinstance(t_read["target_id"], str), \
+    assert t_read["target_id"] == "llm_openai" and isinstance(t_read["target_id"], str), \
         f"类型 target_id 应为 str，实际 {t_read['target_id']!r}"
 
     db.delete_schedule(g["id"])

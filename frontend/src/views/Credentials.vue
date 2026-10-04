@@ -1,13 +1,13 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Edit, MoreFilled, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
+import { Delete, Edit, Plus, Refresh, Search } from '@element-plus/icons-vue'
 
 import CredentialForm from '@/components/CredentialForm.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { useVaultStore } from '@/stores/vault'
-import { STATUS_OPTIONS, formatDateTime, formatDuration, formatRelative } from '@/utils/format'
+import { STATUS_OPTIONS, formatRelative } from '@/utils/format'
 
 const route = useRoute()
 const router = useRouter()
@@ -18,25 +18,12 @@ const editing = ref(null)
 const verifyingId = ref(null)
 const batchStarting = ref(false)
 
-const historyVisible = ref(false)
-const historyLoading = ref(false)
-const historyRows = ref([])
-const historyCredential = ref(null)
-
 const filters = vaultStore.filters
 
 const statusOptions = STATUS_OPTIONS
 
-const typeOptions = computed(() => vaultStore.typeOptions)
 const groupOptions = computed(() => vaultStore.groupOptions)
-const hasPlugins = computed(() => vaultStore.enabledPlugins.length > 0)
-
-const triggerLabels = {
-  manual: '手动',
-  auto: '自动',
-  batch: '批量',
-  schedule: '定时',
-}
+const hasPlugins = computed(() => vaultStore.plugins.length > 0)
 
 const scopeArgs = computed(() => {
   if (filters.credential_type) return ['type', null, filters.credential_type]
@@ -58,22 +45,172 @@ function typeIcon(type) {
   return plugin && plugin.icon ? plugin.icon : '🔑'
 }
 
-function subtitle(row) {
+/** 凭据单元格副标题：掩码后的敏感值（如 sk-123…cdef） */
+function maskedSubtitle(row) {
+  const masked = row.data_masked
+  if (!masked || typeof masked !== 'object') return ''
+  const values = Object.values(masked).filter(Boolean)
+  return values[0] || ''
+}
+
+/** 附加信息列：账户信息（余额、组织等） */
+function extraInfo(row) {
+  const info = row.status_detail && row.status_detail.account_info
+  if (!info || typeof info !== 'object') return ''
   const parts = []
-  const plugin = pluginFor(row.credential_type)
-  if (plugin && Array.isArray(plugin.fields_schema)) {
-    plugin.fields_schema
-      .filter((field) => !field.sensitive && field.type !== 'password' && field.type !== 'textarea' && field.type !== 'checkbox')
-      .slice(0, 2)
-      .forEach((field) => {
-        const value = row.data_plain ? row.data_plain[field.key] : undefined
-        if (value === null || value === undefined || value === '' || typeof value === 'object') return
-        parts.push(String(value))
-      })
+  if (info.balance !== undefined && info.balance !== null && info.balance !== '') {
+    parts.push(`余额 ${info.balance}${info.currency ? ` ${info.currency}` : ''}`)
   }
-  if (row.group_name) parts.push(row.group_name)
+  if (info.organization) parts.push(info.organization)
+  Object.keys(info).forEach((key) => {
+    if (['balance', 'currency', 'organization'].includes(key)) return
+    const value = info[key]
+    if (value === null || value === undefined || value === '' || typeof value === 'object') return
+    parts.push(String(value))
+  })
   return parts.join(' · ')
 }
+
+function notesOf(row) {
+  return (row.data_plain && row.data_plain.notes) || ''
+}
+
+// ── 左侧插件目录树 ────────────────────────────────────────
+// 与 plugins/ 文件系统层次一致：类别目录 → 服务子插件。
+// 根目录平铺插件（无类别）直接挂在「全部凭据」下。
+
+const treeRef = ref(null)
+const selectedNode = ref('all')
+
+const treeData = computed(() => {
+  const children = []
+  vaultStore.pluginTree.forEach((cat) => {
+    if (cat.category === '') children.push(...cat.children)
+    else children.push(cat)
+  })
+  return [{ id: 'all', label: '全部凭据', icon: '🗂️', children }]
+})
+
+const treeProps = { label: 'label', children: 'children' }
+
+function handleNodeClick(node) {
+  selectedNode.value = node.id
+  if (node.id === 'all') {
+    filters.credential_type = null
+    filters.credential_types = null
+  } else if (node.types) {
+    // 类别节点：展示该层级及其子层级的全部条目
+    filters.credential_type = null
+    filters.credential_types = node.types
+  } else {
+    filters.credential_type = node.credential_type
+    filters.credential_types = null
+  }
+  applyFilters()
+}
+
+function resetTree() {
+  selectedNode.value = 'all'
+  filters.credential_type = null
+  filters.credential_types = null
+  if (treeRef.value) treeRef.value.setCurrentKey('all')
+}
+
+// ── 表头拖拽排序（原生 HTML5 DnD，顺序持久化 localStorage）──
+
+const COLUMN_DEFS = [
+  { key: 'credential', label: '凭据', minWidth: 230 },
+  { key: 'type', label: '类型', minWidth: 140 },
+  { key: 'notes', label: '备注', minWidth: 130 },
+  { key: 'extra', label: '附加信息', minWidth: 170 },
+  { key: 'group', label: '分组', width: 110 },
+  { key: 'status', label: '状态', width: 100 },
+  { key: 'created_at', label: '添加时间', width: 120 },
+  { key: 'last_verified', label: '最后验证', width: 120 },
+  { key: 'last_valid', label: '最后有效', width: 120 },
+  { key: 'actions', label: '操作', width: 190 },
+]
+
+const COLUMN_ORDER_KEY = 'vault.credentials.columnOrder'
+
+function loadColumnOrder() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(COLUMN_ORDER_KEY) || '[]')
+    if (Array.isArray(saved)) {
+      const known = saved.filter((key) => COLUMN_DEFS.some((def) => def.key === key))
+      const missing = COLUMN_DEFS.map((def) => def.key).filter((key) => !known.includes(key))
+      if (known.length) return [...known, ...missing]
+    }
+  } catch {
+    // 忽略损坏的本地配置
+  }
+  return COLUMN_DEFS.map((def) => def.key)
+}
+
+const columnOrder = ref(loadColumnOrder())
+const orderedColumns = computed(() =>
+  columnOrder.value.map((key) => COLUMN_DEFS.find((def) => def.key === key)).filter(Boolean),
+)
+
+const tableRef = ref(null)
+let dragCleanup = []
+
+function setupHeaderDrag() {
+  dragCleanup.forEach((fn) => fn())
+  dragCleanup = []
+  const tableEl = tableRef.value && tableRef.value.$el
+  if (!tableEl) return
+  const ths = Array.from(
+    tableEl.querySelectorAll('.el-table__header-wrapper thead th'),
+  ).filter((th) => !th.classList.contains('gutter'))
+  ths.forEach((th, index) => {
+    th.draggable = true
+    th.classList.add('is-draggable')
+    const onDragStart = (event) => {
+      event.dataTransfer.effectAllowed = 'move'
+      event.dataTransfer.setData('text/plain', String(index))
+      th.classList.add('is-dragging')
+    }
+    const onDragEnd = () => th.classList.remove('is-dragging')
+    const onDragOver = (event) => {
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'move'
+      th.classList.add('is-drag-over')
+    }
+    const onDragLeave = () => th.classList.remove('is-drag-over')
+    const onDrop = (event) => {
+      event.preventDefault()
+      th.classList.remove('is-drag-over')
+      const from = Number(event.dataTransfer.getData('text/plain'))
+      if (!Number.isInteger(from) || from === index) return
+      const next = [...columnOrder.value]
+      const [moved] = next.splice(from, 1)
+      next.splice(index, 0, moved)
+      columnOrder.value = next
+      localStorage.setItem(COLUMN_ORDER_KEY, JSON.stringify(next))
+      nextTick(setupHeaderDrag)
+    }
+    th.addEventListener('dragstart', onDragStart)
+    th.addEventListener('dragend', onDragEnd)
+    th.addEventListener('dragover', onDragOver)
+    th.addEventListener('dragleave', onDragLeave)
+    th.addEventListener('drop', onDrop)
+    dragCleanup.push(() => {
+      th.removeEventListener('dragstart', onDragStart)
+      th.removeEventListener('dragend', onDragEnd)
+      th.removeEventListener('dragover', onDragOver)
+      th.removeEventListener('dragleave', onDragLeave)
+      th.removeEventListener('drop', onDrop)
+    })
+  })
+}
+
+onBeforeUnmount(() => {
+  dragCleanup.forEach((fn) => fn())
+  dragCleanup = []
+})
+
+// ── 数据加载与操作 ────────────────────────────────────────
 
 async function load() {
   try {
@@ -100,16 +237,15 @@ function applyFilters() {
 
 function resetFilters() {
   filters.group_id = null
-  filters.credential_type = null
   filters.status = null
   filters.search = ''
+  resetTree()
   applyFilters()
 }
 
 function openCreate() {
   if (!hasPlugins.value) {
-    ElMessage.warning('请先在插件管理中安装并启用至少一个插件')
-    router.push('/plugins')
+    ElMessage.warning('未检测到可用插件，请将插件目录放入 plugins/ 文件夹后重启应用')
     return
   }
   editing.value = null
@@ -152,20 +288,6 @@ async function removeRow(row) {
   }
 }
 
-async function openHistory(row) {
-  historyCredential.value = row
-  historyVisible.value = true
-  historyLoading.value = true
-  historyRows.value = []
-  try {
-    historyRows.value = await vaultStore.getHistory(row.id, 20)
-  } catch (err) {
-    ElMessage.error(err.message || '加载验证历史失败')
-  } finally {
-    historyLoading.value = false
-  }
-}
-
 async function batchVerify() {
   batchStarting.value = true
   try {
@@ -175,11 +297,6 @@ async function batchVerify() {
   } finally {
     batchStarting.value = false
   }
-}
-
-function handleCommand(command, row) {
-  if (command === 'history') openHistory(row)
-  else if (command === 'delete') removeRow(row)
 }
 
 watch(
@@ -194,6 +311,10 @@ watch(
 
 onMounted(async () => {
   await load()
+  nextTick(() => {
+    if (treeRef.value) treeRef.value.setCurrentKey('all')
+    setupHeaderDrag()
+  })
   if (route.query.new === '1') {
     openCreate()
     router.replace({ path: '/credentials' })
@@ -223,15 +344,6 @@ onMounted(async () => {
         <el-select v-model="filters.group_id" placeholder="全部分组" clearable class="filter-item" @change="applyFilters">
           <el-option v-for="option in groupOptions" :key="option.value" :label="option.label" :value="option.value" />
         </el-select>
-        <el-select
-          v-model="filters.credential_type"
-          placeholder="全部类型"
-          clearable
-          class="filter-item"
-          @change="applyFilters"
-        >
-          <el-option v-for="option in typeOptions" :key="option.value" :label="option.label" :value="option.value" />
-        </el-select>
         <el-select v-model="filters.status" placeholder="全部状态" clearable class="filter-item" @change="applyFilters">
           <el-option v-for="option in statusOptions" :key="option.value" :label="option.label" :value="option.value" />
         </el-select>
@@ -239,118 +351,105 @@ onMounted(async () => {
       </div>
     </el-card>
 
-    <el-card shadow="never">
-      <el-table
-        v-loading="vaultStore.loadingCredentials"
-        :data="vaultStore.credentials"
-        empty-text="暂无凭据，点击右上角「添加凭据」开始"
-        style="width: 100%"
-      >
-        <el-table-column label="凭据" min-width="260">
-          <template #default="{ row }">
-            <div class="credential-cell">
-              <span class="credential-icon">{{ typeIcon(row.credential_type) }}</span>
-              <div class="credential-text">
-                <div class="credential-name">{{ row.name }}</div>
-                <div class="credential-sub">{{ subtitle(row) || row.credential_type }}</div>
-              </div>
-            </div>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="类型" min-width="150">
-          <template #default="{ row }">
-            <span class="text-muted">{{ typeLabel(row.credential_type) }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="分组" width="130">
-          <template #default="{ row }">
-            <el-tag v-if="row.group_name" size="small" effect="plain">{{ row.group_name }}</el-tag>
-            <span v-else class="text-muted">未分组</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="状态" width="110">
-          <template #default="{ row }">
-            <StatusBadge :status="row.status" :detail="row.status_detail" />
-          </template>
-        </el-table-column>
-
-        <el-table-column label="最后验证" width="130">
-          <template #default="{ row }">
-            <span class="text-muted">{{ formatRelative(row.last_verified_at) }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="操作" width="220" fixed="right">
-          <template #default="{ row }">
-            <el-button
-              size="small"
-              type="primary"
-              plain
-              :loading="verifyingId === row.id"
-              @click="verifyRow(row)"
-            >
-              验证
-            </el-button>
-            <el-button size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
-            <el-dropdown trigger="click" @command="(command) => handleCommand(command, row)">
-              <el-button size="small" :icon="MoreFilled" />
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="history" :icon="View">验证历史</el-dropdown-item>
-                  <el-dropdown-item command="delete" :icon="Delete" divided>删除</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
-
-    <CredentialForm v-model="formVisible" :credential="editing" @saved="load" />
-
-    <el-dialog v-model="historyVisible" title="验证历史" width="720px" top="8vh">
-      <div class="history-header">
-        <span class="history-name">{{ historyCredential?.name }}</span>
-        <StatusBadge v-if="historyCredential" :status="historyCredential.status" :detail="historyCredential.status_detail" />
-      </div>
-
-      <el-table v-loading="historyLoading" :data="historyRows" empty-text="暂无验证记录" max-height="420">
-        <el-table-column label="时间" width="180">
-          <template #default="{ row }">
-            <span class="text-muted">{{ formatDateTime(row.verified_at) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="结果" width="100">
-          <template #default="{ row }">
-            <StatusBadge :status="row.status" size="small" />
-          </template>
-        </el-table-column>
-        <el-table-column label="触发方式" width="100">
-          <template #default="{ row }">
-            <span class="text-muted">{{ triggerLabels[row.trigger_type] || row.trigger_type }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="耗时" width="90">
-          <template #default="{ row }">
-            <span class="text-muted">{{ formatDuration(row.duration_ms) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="说明" min-width="180" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span class="text-muted">
-              {{ row.error_message || (row.result_data && row.result_data.message) || '—' }}
+    <div class="content-row">
+      <el-card shadow="never" class="tree-card">
+        <el-tree
+          ref="treeRef"
+          :data="treeData"
+          :props="treeProps"
+          node-key="id"
+          highlight-current
+          default-expand-all
+          :expand-on-click-node="false"
+          @node-click="handleNodeClick"
+        >
+          <template #default="{ data }">
+            <span class="tree-node">
+              <span class="tree-icon">{{ data.icon }}</span>
+              <span class="tree-label">{{ data.label }}</span>
+              <span v-if="data.count !== undefined" class="tree-count">{{ data.count }}</span>
             </span>
           </template>
-        </el-table-column>
-      </el-table>
+        </el-tree>
+      </el-card>
 
-      <template #footer>
-        <el-button @click="historyVisible = false">关闭</el-button>
-      </template>
-    </el-dialog>
+      <el-card shadow="never" class="table-card">
+        <el-table
+          ref="tableRef"
+          v-loading="vaultStore.loadingCredentials"
+          :data="vaultStore.credentials"
+          empty-text="暂无凭据，点击右上角「添加凭据」开始"
+          style="width: 100%"
+        >
+          <el-table-column
+            v-for="col in orderedColumns"
+            :key="col.key"
+            :label="col.label"
+            :width="col.width"
+            :min-width="col.minWidth"
+          >
+            <template v-if="col.key === 'credential'" #default="{ row }">
+              <div class="credential-cell">
+                <span class="credential-icon">{{ typeIcon(row.credential_type) }}</span>
+                <div class="credential-text">
+                  <div class="credential-name">{{ row.name }}</div>
+                  <div class="credential-sub mono">{{ maskedSubtitle(row) || row.credential_type }}</div>
+                </div>
+              </div>
+            </template>
+
+            <template v-else-if="col.key === 'type'" #default="{ row }">
+              <span class="text-muted">{{ typeLabel(row.credential_type) }}</span>
+            </template>
+
+            <template v-else-if="col.key === 'notes'" #default="{ row }">
+              <span class="text-muted">{{ notesOf(row) || '—' }}</span>
+            </template>
+
+            <template v-else-if="col.key === 'extra'" #default="{ row }">
+              <span class="text-muted">{{ extraInfo(row) || '—' }}</span>
+            </template>
+
+            <template v-else-if="col.key === 'group'" #default="{ row }">
+              <el-tag v-if="row.group_name" size="small" effect="plain">{{ row.group_name }}</el-tag>
+              <span v-else class="text-muted">未分组</span>
+            </template>
+
+            <template v-else-if="col.key === 'status'" #default="{ row }">
+              <StatusBadge :status="row.status" :detail="row.status_detail" />
+            </template>
+
+            <template v-else-if="col.key === 'created_at'" #default="{ row }">
+              <span class="text-muted">{{ formatRelative(row.created_at) }}</span>
+            </template>
+
+            <template v-else-if="col.key === 'last_verified'" #default="{ row }">
+              <span class="text-muted">{{ formatRelative(row.last_verified_at) }}</span>
+            </template>
+
+            <template v-else-if="col.key === 'last_valid'" #default="{ row }">
+              <span class="text-muted">{{ formatRelative(row.last_valid_at) }}</span>
+            </template>
+
+            <template v-else-if="col.key === 'actions'" #default="{ row }">
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                :loading="verifyingId === row.id"
+                @click="verifyRow(row)"
+              >
+                验证
+              </el-button>
+              <el-button size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
+              <el-button size="small" type="danger" plain :icon="Delete" @click="removeRow(row)" />
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-card>
+    </div>
+
+    <CredentialForm v-model="formVisible" :credential="editing" @saved="load" />
   </div>
 </template>
 
@@ -376,6 +475,50 @@ onMounted(async () => {
   width: 170px;
 }
 
+.content-row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.tree-card {
+  width: 230px;
+  flex-shrink: 0;
+}
+
+.tree-card :deep(.el-card__body) {
+  padding: 8px;
+}
+
+.tree-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  overflow: hidden;
+}
+
+.tree-icon {
+  line-height: 1;
+}
+
+.tree-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.table-card {
+  flex: 1;
+  min-width: 0;
+}
+
 .credential-cell {
   display: flex;
   align-items: center;
@@ -397,14 +540,21 @@ onMounted(async () => {
   margin-top: 2px;
 }
 
-.history-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
+.mono {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
 }
 
-.history-name {
-  font-weight: 600;
+/* 表头拖拽提示样式 */
+.table-card :deep(.el-table__header-wrapper th.is-draggable) {
+  cursor: grab;
+  user-select: none;
+}
+
+.table-card :deep(.el-table__header-wrapper th.is-dragging) {
+  opacity: 0.5;
+}
+
+.table-card :deep(.el-table__header-wrapper th.is-drag-over) {
+  border-left: 2px solid var(--el-color-primary);
 }
 </style>

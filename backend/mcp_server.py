@@ -322,16 +322,6 @@ def _build_mcp_app() -> MCPServer:
         _require_perm("vault_list_plugins")
         return plugin_manager.list_installed_plugins()
 
-    # ── vault_install_plugin ──────────────────────────────
-    @mcp.tool()
-    def vault_install_plugin(zip_path: str) -> dict:
-        """安装插件（.zip 路径）"""
-        _require_perm("vault_install_plugin")
-        ok, msg = plugin_manager.install_from_zip(zip_path)
-        if ok:
-            _push_event("vault:plugin_installed", {"message": msg})
-        return {"ok": ok, "message": msg}
-
     # ── vault_get_secret ──────────────────────────────────
     @mcp.tool()
     def vault_get_secret(credential_id: int, field: Optional[str] = None) -> dict:

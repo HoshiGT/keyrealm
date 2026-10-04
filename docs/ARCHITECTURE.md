@@ -13,14 +13,14 @@
 │                        桌面应用窗口                           │
 │  ┌────────────────────────────────────────────────────────┐  │
 │  │               Vue 3 前端（WebView）                     │  │
-│  │  凭据管理 │ 分组 │ 插件 │ MCP │ 设置                     │  │
+│  │  凭据管理 │ 分组 │ MCP │ 设置                          │  │
 │  └───────────────────────┬────────────────────────────────┘  │
 │                          │ window.pywebview.api.*             │
 │  ┌───────────────────────▼────────────────────────────────┐  │
 │  │               Python 后端（pywebview JS-API）           │  │
 │  │  ┌─────────┐ ┌──────────┐ ┌─────────────────────────┐  │  │
 │  │  │ Crypto  │ │ Database │ │    Plugin Manager       │  │  │
-│  │  │ AES-GCM │ │  SQLite  │ │    .zip 加载/热插拔     │  │  │
+│  │  │ AES-GCM │ │  SQLite  │ │  目录扫描，放入即加载   │  │  │
 │  │  └─────────┘ └──────────┘ └─────────────────────────┘  │  │
 │  │  ┌─────────────────┐  ┌────────────────────────────┐   │  │
 │  │  │    Scheduler    │  │       MCP Server           │   │  │
@@ -85,7 +85,7 @@ API-Key-Checker/
 └── data/                  # 已在 .gitignore 中排除
     ├── credentials.db
     ├── credentials.db-wal
-    └── installed_plugins/
+    └── installed_plugins/   # 旧版遗留缓存，启动时一次性迁移/清理
 ```
 
 > 应用启动时自动创建 `data/` 目录。数据库路径相对于 `main.py` 所在目录解析，与操作系统无关。
@@ -96,33 +96,34 @@ API-Key-Checker/
 
 ### 2.3 插件管理器（plugin_manager.py）
 
-**职责**：插件发现、安装、卸载、热加载。
+**职责**：扫描 `plugins/` 目录、注册插件、按需加载插件模块。无安装/卸载/启停流程——**放入即加载，删除即卸载**。
 
-**插件目录**：
-- 内置插件：`<app>/plugins/`（随应用分发）
-- 用户安装插件：`<data_dir>/installed_plugins/`
+**插件目录**：`<app>/plugins/` 是唯一事实来源，采用两层结构：
 
-**安装流程**（.zip 拖入）：
 ```
-.zip 文件
-    │
-    ▼ 校验 manifest.json 格式
-    │
-    ▼ 解压到 installed_plugins/<credential_type>/
-    │
-    ▼ 动态 import plugin.py（importlib）
-    │
-    ▼ 调用 plugin.register() 获取字段 schema
-    │
-    ▼ 写入 plugins 表
-    │
-    ▼ 通知前端刷新插件列表
+plugins/
+├── llm/                      # 类别目录
+│   ├── category.json         # 类别显示名 / 图标
+│   ├── llm_common.py         # 类别共享模块（协议处理器、厂商配置）
+│   ├── openai/               # 服务子插件（独立，可单独删除）
+│   │   ├── manifest.json
+│   │   └── plugin.py
+│   ├── deepseek/
+│   └── …                     # 共 18 个 LLM 子插件
+└── api/
+    ├── category.json
+    ├── api_common.py
+    ├── firecrawl/
+    ├── tavily/
+    └── coze/                 # 共 3 个 API 服务子插件
 ```
 
-**热卸载**：
-- 从 `sys.modules` 移除模块引用
-- 删除解压目录
-- 从 plugins 表标记为 disabled（凭据数据保留）
+- **一个服务 = 一个独立子插件**：各自持有 `manifest.json`（字段 schema、credential_type）与薄 `plugin.py`；删除任一子插件目录不影响其他子插件运行。根目录下直接含 `manifest.json` 的目录视为无类别的平铺插件。
+- **类别共享模块**：同类别子插件通过 `from llm_common import ...` 复用协议处理器；加载子插件时临时将其目录与类别目录注入 `sys.path`（见 plugin_base.load_plugin_module）。
+- **同步流程**：启动时 `sync_plugins()` 扫描两层结构 → upsert plugins 表（含 category / category_name）→ 清理已消失插件的记录与模块缓存。
+- **旧版迁移**：`data/installed_plugins/`（zip 安装时代遗留）启动时由 `migrate_legacy_installed_plugins()` 一次性迁移/清理。
+
+**插件模块约定**：必须暴露 `verify(data)`；可选 `validate(data)`、`get_display_summary(data)`。`verify` 返回值鸭子类型兼容 VerifyResult / dataclass / dict。
 
 ---
 
@@ -145,8 +146,7 @@ API-Key-Checker/
     ▼ 并发调用各插件的 verify()（线程池，最大 10 并发）
     │
     ▼ 更新 credentials.status / last_verified_at
-    │
-    ▼ 写入 verification_history
+    │   （status == valid 时同时更新 last_valid_at）
     │
     ▼ 通过 pywebview 事件通知前端刷新
 ```
@@ -205,7 +205,7 @@ MCP 全局只保留**一个活跃 Token**，且**默认即存在**（无则自�
 const result = await window.pywebview.api.list_credentials({ group_id: 1 })
 ```
 
-**方法命名规范**：`动词_名词`，如 `create_credential`、`verify_credential`、`install_plugin`。
+**方法命名规范**：`动词_名词`，如 `create_credential`、`verify_credential`、`check_duplicate_credential`。
 
 **事件推送**（后端 → 前端）：
 ```python
@@ -282,7 +282,7 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
     │
     ▼ [后端] 异步调用 plugin.verify(plain_data)
     │
-    ▼ [后端] 更新 status / last_verified_at / verification_history
+    ▼ [后端] 更新 status / last_verified_at（valid 时同时更新 last_valid_at）
     │
     ▼ [后端] 推送 vault:credential_updated 事件
     │
@@ -353,7 +353,7 @@ AI Agent（Claude Desktop / Cursor）
 
 ## 6. 扩展性设计
 
-- **新凭据类型**：编写 `.zip` 插件，无需修改主程序
+- **新凭据类型**：在 `plugins/` 下新增子插件目录（manifest.json + plugin.py），重启即自动加载，无需修改主程序
 - **新 MCP 工具**：在 `mcp_server.py` 中注册，自动出现在权限管理页
-- **新验证厂商**：在 LLM 插件的 `plugin.py` 中向 `VENDOR_CONFIGS` 注册厂商（协议驱动，复用 openai/anthropic/专用协议处理器）
+- **新验证厂商**：在 `plugins/llm/llm_common.py` 的 `VENDOR_CONFIGS` 注册厂商（协议驱动），并添加对应子插件目录
 - **数据库迁移**：`database.py` 中维护 `SCHEMA_VERSION`，启动时自动执行迁移脚本

@@ -84,3 +84,12 @@ def hash_token(token: str) -> str:
     """SHA-256 哈希 Token（用于数据库存储）"""
     import hashlib
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def mask_secret(value: str) -> str:
+    """敏感值掩码展示：保留首 6 位与末 4 位（如 sk-123…abcd）。"""
+    if not value:
+        return ""
+    if len(value) <= 10:
+        return value[:2] + "…"
+    return f"{value[:6]}…{value[-4:]}"

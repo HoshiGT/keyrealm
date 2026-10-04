@@ -1,7 +1,13 @@
 import { defineStore } from 'pinia'
 import { api } from '@/api'
 
-const emptyFilters = () => ({ group_id: null, credential_type: null, status: null, search: '' })
+const emptyFilters = () => ({
+  group_id: null,
+  credential_type: null,
+  credential_types: null,
+  status: null,
+  search: '',
+})
 
 const emptyBatch = () => ({
   running: false,
@@ -47,6 +53,52 @@ export const useVaultStore = defineStore('vault', {
         label: `${plugin.icon || '🔑'} ${plugin.name}`,
         value: plugin.credential_type,
       })),
+
+    /** 按类别分组的类型选项（供可搜索下拉的分组展示） */
+    typeGroups: (state) => {
+      const groups = {}
+      state.plugins.forEach((plugin) => {
+        const key = plugin.category || ''
+        if (!groups[key]) {
+          groups[key] = { label: plugin.category_name || plugin.category || '其他', options: [] }
+        }
+        groups[key].options.push({
+          label: `${plugin.icon || '🔑'} ${plugin.name}`,
+          value: plugin.credential_type,
+        })
+      })
+      return Object.values(groups)
+    },
+
+    /** 左侧目录树：类别节点 → 服务节点（与 plugins/ 目录层次一致） */
+    pluginTree: (state) => {
+      const categories = {}
+      state.plugins.forEach((plugin) => {
+        const key = plugin.category || ''
+        if (!categories[key]) {
+          categories[key] = {
+            id: `cat:${key || 'root'}`,
+            label: plugin.category_name || plugin.category || '其他',
+            icon: plugin.icon || '📁',
+            category: key,
+            children: [],
+          }
+        }
+        categories[key].children.push({
+          id: `type:${plugin.credential_type}`,
+          label: plugin.name,
+          icon: plugin.icon || '🔑',
+          credential_type: plugin.credential_type,
+          category: key,
+          count: plugin.credential_count || 0,
+        })
+      })
+      return Object.values(categories).map((cat) => ({
+        ...cat,
+        count: cat.children.reduce((sum, child) => sum + child.count, 0),
+        types: cat.children.map((child) => child.credential_type),
+      }))
+    },
 
     groupOptions: (state) =>
       state.groups.map((group) => ({ label: group.name, value: group.id })),
@@ -109,17 +161,14 @@ export const useVaultStore = defineStore('vault', {
       const result = await api.verifyCredential(id)
       const target = this.credentials.find((item) => item.id === id)
       if (target) {
+        const now = new Date().toISOString()
         target.status = result.status
         target.status_detail = { ...(target.status_detail || {}), message: result.message }
         if (result.account_info) target.status_detail.account_info = result.account_info
-        target.last_verified_at = new Date().toISOString()
+        target.last_verified_at = now
+        if (result.status === 'valid') target.last_valid_at = now
       }
       return result
-    },
-
-    async getHistory(credentialId, limit = 20) {
-      const items = await api.getVerificationHistory(credentialId, limit)
-      return Array.isArray(items) ? items : []
     },
 
     /** 批量验证：进度与结果通过后端事件驱动（见 applyBatchProgress / applyBatchDone）。 */
@@ -158,36 +207,15 @@ export const useVaultStore = defineStore('vault', {
       return result
     },
 
-    // ── 插件 ──────────────────────────────────────────────
+    // ── 插件（放入 plugins/ 目录即自动加载，仅拉取列表）────
     async fetchPlugins() {
       const items = await api.listPlugins()
-      // 后端 enabled/is_builtin 源自 SQLite INTEGER(0/1)，此处归一为布尔。
-      // 否则 el-switch 内部 [activeValue,inactiveValue].includes(0) 判为“非法值”，
-      // 会在组件创建时自动 emit 一次 change(false)，导致未点击却弹出“已停用”。
       this.plugins = (Array.isArray(items) ? items : []).map((plugin) => ({
         ...plugin,
         enabled: !!plugin.enabled,
         is_builtin: !!plugin.is_builtin,
       }))
       return this.plugins
-    },
-
-    async installPlugin(zipPath) {
-      const result = await api.installPlugin(zipPath)
-      await this.fetchPlugins()
-      return result
-    },
-
-    async uninstallPlugin(credentialType) {
-      const result = await api.uninstallPlugin(credentialType)
-      await this.fetchPlugins()
-      return result
-    },
-
-    async togglePlugin(credentialType, enabled) {
-      const result = await api.togglePlugin(credentialType, enabled)
-      await this.fetchPlugins()
-      return result
     },
 
     // ── 后端事件 ──────────────────────────────────────────

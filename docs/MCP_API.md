@@ -16,13 +16,15 @@
 
 ### 获取 Token
 
-在应用 **MCP 设置 → 访问令牌** 页点击"生成新 Token"，设置名称和工具范围后，系统生成形如：
+MCP 全局只保留**一个活跃 Token**，且**默认即存在**（无需手动生成）：应用在读取 Token 时若无
+活跃 Token 会自动创建一个。Token 形如：
 
 ```
 cv_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7
 ```
 
-> ⚠️ Token 明文**仅在创建时展示一次**，数据库中只存 SHA-256 哈希。请立即复制到 Agent 配置中。
+在应用 **MCP 设置** 页可查看 Token 前缀；需要更换时点击「轮换 Token」，旧 Token 立即作废，
+新 Token 明文**仅在轮换时展示一次**（数据库只保存 SHA-256 哈希与前缀），请立即复制到 Agent 配置中。
 
 ### 请求头格式
 
@@ -118,7 +120,7 @@ claude mcp add credential-vault \
 // 入参
 {
   "group_id": 1,           // 可选，按分组过滤
-  "credential_type": "llm_api_key",  // 可选，按类型过滤
+  "credential_type": "llm_openai",  // 可选，按类型过滤
   "status": "valid"        // 可选，按状态过滤
 }
 
@@ -128,12 +130,14 @@ claude mcp add credential-vault \
     {
       "id": 1,
       "name": "OpenAI 生产账号",
-      "credential_type": "llm_api_key",
+      "credential_type": "llm_openai",
       "group_id": 1,
       "group_name": "工作项目",
       "status": "valid",
       "last_verified_at": "2026-10-03T10:30:00Z",
-      "data_plain": {"vendor": "openai", "notes": "主账号"},
+      "last_valid_at": "2026-10-03T10:30:00Z",
+      "data_plain": {"base_url": "https://api.openai.com/v1", "notes": "主账号"},
+      "data_masked": {"api_key": "sk-pro…abcd"},
       "created_at": "2026-10-01T08:00:00Z"
     }
   ],
@@ -156,9 +160,9 @@ claude mcp add credential-vault \
 {
   "id": 1,
   "name": "OpenAI 生产账号",
-  "credential_type": "llm_api_key",
-  "data_plain": {"vendor": "openai", "notes": "主账号"},
-  "data_masked": {"api_key": "sk-****abcd", "base_url": "https://api.openai.com/v1"},
+  "credential_type": "llm_openai",
+  "data_plain": {"base_url": "https://api.openai.com/v1", "notes": "主账号"},
+  "data_masked": {"api_key": "sk-pro…abcd"},
   "status": "valid",
   "status_detail": {"account": "user@example.com", "org": "MyOrg"},
   "last_verified_at": "2026-10-03T10:30:00Z"
@@ -191,12 +195,11 @@ claude mcp add credential-vault \
 // 入参
 {
   "name": "OpenAI 测试账号",
-  "credential_type": "llm_api_key",
+  "credential_type": "llm_openai",
   "group_id": 1,
   "data": {
     "base_url": "https://api.openai.com/v1",
     "api_key": "sk-test-xxx",
-    "vendor": "openai",
     "notes": "测试环境"
   }
 }
@@ -321,42 +324,32 @@ claude mcp add credential-vault \
 
 ---
 
-### 插件管理
+### 插件查询
 
 #### `vault_list_plugins`
 **默认权限：✅ 开启**
+
+列出当前已加载的全部插件（`plugins/` 目录扫描结果，放入即加载、删除即卸载，无安装接口）。
 
 ```json
 // 出参
 {
   "plugins": [
     {
-      "name": "LLM API Key",
+      "name": "OpenAI",
       "version": "1.0.0",
-      "credential_type": "llm_api_key",
-      "author": "CredentialVault",
-      "description": "管理和验证各大 LLM 厂商的 API Key",
+      "credential_type": "llm_openai",
+      "author": "Credential Vault",
+      "description": "验证 OpenAI API Key 有效性",
+      "icon": "🤖",
+      "category": "llm",
+      "category_name": "LLM 对话模型",
       "is_builtin": true,
       "enabled": true,
       "credential_count": 8
     }
   ]
 }
-```
-
----
-
-#### `vault_install_plugin`
-**默认权限：❌ 关闭（需授权）**
-
-从本地路径安装 `.zip` 插件。
-
-```json
-// 入参
-{"zip_path": "/path/to/my_plugin.zip"}
-
-// 出参
-{"credential_type": "my_plugin", "name": "My Plugin", "message": "安装成功"}
 ```
 
 ---
@@ -382,7 +375,7 @@ claude mcp add credential-vault \
 | 权限级别 | 工具 | 默认 |
 |----------|------|------|
 | 只读 | `vault_list_credentials`, `vault_verify_credential`, `vault_list_groups`, `vault_list_plugins` | ✅ 开启 |
-| 写操作 | `vault_get_credential`, `vault_create_*`, `vault_update_*`, `vault_delete_*`, `vault_batch_verify`, `vault_install_plugin` | ❌ 关闭 |
+| 写操作 | `vault_get_credential`, `vault_create_*`, `vault_update_*`, `vault_delete_*`, `vault_batch_verify` | ❌ 关闭 |
 | 高危 | `vault_get_secret` | ❌ 关闭（需二次确认） |
 
 ### 未授权调用响应

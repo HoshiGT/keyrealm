@@ -129,10 +129,10 @@ def assemble_release() -> Path:
     else:
         print("警告：未找到 plugins/，release/ 将不含内置插件", file=sys.stderr)
 
-    # 约定：plugins/ 是内置插件的唯一事实来源；data/installed_plugins/ 只是运行期缓存
-    # （应用每次启动由 install_builtin_plugins() 从 plugins/ 重建），不随发行包分发。
-    # 若用户此前从 release/ 运行过、留下了该缓存目录，此处精确删除它（绝不触碰 data/ 下
-    # 其它内容，如 vault.db、logs/ 等）。下次启动会自动按 plugins/ 内容重建。
+    # 约定：plugins/ 是插件的唯一事实来源；data/installed_plugins/ 是旧版本
+    # （zip 安装时代）遗留的运行期缓存，应用启动时由 migrate_legacy_installed_plugins()
+    # 一次性迁移/清理，不随发行包分发。若用户此前从 release/ 运行过、留下了该缓存
+    # 目录，此处精确删除它（绝不触碰 data/ 下其它内容，如 vault.db、logs/ 等）。
     stale_cache = RELEASE / "data" / "installed_plugins"
     if stale_cache.exists():
         shutil.rmtree(stale_cache)
@@ -217,8 +217,19 @@ def main() -> None:
     print(f"  {EXE_NAME:<20s} {human_size(exe.stat().st_size)}")
     plugins_dir = RELEASE / "plugins"
     if plugins_dir.exists():
-        names = [d.name for d in sorted(plugins_dir.iterdir()) if d.is_dir()]
-        print(f"  {'plugins/':<20s} 外部可改插件：{', '.join(names)}")
+        # 两层结构：类别目录（llm/、api/…）下挂服务子插件，根级也可能有平铺插件
+        flat, categories = [], []
+        for entry in sorted(plugins_dir.iterdir()):
+            if not entry.is_dir():
+                continue
+            if (entry / "manifest.json").exists():
+                flat.append(entry.name)
+            else:
+                subs = [d.name for d in sorted(entry.iterdir())
+                        if d.is_dir() and (d / "manifest.json").exists()]
+                categories.append(f"{entry.name}/（{len(subs)} 个服务）")
+        parts = categories + flat
+        print(f"  {'plugins/':<20s} 外部可改插件：{', '.join(parts)}")
     print(f"  {'合计':<18s} {human_size(total)}")
     if IS_WINDOWS:
         print("\n运行前提：Windows 需已安装 WebView2 Runtime（Win10/11 通常已内置）。")

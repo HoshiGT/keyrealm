@@ -29,8 +29,8 @@ def teardown_module():
 
 def _create_cred():
     return api.create_credential(
-        name="test-secret", credential_type="llm_api_key",
-        data={"vendor": "openai", "base_url": "https://api.openai.com/v1",
+        name="test-secret", credential_type="llm_openai",
+        data={"base_url": "https://api.openai.com/v1",
               "api_key": "sk-real-secret", "notes": "hello"},
         auto_verify=False,
     )
@@ -55,8 +55,7 @@ def test_update_credential_preserves_empty_sensitive_field():
 
     # 模拟编辑表单未预填敏感字段 → 提交空 api_key
     api.update_credential(cred["id"], data={
-        "vendor": "anthropic",  # 改了非敏感字段
-        "base_url": "https://api.anthropic.com/v1",
+        "base_url": "https://api.openai.com/v1/chat",  # 改了非敏感字段
         "api_key": "",           # 空 → 应保留原值
         "notes": "updated",
     })
@@ -64,7 +63,7 @@ def test_update_credential_preserves_empty_sensitive_field():
     full = api.get_credential(cred["id"])
     assert full["data"]["api_key"] == "sk-real-secret", \
         f"密钥被覆盖为空或丢失: {full['data'].get('api_key')!r}"
-    assert full["data"]["vendor"] == "anthropic", "非敏感字段应正常更新"
+    assert full["data"]["base_url"] == "https://api.openai.com/v1/chat", "非敏感字段应正常更新"
 
 
 def test_update_credential_preserves_missing_sensitive_field():
@@ -72,7 +71,7 @@ def test_update_credential_preserves_missing_sensitive_field():
     cred = _create_cred()
 
     api.update_credential(cred["id"], data={
-        "vendor": "doubao",
+        "base_url": "https://api.openai.com/v1",
         "notes": "partial",
     })
 
@@ -86,7 +85,7 @@ def test_update_credential_allows_changing_secret():
     cred = _create_cred()
 
     api.update_credential(cred["id"], data={
-        "vendor": "openai",
+        "base_url": "https://api.openai.com/v1",
         "api_key": "sk-new-secret",
         "notes": "",
     })
@@ -100,8 +99,8 @@ def test_update_credential_group_id_none_ungroups():
     """显式传 group_id=None 应取消分组（而非被当作“不修改”）"""
     group = db.create_group("temp-group", "")
     cred = api.create_credential(
-        name="grouped-secret", credential_type="llm_api_key",
-        data={"vendor": "openai", "api_key": "sk-g", "notes": ""},
+        name="grouped-secret", credential_type="llm_openai",
+        data={"base_url": "https://api.openai.com/v1", "api_key": "sk-g", "notes": ""},
         group_id=group["id"], auto_verify=False,
     )
     assert db.get_credential(cred["id"])["group_id"] == group["id"]
@@ -120,8 +119,8 @@ def test_update_credential_group_id_omitted_keeps_group():
     """省略 group_id（哨兵默认值）应保持原分组不变"""
     group = db.create_group("temp-group-2", "")
     cred = api.create_credential(
-        name="keep-group", credential_type="llm_api_key",
-        data={"vendor": "openai", "api_key": "sk-k", "notes": ""},
+        name="keep-group", credential_type="llm_openai",
+        data={"base_url": "https://api.openai.com/v1", "api_key": "sk-k", "notes": ""},
         group_id=group["id"], auto_verify=False,
     )
     # 只改 name，不传 group_id

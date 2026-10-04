@@ -47,7 +47,6 @@ onMounted(() => {
   disposers.push(
     onEvent(EVENTS.batchDone, (detail) => guard(vaultStore.applyBatchDone(detail))),
   )
-  disposers.push(onEvent(EVENTS.pluginInstalled, () => guard(vaultStore.fetchPlugins())))
   disposers.push(
     onEvent(EVENTS.mcpStatus, (detail) => {
       mcpStore.applyStatusEvent(detail)

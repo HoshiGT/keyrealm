@@ -1,0 +1,32 @@
+{
+  "name": "Firecrawl",
+  "version": "1.0.0",
+  "credential_type": "api_firecrawl",
+  "author": "Credential Vault",
+  "description": "验证 Firecrawl API Key 有效性",
+  "icon": "🔌",
+  "fields": [
+    {
+      "key": "base_url",
+      "label": "Base URL",
+      "type": "url",
+      "required": false,
+      "placeholder": "留空使用默认地址",
+      "default": "https://api.firecrawl.dev"
+    },
+    {
+      "key": "api_key",
+      "label": "API Key",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "fc-..."
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

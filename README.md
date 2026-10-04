@@ -5,7 +5,7 @@
 ## 特性
 
 - **AES-256-GCM 加密存储**：主密码派生密钥，敏感字段全程加密
-- **插件化架构**：凭据类型由插件定义，`.zip` 拖入即安装，无需重启
+- **插件化架构**：一个服务一个插件，目录放入 `plugins/` 即自动加载，删除即卸载，无需手动管理
 - **MCP 服务**：内置 MCP Server，AI Agent 可直接管理与验证凭据，支持按工具粒度控制权限
 - **多模式验证**：保存时自动验证 / 手动验证 / 定时批量验证
 - **分组管理**：平面分组，凭据按项目或用途归类
@@ -61,24 +61,29 @@ python scripts/build.py --frontend
 release/
 ├── CredentialVault.exe        # 单文件可执行程序（后端代码 + frontend/dist 已内置）
 ├── credential-vault-src.zip   # 源码归档（由 scripts/pack_source.py 生成，见下）
-├── plugins/                   # 内置插件【唯一事实来源】（不进 exe，可直接编辑，改完重启生效）
-│   ├── llm_api_key/
-│   └── api_service/
+├── plugins/                   # 插件【唯一事实来源】（不进 exe，可直接编辑，重启生效）
+│   ├── llm/                   # LLM 类别目录（category.json + llm_common.py 共享模块）
+│   │   ├── openai/            # 每个服务一个独立子插件（manifest.json + plugin.py）
+│   │   ├── deepseek/
+│   │   └── …                  # 共 18 个 LLM 子插件
+│   └── api/                   # API 服务类别目录（category.json + api_common.py）
+│       ├── firecrawl/
+│       ├── tavily/
+│       └── coze/
 └── data/                      # 首次运行时自动创建（数据库、主密码校验）
-    └── installed_plugins/     # 运行期缓存：启动时由 plugins/ 覆盖重建，不随包分发
 ```
 
-> 约定：内置插件只以 `plugins/` 为准。`data/installed_plugins/` 是应用启动时由
-> `install_builtin_plugins()` 从 `plugins/` 覆盖重建的**运行期缓存**，发行包中**不包含**它。
-> 直接编辑 `plugins/` 下的插件、重启即可生效（`scripts/build.py` 会在打包时常量清理旧的
-> `data/installed_plugins/`，避免与 `plugins/` 出现重复的陈旧副本）。
+> 约定：插件只以 `plugins/` 为准。一个服务就是一个独立子插件，放入 `plugins/` 目录
+> 即自动加载，删除对应子插件目录即卸载，互不影响，无需手动管理。
+> 旧版本的 `data/installed_plugins/` 运行期缓存已废弃：应用启动时由
+> `migrate_legacy_installed_plugins()` 一次性迁移/清理，不再重建，发行包中也不包含它。
 
 打包边界：
 
 | 内容 | 是否进 exe | 说明 |
 |------|-----------|------|
 | 后端代码、`frontend/dist` | ✅ 内置 | 只读资源，运行时从临时解压目录读取 |
-| `plugins/` | ❌ 外部 | 内置插件唯一事实来源，放 exe 同级；启动时覆盖重建 `data/installed_plugins/` |
+| `plugins/` | ❌ 外部 | 插件唯一事实来源，放 exe 同级；启动时扫描自动加载，删除子插件目录即卸载 |
 | `data/` | ❌ 外部 | 运行时可写，放 exe 同级，保证数据持久化 |
 
 `release/` 是自包含、可便携分发的目录，且**不被 git 追踪**（`CredentialVault.spec` 与
@@ -116,7 +121,7 @@ API-Key-Checker/
 │   ├── models.py            # 数据模型（Pydantic）
 │   ├── paths.py             # 冻结感知路径解析（打包/开发统一）
 │   ├── plugin_base.py       # 插件接口定义
-│   ├── plugin_manager.py    # 插件安装/加载/管理
+│   ├── plugin_manager.py    # 插件目录扫描与自动加载
 │   ├── scheduler.py         # 定时验证调度器
 │   ├── logger.py            # 日志配置（轮转文件 + 级别可调）
 │   ├── tray.py              # 系统托盘
@@ -126,9 +131,9 @@ API-Key-Checker/
 │   ├── build.py             # 可执行文件打包脚本（输出到 release/）
 │   ├── make_icon.py         # 生成应用图标（ICO/PNG/favicon）
 │   └── pack_source.py       # 源码归档脚本（生成 release/credential-vault-src.zip）
-├── plugins/                 # 内置插件源码（打包时作为外部目录，不进 exe）
-│   ├── llm_api_key/         # LLM 对话模型 API Key 验证
-│   └── api_service/         # 抓取/搜索/Agent 平台 API 验证
+├── plugins/                 # 插件源码（打包时作为外部目录，不进 exe）
+│   ├── llm/                 # LLM 类别：18 个厂商子插件 + llm_common.py 共享模块
+│   └── api/                 # API 服务类别：firecrawl / tavily / coze + api_common.py
 ├── frontend/                # Vue 3 前端
 │   ├── src/
 │   │   ├── views/

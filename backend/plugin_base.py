@@ -123,7 +123,20 @@ def load_plugin_module(plugin_path: Path, credential_type: str) -> Any:
 
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
-    spec.loader.exec_module(module)
+    # 允许插件导入自身目录与类别父目录下的共享模块
+    # （如 plugins/llm/deepseek/plugin.py 导入 plugins/llm/llm_common.py）。
+    # 仅在执行期间临时注入 sys.path，避免污染全局模块搜索路径。
+    extra_paths = [str(plugin_path), str(plugin_path.parent)]
+    added = [p for p in extra_paths if p not in sys.path]
+    sys.path[:0] = added
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        for p in added:
+            try:
+                sys.path.remove(p)
+            except ValueError:
+                pass
 
     if not hasattr(module, "verify"):
         raise AttributeError(f"插件 {credential_type} 缺少必要函数 verify(data)")

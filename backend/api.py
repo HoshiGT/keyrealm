@@ -24,6 +24,7 @@ from .crypto import (
     generate_salt,
     generate_token,
     hash_token,
+    mask_secret,
 )
 
 # 内存中的 AES 密钥（解锁后存在，锁定后清除）
@@ -186,9 +187,32 @@ def list_credentials(
     credential_type: Optional[str] = None,
     status: Optional[str] = None,
     search: Optional[str] = None,
+    credential_types: Optional[list] = None,
 ) -> list:
-    return db.list_credentials(group_id=group_id, credential_type=credential_type,
-                                status=status, search=search)
+    creds = db.list_credentials(group_id=group_id, credential_type=credential_type,
+                                status=status, search=search,
+                                credential_types=credential_types or None)
+    # 附加敏感字段掩码（如 sk-123…abcd），供列表页直接展示部分凭据信息。
+    # 仅在保险库已解锁时计算；锁定时返回空掩码。
+    key = _get_key()
+    if key:
+        schema_map = {p["credential_type"]: p for p in db.list_plugins()}
+        for cred in creds:
+            cred["data_masked"] = _masked_fields(key, cred, schema_map.get(cred["credential_type"]))
+    return creds
+
+
+def _masked_fields(key: bytes, cred: dict, plugin_record: Optional[dict]) -> dict:
+    sensitive = [
+        f["key"] for f in (plugin_record or {}).get("fields_schema", []) if f.get("sensitive")
+    ]
+    if not sensitive:
+        return {}
+    try:
+        data = decrypt_dict(key, cred["data_encrypted"])
+    except Exception:
+        return {}
+    return {k: mask_secret(str(data[k])) for k in sensitive if data.get(k)}
 
 
 def get_credential(credential_id: int) -> Optional[dict]:
@@ -330,8 +354,37 @@ def batch_verify(
     return {"ok": True, "total": len(creds)}
 
 
-def get_verification_history(credential_id: int, limit: int = 20) -> list:
-    return db.get_verification_history(credential_id, limit)
+def check_duplicate_credential(credential_type: str, data: dict) -> list:
+    """检测与新增数据重复的既有凭据：任一敏感字段值与既有凭据
+    解密后任意字符串字段值相同即视为重复。返回匹配项摘要列表。"""
+    key = _get_key()
+    if key is None:
+        return []
+
+    plugin_record = db.get_plugin_by_type(credential_type)
+    sensitive_keys = set()
+    if plugin_record:
+        for f in plugin_record.get("fields_schema", []):
+            if f.get("sensitive"):
+                sensitive_keys.add(f["key"])
+    new_values = {str(data[k]).strip() for k in sensitive_keys if data.get(k)}
+    if not new_values:
+        return []
+
+    matches = []
+    for cred in db.list_credentials():
+        try:
+            existing = decrypt_dict(key, cred["data_encrypted"])
+        except Exception:
+            continue
+        existing_values = {str(v).strip() for v in existing.values() if isinstance(v, str) and v}
+        if new_values & existing_values:
+            matches.append({
+                "id": cred["id"],
+                "name": cred["name"],
+                "credential_type": cred["credential_type"],
+            })
+    return matches
 
 
 # ── Groups ────────────────────────────────────────────────
@@ -358,25 +411,6 @@ def delete_group(group_id: int) -> dict:
 
 def list_plugins() -> list:
     return plugin_manager.list_installed_plugins()
-
-
-def install_plugin(zip_path: str) -> dict:
-    ok, msg = plugin_manager.install_from_zip(zip_path)
-    if ok:
-        push_event("vault:plugin_installed", {"message": msg})
-    return {"ok": ok, "message": msg}
-
-
-def uninstall_plugin(credential_type: str) -> dict:
-    ok, msg = plugin_manager.uninstall_plugin(credential_type)
-    return {"ok": ok, "message": msg}
-
-
-def toggle_plugin(credential_type: str, enabled: bool) -> dict:
-    db.set_plugin_enabled(credential_type, enabled)
-    if enabled:
-        plugin_manager.reload_plugin(credential_type)
-    return {"ok": True}
 
 
 # ── MCP ───────────────────────────────────────────────────

@@ -42,7 +42,6 @@ const SENSITIVE_TOOLS = new Set([
   'vault_create_credential',
   'vault_update_credential',
   'vault_delete_credential',
-  'vault_install_plugin',
 ])
 
 async function togglePermission(toolName, enabled) {

@@ -46,8 +46,9 @@ class VaultApi:
         return api.change_master_password(old_password, new_password)
 
     # ── Credentials ───────────────────────────────────────
-    def list_credentials(self, group_id=None, credential_type=None, status=None, search=None):
-        return api.list_credentials(group_id, credential_type, status, search)
+    def list_credentials(self, group_id=None, credential_type=None, status=None,
+                         search=None, credential_types=None):
+        return api.list_credentials(group_id, credential_type, status, search, credential_types)
 
     def get_credential(self, credential_id: int):
         return api.get_credential(credential_id)
@@ -69,8 +70,8 @@ class VaultApi:
     def batch_verify(self, scope: str = "all", group_id=None, credential_type=None):
         return api.batch_verify(scope, group_id, credential_type)
 
-    def get_verification_history(self, credential_id: int, limit: int = 20):
-        return api.get_verification_history(credential_id, limit)
+    def check_duplicate_credential(self, credential_type: str, data: dict):
+        return api.check_duplicate_credential(credential_type, data)
 
     # ── Groups ────────────────────────────────────────────
     def list_groups(self):
@@ -88,15 +89,6 @@ class VaultApi:
     # ── Plugins ───────────────────────────────────────────
     def list_plugins(self):
         return api.list_plugins()
-
-    def install_plugin(self, zip_path: str):
-        return api.install_plugin(zip_path)
-
-    def uninstall_plugin(self, credential_type: str):
-        return api.uninstall_plugin(credential_type)
-
-    def toggle_plugin(self, credential_type: str, enabled: bool):
-        return api.toggle_plugin(credential_type, enabled)
 
     # ── MCP ───────────────────────────────────────────────
     def get_mcp_status(self):
@@ -315,6 +307,5 @@ if __name__ == "__main__":
         print(f"frontend_index   : {_get_frontend_path()}")
         print(f"db_path          : {db.DB_PATH}")
         print(f"builtin_plugins  : {plugin_manager.BUILTIN_PLUGINS_DIR}")
-        print(f"installed_plugins: {plugin_manager.PLUGINS_DIR}")
         sys.exit(0)
     main()

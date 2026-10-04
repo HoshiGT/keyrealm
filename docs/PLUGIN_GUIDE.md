@@ -1,41 +1,66 @@
 # 插件开发指南
 
-## 概述
-
-插件是一个 `.zip` 文件，包含 `manifest.json`（元数据）和 `plugin.py`（逻辑）。
-用户将 `.zip` 拖入应用窗口即完成安装，无需重启。
-
----
-
-## 插件包结构
-
-```
-my_plugin.zip
-├── manifest.json    # 必须：插件元数据与字段定义
-└── plugin.py        # 必须：验证逻辑实现
-```
+Credential Vault 的插件用于**验证一类凭据的有效性**（如某家 LLM 厂商的 API Key）。
+每个服务是一个独立插件，放入 `plugins/` 目录即自动加载，删除即卸载——没有安装器、
+没有启停开关、没有"插件管理"界面。
 
 ---
 
-## manifest.json 规范
+## 1. 目录结构
+
+```
+plugins/
+├── llm/                        # 类别目录（LLM 对话模型）
+│   ├── category.json           # 类别元数据：{"name": "LLM 对话模型", "icon": "🤖"}
+│   ├── llm_common.py           # 类别共享模块（可选）：协议处理、厂商配置
+│   ├── openai/                 # 一个服务 = 一个独立子插件
+│   │   ├── manifest.json
+│   │   └── plugin.py
+│   ├── deepseek/
+│   │   ├── manifest.json
+│   │   └── plugin.py
+│   └── …（共 18 个子插件）
+├── api/                        # 类别目录（API 服务）
+│   ├── category.json
+│   ├── api_common.py
+│   ├── firecrawl/
+│   ├── tavily/
+│   └── coze/
+└── my_flat_plugin/             # 也支持根级平铺插件（无类别）
+    ├── manifest.json
+    └── plugin.py
+```
+
+规则：
+
+- 启动时 `sync_plugins()` 扫描 `plugins/` 两层结构：
+  - 根级含 `manifest.json` 的目录 → 平铺插件（`category` 为空，前端归入"其他"）；
+  - 否则视为类别目录，其下含 `manifest.json` 的子目录为子插件，
+    `category.json` 提供类别显示名与图标。
+- **一个服务就是一个插件**。删除某个子插件目录不影响同类别其他子插件运行；
+  共享模块（`llm_common.py` 等）只是被各子插件 `import` 的普通 Python 文件。
+- 名称以 `_` 或 `.` 开头的目录会被跳过（可用于临时禁用）。
+
+---
+
+## 2. manifest.json
 
 ```json
 {
-  "name": "LLM API Key",
+  "name": "DeepSeek",
   "version": "1.0.0",
-  "author": "Your Name",
-  "description": "管理和验证各大 LLM 厂商的 API Key",
-  "credential_type": "llm_api_key",
-  "icon": "🤖",
+  "credential_type": "llm_deepseek",
+  "author": "Credential Vault",
+  "description": "验证 DeepSeek API Key 有效性",
+  "icon": "🐋",
   "fields": [
     {
       "key": "base_url",
       "label": "Base URL",
-      "type": "text",
-      "required": true,
-      "default": "https://api.openai.com/v1",
-      "sensitive": false,
-      "placeholder": "https://api.openai.com/v1"
+      "type": "url",
+      "required": false,
+      "placeholder": "留空使用默认地址",
+      "default": "https://api.deepseek.com/v1"
     },
     {
       "key": "api_key",
@@ -44,220 +69,126 @@ my_plugin.zip
       "required": true,
       "sensitive": true,
       "placeholder": "sk-..."
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
     }
   ]
 }
 ```
 
-### 字段说明
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `name` | string | ✅ | 插件显示名称 |
-| `version` | string | ✅ | 语义化版本号 |
-| `author` | string | ❌ | 作者 |
-| `description` | string | ❌ | 插件描述 |
-| `credential_type` | string | ✅ | 全局唯一标识符（snake_case），作为数据库中的类型键 |
-| `icon` | string | ❌ | Emoji 或图标名，前端展示用 |
-| `fields` | array | ✅ | 字段定义列表 |
-
-### 字段类型（fields[].type）
-
-| type | 说明 | 额外属性 |
-|------|------|----------|
-| `text` | 单行文本 | `placeholder`, `default` |
-| `password` | 密码输入框（掩码显示） | `placeholder` |
-| `textarea` | 多行文本 | `placeholder`, `rows` |
-| `select` | 下拉选择 | `options: string[]` |
-| `number` | 数字输入 | `min`, `max`, `step` |
-| `url` | URL 输入（带格式校验） | `placeholder`, `default` |
-| `checkbox` | 布尔开关 | `default: bool` |
-
-### 字段通用属性
-
-| 属性 | 类型 | 说明 |
-|------|------|------|
-| `key` | string | 字段键名（snake_case），传给 plugin.py 的字典键 |
-| `label` | string | 前端显示标签 |
-| `required` | bool | 是否必填（默认 false） |
-| `sensitive` | bool | 是否加密存储（true → data_encrypted，false → data_plain） |
-| `default` | any | 默认值 |
-| `placeholder` | string | 输入提示文字 |
+| 字段 | 说明 |
+|------|------|
+| `credential_type` | **插件身份，全局唯一**。它是数据库插件表的 UNIQUE 键、模块缓存键、凭据与插件的关联键。同类插件约定前缀：`llm_<厂商>`、`api_<服务>` |
+| `fields[].type` | `text` / `url` / `password` / `textarea` / `select`（配 `options`）/ `number` / `checkbox` |
+| `fields[].sensitive` | `true` 的字段加密存储（AES-256-GCM），列表页只显示掩码（`crypto.mask_secret`，形如 `sk-123…cdef`），也参与重复凭据检测 |
 
 ---
 
-## plugin.py 规范
+## 3. plugin.py 接口
+
+必须暴露 `verify(data)`；可选 `validate(data)` 与 `get_display_summary(data)`。
+`data` 是用户按 `fields` 填写的字典。
 
 ```python
-"""
-插件必须实现以下接口：
-- verify(data: dict) -> VerifyResult
-- 可选：validate(data: dict) -> list[str]   # 返回错误列表，空列表表示通过
-- 可选：get_display_summary(data: dict) -> str  # 列表中展示的摘要文字
-"""
+"""DeepSeek API Key 验证插件（plugins/llm/ 类别下的独立子插件）。"""
+from llm_common import display_summary, validate_common, verify_vendor
 
-from dataclasses import dataclass
-from typing import Optional
+VENDOR = "deepseek"
 
 
-@dataclass
-class VerifyResult:
-    """验证结果，由主程序定义，插件直接返回此类型"""
-    status: str                  # "valid" | "invalid" | "error"
-    message: str = ""            # 人类可读的结果描述
-    account_info: Optional[dict] = None  # 可选：账号名、组织、余额等
-    # 示例：{"account": "user@example.com", "org": "MyOrg", "balance": "$12.34"}
+def validate(data):
+    return validate_common(VENDOR, data)
 
 
-def validate(data: dict) -> list[str]:
-    """
-    保存前的字段校验（可选实现）。
-    返回错误消息列表，空列表表示校验通过。
-    """
-    errors = []
-    if not data.get("api_key", "").startswith(("sk-", "pk-")):
-        errors.append("API Key 格式不正确，应以 sk- 或 pk- 开头")
-    return errors
+def verify(data):
+    return verify_vendor(VENDOR, data)
 
 
-def verify(data: dict) -> VerifyResult:
-    """
-    核心验证逻辑（必须实现）。
-    data 字典的键与 manifest.json 中 fields[].key 对应，值为明文。
-    
-    注意：此函数在独立线程中调用，可以执行网络请求，但应避免阻塞超过 30 秒。
-    """
-    import httpx
-    
-    api_key = data["api_key"]
-    base_url = data.get("base_url", "https://api.openai.com/v1").rstrip("/")
-    
-    try:
-        resp = httpx.get(
-            f"{base_url}/models",
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=15.0
-        )
-        if resp.status_code == 200:
-            return VerifyResult(
-                status="valid",
-                message="API Key 有效",
-                account_info={"models_count": len(resp.json().get("data", []))}
-            )
-        elif resp.status_code == 401:
-            return VerifyResult(status="invalid", message="API Key 无效或已过期")
-        else:
-            return VerifyResult(status="error", message=f"HTTP {resp.status_code}: {resp.text[:200]}")
-    except httpx.TimeoutException:
-        return VerifyResult(status="error", message="请求超时（15s）")
-    except Exception as e:
-        return VerifyResult(status="error", message=str(e))
-
-
-def get_display_summary(data: dict) -> str:
-    """
-    列表中展示的摘要文字（可选实现）。
-    data 为非敏感字段的明文字典。
-    """
-    vendor = data.get("vendor", "unknown")
-    return f"{vendor}"
+def get_display_summary(data):
+    return display_summary(VENDOR, data)
 ```
+
+要点：
+
+- **共享模块机制**：加载子插件时，框架会临时把插件目录与其类别目录注入
+  `sys.path`，因此子插件可以直接 `from llm_common import …`。子插件自身应当
+  很薄（上例即完整实现，仅 10 余行），协议逻辑沉淀在类别共享模块中。
+- `verify(data)` 的返回值做鸭子类型处理，接受：
+  - `VerifyResult` 风格的 dataclass（`status` / `message` / `account_info`）；
+  - 普通 `dict`，如 `{"status": "valid", "message": "…", "account_info": {...}}`。
+- `status` 取值：`valid`（有效）/ `invalid`（无效、欠费）/ `error`（网络等异常）。
+- `account_info` 为可选 dict，验证通过后回传账户信息（如
+  `{"balance": "97.82", "currency": "CNY"}`），前端凭据列表的"附加信息"列会展示。
+- 插件模块**不应导入 backend 包**，保持可脱离主程序独立运行（便于直接脚本调试）。
 
 ---
 
-## 插件生命周期
+## 4. 编写一个新插件（以新增 OpenAI 兼容服务为例）
 
-```
-安装（.zip 拖入）
-    │
-    ▼ manifest.json 校验（格式、credential_type 唯一性）
-    │
-    ▼ 解压到 <data_dir>/installed_plugins/<credential_type>/
-    │
-    ▼ importlib 动态加载 plugin.py
-    │
-    ▼ 写入 plugins 表
-    │
-    ▼ 前端刷新，新凭据类型出现在"添加凭据"下拉框
-    
-使用中
-    │
-    ▼ 用户添加凭据 → 前端根据 fields_schema 渲染表单
-    │
-    ▼ 保存 → 调用 plugin.validate()（若实现）→ 加密存储
-    │
-    ▼ 验证 → 调用 plugin.verify()（独立线程）→ 更新状态
-    
-卸载
-    │
-    ▼ 从 plugins 表标记 enabled=0（凭据数据保留）
-    │
-    ▼ 或完全删除（凭据数据一并删除，需用户二次确认）
-```
-
----
-
-## 开发调试
-
-### 本地开发模式
-
-- **内置插件**：源码在应用根目录 `plugins/<credential_type>/`，这是内置插件的唯一事实来源。
-  直接编辑其 `plugin.py` 后重启应用即可（启动时会用 `plugins/` 覆盖重建运行期缓存
-  `data/installed_plugins/`），也可在"插件管理"页点击**重新加载**。
-- **外部/调试插件**：将插件目录放入 `<data_dir>/installed_plugins/<credential_type>/`，
-  修改 `plugin.py` 后在"插件管理"页点击**重新加载**。
-
-### 打包为 .zip
-
-```bash
-cd my_plugin_dir
-zip -r my_plugin.zip manifest.json plugin.py
-```
-
-### 测试脚本
+1. 新建目录 `plugins/llm/my_vendor/`。
+2. 写 `manifest.json`（`credential_type` 取 `llm_my_vendor`，字段照抄上文结构）。
+3. 写薄 `plugin.py`：
 
 ```python
-# test_plugin.py
-import sys
-sys.path.insert(0, "plugins/llm_api_key")
-from plugin import verify
+"""MyVendor API Key 验证插件。"""
+from llm_common import display_summary, validate_common, verify_vendor
 
-result = verify({
-    "api_key": "sk-test...",
-    "base_url": "https://api.openai.com/v1",
-    "vendor": "openai"
-})
-print(result)
+VENDOR = "my_vendor"
+
+
+def validate(data):
+    return validate_common(VENDOR, data)
+
+
+def verify(data):
+    return verify_vendor(VENDOR, data)
+
+
+def get_display_summary(data):
+    return display_summary(VENDOR, data)
 ```
+
+4. 若是 `llm_common` 尚未支持的厂商，在 `llm_common.py` 的厂商配置表中登记
+   `my_vendor`（协议、默认 Base URL、可选余额端点），或干脆不走共享模块、在
+   `plugin.py` 里自实现 `verify`。
+5. 重启应用即自动加载；在"添加凭据"的服务下拉中即可搜索到。
+
+安全约定：
+
+- 声明 `sensitive: true` 的字段全程加密存储，日志与列表页均不出现明文。
+- 重复凭据检测会比较敏感字段明文（内存中解密比对），相同 Key 重复添加时前端弹确认。
 
 ---
 
-## 内置插件
+## 5. 内置插件清单
 
-项目内置两个插件，随应用分发，位于 `<app>/plugins/` 下：
+**llm/ 类别（18 个）**：openai、anthropic、deepseek、openrouter、gemini、minimax、
+nvidia、moonshot、siliconflow（硅基流动）、dashscope（阿里百炼）、huawei_maas、
+glm（智谱）、glm_anthropic、doubao（豆包）、tongyi（通义）、wenxin（文心）、
+openai_compatible、anthropic_compatible（两类兼容中转）。
 
-### LLM API Key（`credential_type: llm_api_key`）
+**api/ 类别（3 个）**：firecrawl（网页抓取）、tavily（搜索）、coze（字节扣子）。
 
-验证 LLM 对话模型 API Key，支持 18 家厂商，采用协议驱动架构：
+---
 
-| 协议 | 验证方式 | 覆盖厂商 |
-|------|----------|----------|
-| openai_models | `GET {base}/models`，Bearer | OpenAI、DeepSeek、MiniMax、Moonshot、硅基流动、阿里百炼、华为 MaaS、字节豆包、阿里通义、各类 OpenAI 兼容中转 |
-| anthropic_models | `GET {base}/models`，`x-api-key` | Anthropic、各类 Anthropic 兼容中转 |
-| openai_chat | `POST {base}/chat/completions`（识别欠费） | NVIDIA NIM、智谱 GLM |
-| anthropic_chat | `POST {base}/v1/messages`（识别欠费） | 智谱 GLM (Anthropic) |
-| openrouter | `GET {base}/auth/key` | OpenRouter |
-| gemini | `GET {base}/models?key=` | Google Gemini |
-| wenxin | `POST {base}/oauth/2.0/token` | 百度文心 |
+## 6. 调试
 
-余额查询（best-effort）：DeepSeek `/user/balance`、Moonshot `/users/me/balance`，负余额自动判定为「账户欠费」。
+- 直接修改 `plugins/` 下的文件后**重启应用**即可生效（无热重载）。
+- 可脱离主程序独立加载插件验证，参考 `tests/test_real_vendors.py`：
 
-### API 服务（`credential_type: api_service`）
+```python
+import importlib.util, sys
+sys.path.insert(0, "plugins/llm")  # 使 from llm_common import … 可用
+spec = importlib.util.spec_from_file_location("p", "plugins/llm/deepseek/plugin.py")
+mod = importlib.util.module_from_spec(spec)
+sys.modules["p"] = mod
+spec.loader.exec_module(mod)
+print(mod.verify({"base_url": "https://api.deepseek.com/v1", "api_key": "sk-..."}))
+```
 
-验证非 LLM 的第三方 API 服务 Key：
-
-| 服务 | 验证端点 | 验证方式 |
-|------|----------|----------|
-| Firecrawl | `POST /v1/scrape` | Bearer Token（网页抓取） |
-| Tavily | `POST /search` | Bearer Token（搜索） |
-| 字节扣子 Coze | `GET /v1/workspaces` | Bearer Token（Agent 平台） |
+- 旧版本（zip 安装时代）的 `data/installed_plugins/` 运行期缓存会在启动时由
+  `migrate_legacy_installed_plugins()` 一次性迁移/清理，无需手工处理。

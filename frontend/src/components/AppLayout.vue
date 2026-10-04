@@ -7,7 +7,6 @@ import {
   Expand,
   Fold,
   FolderOpened,
-  Grid,
   Key,
   Setting,
   Lock,
@@ -28,7 +27,6 @@ const batchDialog = ref(false)
 const navItems = [
   { path: '/credentials', title: '凭据管理', icon: Key },
   { path: '/groups', title: '分组管理', icon: FolderOpened },
-  { path: '/plugins', title: '插件管理', icon: Grid },
   { path: '/mcp', title: 'MCP 设置', icon: Connection },
   { path: '/settings', title: '系统设置', icon: Setting },
 ]

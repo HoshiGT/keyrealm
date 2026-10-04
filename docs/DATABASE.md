@@ -9,9 +9,11 @@ API-Key-Checker/
 └── data/
     ├── credentials.db        # 主数据库
     ├── credentials.db-wal    # WAL 日志（运行时）
-    ├── credentials.db-shm    # 共享内存（运行时）
-    └── installed_plugins/    # 用户安装的插件
+    └── credentials.db-shm    # 共享内存（运行时）
 ```
+
+> 旧版本的 `data/installed_plugins/`（zip 安装时代的运行期缓存）已废弃，
+> 启动时由 `migrate_legacy_installed_plugins()` 一次性迁移/清理，不再创建。
 
 > `data/` 目录已加入 `.gitignore`，不会提交到版本库。应用启动时自动创建。
 
@@ -33,7 +35,7 @@ CREATE TABLE settings (
 
 | key | 说明 | 示例值 |
 |-----|------|--------|
-| `schema_version` | 数据库版本号 | `"1"` |
+| `schema_version` | 数据库版本号 | `"2"` |
 | `salt` | PBKDF2 盐值（base64） | `"a3f2..."` |
 | `verify_token` | 主密码验证密文（base64） | `"x9k1..."` |
 | `mcp_port` | MCP Server 端口 | `"8765"` |
@@ -64,14 +66,15 @@ CREATE TABLE groups (
 CREATE TABLE credentials (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     name             TEXT NOT NULL,             -- 用户自定义名称（明文）
-    credential_type  TEXT NOT NULL,             -- 插件类型标识，如 "llm_api_key"
+    credential_type  TEXT NOT NULL,             -- 插件类型标识，如 "llm_openai"、"api_firecrawl"
     group_id         INTEGER,                   -- 所属分组（NULL = 未分组）
     data_encrypted   TEXT NOT NULL,             -- AES-GCM 加密的 JSON（敏感字段）
-    data_plain       TEXT DEFAULT '{}',         -- 明文 JSON（非敏感字段，如厂商名）
+    data_plain       TEXT DEFAULT '{}',         -- 明文 JSON（非敏感字段，如备注）
     status           TEXT DEFAULT 'unknown',    -- valid / invalid / unknown / error
-    status_detail    TEXT DEFAULT '',           -- 验证返回的账号信息（JSON）
-    last_verified_at TIMESTAMP,
-    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status_detail    TEXT DEFAULT '',           -- 验证返回的账号信息（JSON，如余额）
+    last_verified_at TIMESTAMP,                 -- 最后一次验证时间（无论结果）
+    last_valid_at    TIMESTAMP,                 -- 最后一次验证通过时间（v2 新增）
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- 添加时间
     updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL
 );
@@ -92,32 +95,12 @@ CREATE INDEX idx_credentials_status ON credentials(status);
 **data_plain 示例**：
 ```json
 {
-  "vendor": "openai",
   "notes": "生产环境主账号"
 }
 ```
 
 > 设计原则：`data_encrypted` 存放密钥类敏感字段；`data_plain` 存放展示类非敏感字段，避免每次列表查询都需要解密。
-
----
-
-### verification_history — 验证历史
-
-```sql
-CREATE TABLE verification_history (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    credential_id  INTEGER NOT NULL,
-    status         TEXT NOT NULL,        -- valid / invalid / error
-    result_data    TEXT DEFAULT '{}',    -- JSON：账号名、组织、余额等
-    error_message  TEXT DEFAULT '',
-    trigger_type   TEXT DEFAULT 'manual', -- manual / auto / scheduled
-    duration_ms    INTEGER DEFAULT 0,
-    verified_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (credential_id) REFERENCES credentials(id) ON DELETE CASCADE
-);
-
-CREATE INDEX idx_vhistory_credential ON verification_history(credential_id);
-```
+> 不再维护独立的验证历史表：只保留 `created_at`（添加时间）、`last_verified_at`、`last_valid_at` 三个时间戳。
 
 ---
 
@@ -130,23 +113,25 @@ CREATE TABLE plugins (
     version         TEXT NOT NULL,
     author          TEXT DEFAULT '',
     description     TEXT DEFAULT '',
-    credential_type TEXT NOT NULL UNIQUE,  -- 插件唯一标识
+    credential_type TEXT NOT NULL UNIQUE,  -- 插件唯一标识，如 "llm_openai"
     fields_schema   TEXT NOT NULL,         -- JSON：字段定义（来自 manifest.json）
-    plugin_path     TEXT NOT NULL,         -- 解压后的目录路径
+    plugin_path     TEXT NOT NULL,         -- 插件目录路径（plugins/<类别>/<服务>/）
+    category        TEXT DEFAULT '',       -- 类别目录名（llm / api，空 = 根级平铺插件）
+    category_name   TEXT DEFAULT '',       -- 类别显示名（来自 category.json）
     is_builtin      INTEGER DEFAULT 0,    -- 1=内置，0=用户安装
     enabled         INTEGER DEFAULT 1,
     installed_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
-**fields_schema 示例**：
+**fields_schema 示例**（llm_openai 子插件）：
 ```json
 [
   {
     "key": "base_url",
     "label": "Base URL",
-    "type": "text",
-    "required": true,
+    "type": "url",
+    "required": false,
     "default": "https://api.openai.com/v1",
     "sensitive": false
   },
@@ -156,14 +141,6 @@ CREATE TABLE plugins (
     "type": "password",
     "required": true,
     "sensitive": true
-  },
-  {
-    "key": "vendor",
-    "label": "厂商",
-    "type": "select",
-    "required": true,
-    "options": ["openai", "anthropic", "deepseek", "openrouter", "gemini", "minimax", "nvidia", "moonshot", "siliconflow", "dashscope", "huawei_maas", "coze", "glm", "glm_anthropic", "firecrawl", "tavily", "doubao", "tongyi", "wenxin", "openai_compatible", "anthropic_compatible"],
-    "sensitive": false
   },
   {
     "key": "notes",
@@ -188,7 +165,7 @@ CREATE TABLE mcp_permissions (
 );
 ```
 
-**初始工具列表**：
+**初始工具列表**（共 11 个）：
 
 | tool_name | 默认 | 说明 |
 |-----------|------|------|
@@ -202,7 +179,6 @@ CREATE TABLE mcp_permissions (
 | `vault_list_groups` | ✅ 开 | 列出分组 |
 | `vault_create_group` | ❌ 关 | 创建分组 |
 | `vault_list_plugins` | ✅ 开 | 列出插件 |
-| `vault_install_plugin` | ❌ 关 | 安装插件 |
 | `vault_get_secret` | ❌ 关 | 获取解密后的敏感字段（高危） |
 
 ---
@@ -280,7 +256,6 @@ settings (key-value)
 
 groups
   └── credentials (group_id FK)
-        └── verification_history (credential_id FK)
 
 plugins (credential_type ←→ credentials.credential_type)
 
@@ -294,17 +269,9 @@ schedules (target_id → groups.id 或 NULL)
 
 ## 迁移策略
 
-`settings.schema_version` 记录当前版本。应用启动时：
+`settings.schema_version` 记录当前版本（当前为 **2**）。应用启动时按版本号顺序执行迁移：
 
-```python
-MIGRATIONS = {
-    1: [],  # 初始版本
-    # 2: [alter_table_sql, ...],
-}
-
-current = get_schema_version()
-for v in range(current + 1, TARGET_VERSION + 1):
-    for sql in MIGRATIONS[v]:
-        execute(sql)
-set_schema_version(TARGET_VERSION)
-```
+- **v1 → v2**：`credentials` 新增 `last_valid_at`；`plugins` 新增 `category` / `category_name`；
+  凭据类型从整包命名（`llm_api_key` / `api_service`）迁移为子插件命名
+  （`llm_<vendor>` / `api_<service>`）；回填 `last_valid_at`；删除 `verification_history` 表；
+  移除 `vault_install_plugin` 权限记录。

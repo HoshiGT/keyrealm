@@ -104,7 +104,6 @@ export const EVENTS = {
   credentialsChanged: 'vault:credentials_changed',
   batchProgress: 'vault:batch_verify_progress',
   batchDone: 'vault:batch_verify_done',
-  pluginInstalled: 'vault:plugin_installed',
   mcpStatus: 'vault:mcp_status',
   closeConfirm: 'vault:close_confirm',
 }
@@ -127,6 +126,7 @@ export const api = {
       filters.credential_type ?? null,
       filters.status ?? null,
       filters.search ? filters.search.trim() : null,
+      filters.credential_types ?? null,
     ),
   getCredential: (id) => call('get_credential', id),
   // 注意：pywebview 桥接只支持位置参数，顺序必须与后端
@@ -152,8 +152,8 @@ export const api = {
   verifyCredential: (id) => call('verify_credential', id),
   batchVerify: (scope = 'all', groupId = null, credentialType = null) =>
     call('batch_verify', scope, groupId, credentialType),
-  getVerificationHistory: (credentialId, limit = 20) =>
-    call('get_verification_history', credentialId, limit),
+  checkDuplicateCredential: (credentialType, data) =>
+    call('check_duplicate_credential', credentialType, data),
 
   // ── 分组 ────────────────────────────────────────────────
   listGroups: () => call('list_groups'),
@@ -163,11 +163,8 @@ export const api = {
     call('update_group', id, payload.name ?? null, payload.description ?? null, payload.color ?? null),
   deleteGroup: (id) => call('delete_group', id),
 
-  // ── 插件 ────────────────────────────────────────────────
+  // ── 插件（放入 plugins/ 目录即自动加载，无需手动管理）────
   listPlugins: () => call('list_plugins'),
-  installPlugin: (zipPath) => call('install_plugin', zipPath),
-  uninstallPlugin: (credentialType) => call('uninstall_plugin', credentialType),
-  togglePlugin: (credentialType, enabled) => call('toggle_plugin', credentialType, enabled),
 
   // ── MCP ─────────────────────────────────────────────────
   getMcpStatus: () => call('get_mcp_status'),

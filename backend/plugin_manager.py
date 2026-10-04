@@ -1,12 +1,27 @@
 """
-插件管理器
-负责 .zip 插件包的安装、卸载、加载、热重载
+插件管理器：plugins/ 目录两层扫描，自动加载
+
+目录结构（一服务一插件，同类插件可按类别目录归组）：
+
+    plugins/
+      llm/                    # 类别目录（对应左侧树的一层）
+        category.json         # 可选：{"name": "LLM 模型", "icon": "🤖"}
+        llm_common.py         # 可选：子插件共享代码
+        deepseek/             # 独立子插件
+          manifest.json
+          plugin.py
+        openai/...
+      some_plugin/            # 也支持根级平铺插件（无类别）
+        manifest.json
+        plugin.py
+
+放入插件目录即自动加载，删除目录即在下次扫描时自动卸载，无需手动管理。
 """
 from __future__ import annotations
 
+import json
 import shutil
-import tempfile
-import zipfile
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -26,159 +41,143 @@ from .plugin_base import (
 _log = logger.get_logger(__name__)
 
 # 应用根目录：开发时=项目根；冻结后=exe 同级目录。
-# plugins/（内置插件源码，用户可改）是内置插件的【唯一事实来源】，不打包进 exe，
-# 随 exe 同级以外部目录形式提供。data/installed_plugins/ 是【运行期缓存】：
-# 每次启动由 install_builtin_plugins() 以 plugins/ 内容覆盖重建（含数据库记录），
-# 不随发行包分发（见 scripts/build.py assemble_release 的清理逻辑）。
+# plugins/ 是插件的【唯一事实来源】，不打包进 exe，随 exe 同级以外部目录形式提供。
 BASE_DIR = app_dir()
-PLUGINS_DIR = BASE_DIR / "data" / "installed_plugins"
 BUILTIN_PLUGINS_DIR = BASE_DIR / "plugins"
+
+# 旧版本运行期缓存目录（zip 安装时代），启动时一次性迁移/清理
+_LEGACY_PLUGINS_DIR = BASE_DIR / "data" / "installed_plugins"
+
+# 旧版内置整包插件的 credential_type（其缓存目录直接清理，不迁移）
+_LEGACY_BUILTIN_TYPES = ("llm_api_key", "api_service")
 
 # 内存中的插件模块缓存  credential_type -> module
 _loaded_modules: dict[str, Any] = {}
 
 
-def _ensure_dirs():
-    PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
+def _scan_plugin_dirs() -> list[tuple[Path, str, dict]]:
+    """扫描 plugins/ 两层结构。
+
+    返回 [(plugin_dir, category_folder, category_meta)]：
+    - 根级含 manifest.json 的目录为平铺插件（category 为空）；
+    - 否则视为类别目录，其下含 manifest.json 的子目录为子插件，
+      category.json 提供类别显示名/图标。
+    """
+    results: list[tuple[Path, str, dict]] = []
+    root = BUILTIN_PLUGINS_DIR
+    if not root.exists():
+        return results
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir() or entry.name.startswith(("_", ".")):
+            continue
+        if (entry / "manifest.json").exists():
+            results.append((entry, "", {}))
+            continue
+        cat_meta: dict = {}
+        cat_file = entry / "category.json"
+        if cat_file.exists():
+            try:
+                with open(cat_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    cat_meta = data
+            except Exception as e:
+                _log.warning("类别元数据读取失败 %s: %s", cat_file, e)
+        for sub in sorted(entry.iterdir()):
+            if not sub.is_dir() or sub.name.startswith(("_", ".")):
+                continue
+            if (sub / "manifest.json").exists():
+                results.append((sub, entry.name, cat_meta))
+    return results
 
 
-def install_builtin_plugins():
-    """启动时安装内置插件（plugins/ 目录下的）"""
-    _ensure_dirs()
-    if not BUILTIN_PLUGINS_DIR.exists():
-        return
-    for plugin_dir in BUILTIN_PLUGINS_DIR.iterdir():
-        if not plugin_dir.is_dir():
-            continue
-        manifest_path = plugin_dir / "manifest.json"
-        if not manifest_path.exists():
-            continue
+def _category_display(category: str, meta: dict) -> str:
+    return str(meta.get("name") or category or "未分类")
+
+
+def sync_plugins():
+    """扫描 plugins/ 目录，同步插件注册表与已加载模块。
+
+    - 新目录 → 注册并加载（放入即生效）；
+    - 已存在目录 → 更新记录并重载模块（改完重启/刷新即生效）；
+    - 磁盘上已消失的目录 → 移除模块与数据库记录（删除即卸载，凭据保留）。
+    """
+    found: set[str] = set()
+    for plugin_dir, category, cat_meta in _scan_plugin_dirs():
         try:
-            manifest = load_manifest(manifest_path)
-            # 复制到 installed_plugins
-            dest = PLUGINS_DIR / manifest.credential_type
-            if dest.exists():
-                shutil.rmtree(dest)
-            shutil.copytree(plugin_dir, dest)
+            manifest = load_manifest(plugin_dir / "manifest.json")
+        except Exception as e:
+            _log.error("插件 manifest 无效 %s: %s", plugin_dir, e)
+            continue
+        ct = manifest.credential_type
+        found.add(ct)
+        try:
             db.upsert_plugin(
                 name=manifest.name,
                 version=manifest.version,
-                credential_type=manifest.credential_type,
+                credential_type=ct,
                 fields_schema=manifest.fields_schema_json(),
-                plugin_path=str(dest),
+                plugin_path=str(plugin_dir),
                 author=manifest.author,
                 description=manifest.description,
                 icon=manifest.icon,
                 is_builtin=True,
+                category=category,
+                category_name=_category_display(category, cat_meta),
             )
-            load_plugin(manifest.credential_type)
+            load_plugin(ct)
         except Exception as e:
-            _log.error("内置插件安装失败 %s: %s", plugin_dir.name, e)
+            _log.error("插件加载失败 %s (%s): %s", plugin_dir, ct, e)
+
+    for record in db.list_plugins():
+        ct = record["credential_type"]
+        if ct in found:
+            continue
+        _unload_plugin(ct)
+        db.delete_plugin_record(ct)
+        _log.info("插件已移除（目录不存在）: %s", ct)
 
 
-def install_from_zip(zip_path: str) -> tuple[bool, str]:
-    """
-    从 .zip 文件安装插件
-    返回 (success, message)
-    """
-    _ensure_dirs()
-    zip_file = Path(zip_path)
-    if not zip_file.exists():
-        return False, f"文件不存在: {zip_path}"
-    if not zip_file.suffix.lower() == ".zip":
-        return False, "仅支持 .zip 格式插件包"
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp = Path(tmpdir)
-        try:
-            with zipfile.ZipFile(zip_file, "r") as zf:
-                # 安全检查：防止路径穿越
-                for name in zf.namelist():
-                    if name.startswith("/") or ".." in name:
-                        return False, f"插件包包含不安全路径: {name}"
-                zf.extractall(tmp)
-        except zipfile.BadZipFile:
-            return False, "无效的 zip 文件"
-
-        # 找到 manifest.json（可能在根目录或子目录）
-        manifest_path = _find_manifest(tmp)
-        if manifest_path is None:
-            return False, "插件包中未找到 manifest.json"
-
-        plugin_dir = manifest_path.parent
-        py_file = plugin_dir / "plugin.py"
-        if not py_file.exists():
-            return False, "插件包中未找到 plugin.py"
-
-        try:
-            manifest = load_manifest(manifest_path)
-        except ValueError as e:
-            return False, str(e)
-
-        # 检查是否与内置插件冲突
-        existing = db.get_plugin_by_type(manifest.credential_type)
-        if existing and existing.get("is_builtin"):
-            return False, f"不能覆盖内置插件: {manifest.credential_type}"
-
-        # 复制到 installed_plugins
-        dest = PLUGINS_DIR / manifest.credential_type
-        if dest.exists():
-            shutil.rmtree(dest)
-        shutil.copytree(plugin_dir, dest)
-
-        # 写入数据库
-        db.upsert_plugin(
-            name=manifest.name,
-            version=manifest.version,
-            credential_type=manifest.credential_type,
-            fields_schema=manifest.fields_schema_json(),
-            plugin_path=str(dest),
-            author=manifest.author,
-            description=manifest.description,
-            icon=manifest.icon,
-            is_builtin=False,
-        )
-
-        # 热加载
-        try:
-            load_plugin(manifest.credential_type)
-        except Exception as e:
-            return True, f"插件已安装但加载失败（重启后生效）: {e}"
-
-        return True, f"插件 {manifest.name} v{manifest.version} 安装成功"
-
-
-def _find_manifest(root: Path) -> Optional[Path]:
-    """在解压目录中找 manifest.json"""
-    direct = root / "manifest.json"
-    if direct.exists():
-        return direct
-    for p in root.rglob("manifest.json"):
-        return p
-    return None
-
-
-def uninstall_plugin(credential_type: str) -> tuple[bool, str]:
-    """卸载插件（保留凭据，仅禁用）"""
-    record = db.get_plugin_by_type(credential_type)
-    if not record:
-        return False, "插件不存在"
-    if record.get("is_builtin"):
-        return False, "内置插件不可卸载"
-
-    # 从内存移除
+def _unload_plugin(credential_type: str):
     _loaded_modules.pop(credential_type, None)
+    sys.modules.pop(f"_vault_plugin_{credential_type}", None)
 
-    # 删除文件
-    plugin_path = Path(record["plugin_path"])
-    if plugin_path.exists():
-        shutil.rmtree(plugin_path, ignore_errors=True)
 
-    # 数据库：禁用而非删除（保留凭据关联）
-    db.set_plugin_enabled(credential_type, False)
-    db.delete_plugin_record(credential_type)
+def migrate_legacy_installed_plugins():
+    """迁移旧版本 data/installed_plugins/ 运行期缓存。
 
-    return True, f"插件 {record['name']} 已卸载"
+    旧内置整包插件（llm_api_key/api_service）的缓存直接删除；
+    用户 zip 安装的其他插件移动到 plugins/ 根级，纳入自动加载。
+    """
+    legacy = _LEGACY_PLUGINS_DIR
+    if not legacy.exists():
+        return
+    for entry in sorted(legacy.iterdir()):
+        if not entry.is_dir():
+            continue
+        if entry.name in _LEGACY_BUILTIN_TYPES or not (entry / "manifest.json").exists():
+            shutil.rmtree(entry, ignore_errors=True)
+            continue
+        dest = BUILTIN_PLUGINS_DIR / entry.name
+        if dest.exists():
+            shutil.rmtree(entry, ignore_errors=True)
+            continue
+        try:
+            BUILTIN_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(entry), str(dest))
+            _log.info("旧版插件已迁移到 plugins/: %s", entry.name)
+        except Exception as e:
+            _log.error("旧版插件迁移失败 %s: %s", entry.name, e)
+    try:
+        legacy.rmdir()  # 仅清空后删除目录本身
+    except OSError:
+        pass
+
+
+def install_builtin_plugins():
+    """启动入口：迁移旧缓存并全量扫描 plugins/（保留旧函数名以便调用方兼容）。"""
+    migrate_legacy_installed_plugins()
+    sync_plugins()
 
 
 def load_plugin(credential_type: str) -> Optional[Any]:
@@ -198,7 +197,7 @@ def load_plugin(credential_type: str) -> Optional[Any]:
 
 def reload_plugin(credential_type: str) -> Optional[Any]:
     """热重载插件"""
-    _loaded_modules.pop(credential_type, None)
+    _unload_plugin(credential_type)
     return load_plugin(credential_type)
 
 
@@ -234,7 +233,8 @@ def get_display_summary(credential_type: str, data: dict) -> str:
 
 
 def list_installed_plugins() -> list[dict]:
-    """列出所有已安装插件（含凭据数量）"""
+    """列出所有插件（含凭据数量）；先做一次目录扫描同步，使新放入的插件即时可见"""
+    sync_plugins()
     plugins = db.list_plugins()
     for p in plugins:
         creds = db.list_credentials(credential_type=p["credential_type"])

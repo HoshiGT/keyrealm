@@ -109,8 +109,8 @@ def test_token_scope_cannot_grant_globally_disabled():
     assert not _check_permission("vault_get_secret", token_record)
 
 
-def test_all_12_tools_have_permission_entries():
-    """数据库中应有全部 12 个工具的权限记录"""
+def test_all_11_tools_have_permission_entries():
+    """数据库中应有全部 11 个工具的权限记录"""
     perms = db.list_mcp_permissions()
     tool_names = {p["tool_name"] for p in perms}
     expected = {
@@ -118,7 +118,7 @@ def test_all_12_tools_have_permission_entries():
         "vault_create_credential", "vault_update_credential",
         "vault_delete_credential", "vault_verify_credential",
         "vault_batch_verify", "vault_list_groups", "vault_create_group",
-        "vault_list_plugins", "vault_install_plugin", "vault_get_secret",
+        "vault_list_plugins", "vault_get_secret",
     }
     assert expected == tool_names, f"缺失: {expected - tool_names}, 多余: {tool_names - expected}"
 

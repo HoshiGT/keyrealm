@@ -1,0 +1,32 @@
+{
+  "name": "OpenAI",
+  "version": "1.0.0",
+  "credential_type": "llm_openai",
+  "author": "Credential Vault",
+  "description": "验证 OpenAI API Key 有效性",
+  "icon": "🤖",
+  "fields": [
+    {
+      "key": "base_url",
+      "label": "Base URL",
+      "type": "url",
+      "required": false,
+      "placeholder": "留空使用默认地址",
+      "default": "https://api.openai.com/v1"
+    },
+    {
+      "key": "api_key",
+      "label": "API Key",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "sk-..."
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

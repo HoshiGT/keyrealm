@@ -19,7 +19,7 @@ BASE_DIR = app_dir()
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "credentials.db"
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _lock = threading.Lock()
 _conn: Optional[sqlite3.Connection] = None
@@ -69,6 +69,7 @@ def init_db():
             status           TEXT DEFAULT 'unknown',
             status_detail    TEXT DEFAULT '{}',
             last_verified_at TIMESTAMP,
+            last_valid_at    TIMESTAMP,
             created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL
@@ -77,20 +78,6 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_credentials_type   ON credentials(credential_type);
         CREATE INDEX IF NOT EXISTS idx_credentials_group  ON credentials(group_id);
         CREATE INDEX IF NOT EXISTS idx_credentials_status ON credentials(status);
-
-        CREATE TABLE IF NOT EXISTS verification_history (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            credential_id  INTEGER NOT NULL,
-            status         TEXT NOT NULL,
-            result_data    TEXT DEFAULT '{}',
-            error_message  TEXT DEFAULT '',
-            trigger_type   TEXT DEFAULT 'manual',
-            duration_ms    INTEGER DEFAULT 0,
-            verified_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (credential_id) REFERENCES credentials(id) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_vhistory_credential ON verification_history(credential_id);
 
         CREATE TABLE IF NOT EXISTS plugins (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,6 +89,8 @@ def init_db():
             icon            TEXT DEFAULT '🔑',
             fields_schema   TEXT NOT NULL,
             plugin_path     TEXT NOT NULL,
+            category        TEXT DEFAULT '',
+            category_name   TEXT DEFAULT '',
             is_builtin      INTEGER DEFAULT 0,
             enabled         INTEGER DEFAULT 1,
             installed_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -144,7 +133,69 @@ def init_db():
     """)
     conn.commit()
     _seed_mcp_permissions(conn)
+    _migrate(conn)
     _set_schema_version(conn)
+
+
+def _migrate(conn: sqlite3.Connection):
+    """按 schema_version 执行增量迁移（在建表之后调用，ALTER 均有存在性检查）。"""
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key='schema_version'").fetchone()
+        from_version = int(row["value"]) if row else 0
+    except Exception:
+        from_version = 0
+
+    if from_version < 2:
+        # v2: credentials.last_valid_at、plugins.category/category_name、
+        #     删除 verification_history、移除 vault_install_plugin 权限、
+        #     存量凭据类型 llm_api_key→llm_<vendor>、api_service→api_<vendor>
+        cred_cols = {r["name"] for r in conn.execute("PRAGMA table_info(credentials)")}
+        if "last_valid_at" not in cred_cols:
+            conn.execute("ALTER TABLE credentials ADD COLUMN last_valid_at TIMESTAMP")
+
+        plugin_cols = {r["name"] for r in conn.execute("PRAGMA table_info(plugins)")}
+        if "category" not in plugin_cols:
+            conn.execute("ALTER TABLE plugins ADD COLUMN category TEXT DEFAULT ''")
+        if "category_name" not in plugin_cols:
+            conn.execute("ALTER TABLE plugins ADD COLUMN category_name TEXT DEFAULT ''")
+
+        # 旧整包插件按 data_plain.vendor 拆分为独立子插件类型
+        legacy_types = {"llm_api_key": "llm_", "api_service": "api_"}
+        rows = conn.execute(
+            "SELECT id, credential_type, data_plain FROM credentials "
+            "WHERE credential_type IN ('llm_api_key','api_service')"
+        ).fetchall()
+        for r in rows:
+            try:
+                vendor = (json.loads(r["data_plain"] or "{}") or {}).get("vendor") or ""
+            except Exception:
+                vendor = ""
+            prefix = legacy_types[r["credential_type"]]
+            if not vendor:
+                # 无厂商信息的兜底：OpenAI 兼容中转需用户自行补 Base URL
+                vendor = "openai_compatible" if prefix == "llm_" else "firecrawl"
+            new_type = f"{prefix}{vendor}"
+            # data_plain 中残留的 vendor 字段一并清理
+            try:
+                plain = json.loads(r["data_plain"] or "{}") or {}
+                plain.pop("vendor", None)
+                new_plain = json.dumps(plain, ensure_ascii=False)
+            except Exception:
+                new_plain = r["data_plain"]
+            conn.execute(
+                "UPDATE credentials SET credential_type=?, data_plain=? WHERE id=?",
+                (new_type, new_plain, r["id"]),
+            )
+
+        # 最后有效时间回填：当前状态为有效的凭据，以最后验证时间近似
+        conn.execute(
+            "UPDATE credentials SET last_valid_at=last_verified_at "
+            "WHERE status='valid' AND last_valid_at IS NULL"
+        )
+
+        conn.execute("DROP TABLE IF EXISTS verification_history")
+        conn.execute("DELETE FROM mcp_permissions WHERE tool_name='vault_install_plugin'")
+        conn.commit()
 
 
 def _seed_mcp_permissions(conn: sqlite3.Connection):
@@ -159,7 +210,6 @@ def _seed_mcp_permissions(conn: sqlite3.Connection):
         ("vault_list_groups",       1, "列出分组"),
         ("vault_create_group",      0, "创建分组"),
         ("vault_list_plugins",      1, "列出插件"),
-        ("vault_install_plugin",    0, "安装插件"),
         ("vault_get_secret",        0, "获取解密后的敏感字段（高危）"),
     ]
     for tool, enabled, desc in defaults:
@@ -250,6 +300,7 @@ def list_credentials(
     credential_type: Optional[str] = None,
     status: Optional[str] = None,
     search: Optional[str] = None,
+    credential_types: Optional[list] = None,
 ) -> list[dict]:
     sql = """
         SELECT c.*, g.name as group_name
@@ -264,6 +315,10 @@ def list_credentials(
     if credential_type:
         sql += " AND c.credential_type=?"
         params.append(credential_type)
+    if credential_types:
+        placeholders = ",".join("?" for _ in credential_types)
+        sql += f" AND c.credential_type IN ({placeholders})"
+        params += list(credential_types)
     if status:
         sql += " AND c.status=?"
         params.append(status)
@@ -322,7 +377,8 @@ def create_credential(
 
 
 def update_credential(cred_id: int, **kwargs) -> Optional[dict]:
-    allowed = {"name", "group_id", "data_encrypted", "data_plain", "status", "status_detail", "last_verified_at"}
+    allowed = {"name", "group_id", "data_encrypted", "data_plain", "status", "status_detail",
+               "last_verified_at", "last_valid_at"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if "data_plain" in fields and isinstance(fields["data_plain"], dict):
         fields["data_plain"] = json.dumps(fields["data_plain"], ensure_ascii=False)
@@ -345,38 +401,6 @@ def delete_credential(cred_id: int):
         conn = get_conn()
         conn.execute("DELETE FROM credentials WHERE id=?", (cred_id,))
         conn.commit()
-
-
-# ── verification_history ──────────────────────────────────
-
-def add_verification_record(
-    credential_id: int,
-    status: str,
-    result_data: dict = None,
-    error_message: str = "",
-    trigger_type: str = "manual",
-    duration_ms: int = 0,
-):
-    with _lock:
-        conn = get_conn()
-        conn.execute(
-            """INSERT INTO verification_history
-               (credential_id, status, result_data, error_message, trigger_type, duration_ms, verified_at)
-               VALUES (?,?,?,?,?,?,?)""",
-            (credential_id, status,
-             json.dumps(result_data or {}, ensure_ascii=False),
-             error_message, trigger_type, duration_ms, _now()),
-        )
-        conn.commit()
-
-
-def get_verification_history(credential_id: int, limit: int = 20) -> list[dict]:
-    with _lock:
-        rows = get_conn().execute(
-            "SELECT * FROM verification_history WHERE credential_id=? ORDER BY verified_at DESC LIMIT ?",
-            (credential_id, limit),
-        ).fetchall()
-    return [dict(r) for r in rows]
 
 
 # ── plugins ───────────────────────────────────────────────
@@ -413,30 +437,26 @@ def upsert_plugin(
     name: str, version: str, credential_type: str, fields_schema: list,
     plugin_path: str, author: str = "", description: str = "",
     icon: str = "🔑", is_builtin: bool = False,
+    category: str = "", category_name: str = "",
 ):
     with _lock:
         conn = get_conn()
         conn.execute(
             """INSERT INTO plugins (name, version, author, description, credential_type,
-                                    icon, fields_schema, plugin_path, is_builtin, enabled, installed_at)
-               VALUES (?,?,?,?,?,?,?,?,?,1,?)
+                                    icon, fields_schema, plugin_path, category, category_name,
+                                    is_builtin, enabled, installed_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?)
                ON CONFLICT(credential_type) DO UPDATE SET
                  name=excluded.name, version=excluded.version,
                  author=excluded.author, description=excluded.description,
                  icon=excluded.icon, fields_schema=excluded.fields_schema,
-                 plugin_path=excluded.plugin_path""",
+                 plugin_path=excluded.plugin_path,
+                 category=excluded.category, category_name=excluded.category_name,
+                 enabled=1""",
             (name, version, author, description, credential_type, icon,
              json.dumps(fields_schema, ensure_ascii=False), plugin_path,
-             int(is_builtin), _now()),
+             category, category_name or category, int(is_builtin), _now()),
         )
-        conn.commit()
-
-
-def set_plugin_enabled(credential_type: str, enabled: bool):
-    with _lock:
-        conn = get_conn()
-        conn.execute("UPDATE plugins SET enabled=? WHERE credential_type=?",
-                     (int(enabled), credential_type))
         conn.commit()
 
 

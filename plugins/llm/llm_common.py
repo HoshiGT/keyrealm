@@ -1,10 +1,14 @@
-"""LLM 对话模型 API Key 验证插件（协议驱动）。
+"""LLM 类别共享模块：协议处理器与厂商配置。
+
+plugins/llm/ 下的每个子插件（openai、deepseek……）都是独立插件，
+通过 `from llm_common import ...` 复用本模块；删除任一子插件目录
+不影响其他子插件运行。
 
 支持 OpenAI、Anthropic、DeepSeek、OpenRouter、Gemini、MiniMax、NVIDIA NIM、
 Moonshot、硅基流动、阿里百炼、华为 MaaS、智谱 GLM、字节豆包、阿里通义、
 百度文心，以及各类 OpenAI/Anthropic 兼容中转。
 
-插件完全独立，不导入 backend 包，可脱离主程序单独运行。
+本模块完全独立，不导入 backend 包，可脱离主程序单独运行。
 """
 from __future__ import annotations
 
@@ -161,7 +165,7 @@ VENDOR_CONFIGS = {
 
 
 def _log(message: str) -> None:
-    print(f"[llm_api_key] {message}", file=sys.stderr)
+    print(f"[llm] {message}", file=sys.stderr)
 
 
 def _split_wenxin_key(api_key: str) -> tuple[str, str]:
@@ -437,7 +441,7 @@ def _fetch_balance(config: dict, api_key: str) -> Optional[dict]:
         return None
 
 
-# ── 入口 ─────────────────────────────────────────────────
+# ── 子插件入口（vendor 由子插件显式传入） ────────────────
 
 def _dispatch(protocol: str, config: dict, base_url: str, api_key: str) -> VerifyResult:
     if protocol == "openai_models":
@@ -457,10 +461,14 @@ def _dispatch(protocol: str, config: dict, base_url: str, api_key: str) -> Verif
     return VerifyResult(status="error", message=f"未知协议: {protocol}")
 
 
-def validate(data: dict) -> list[str]:
+def validate_common(vendor: str, data: dict) -> list[str]:
     """校验配置，返回错误列表（空列表表示通过）。"""
     if not data:
         return ["配置数据为空"]
+
+    config = VENDOR_CONFIGS.get(vendor)
+    if config is None:
+        return [f"不支持的厂商: {vendor}"]
 
     errors: list[str] = []
 
@@ -468,29 +476,21 @@ def validate(data: dict) -> list[str]:
     if not api_key:
         errors.append("API Key 不能为空")
 
-    vendor = data.get("vendor")
-    if not vendor:
-        errors.append("厂商不能为空")
-    elif vendor not in VENDOR_CONFIGS:
-        errors.append(f"不支持的厂商: {vendor}")
-    else:
-        config = VENDOR_CONFIGS[vendor]
-        base_url = (data.get("base_url") or "").strip()
-        if not config["default_base_url"] and not base_url:
-            errors.append(f"厂商「{config['name']}」需要填写 Base URL")
-        if vendor == "wenxin" and api_key:
-            client_id, client_secret = _split_wenxin_key(api_key)
-            if not client_id or not client_secret:
-                errors.append("百度文心凭证格式应为 API_KEY|SECRET_KEY")
+    base_url = (data.get("base_url") or "").strip()
+    if not config["default_base_url"] and not base_url:
+        errors.append(f"厂商「{config['name']}」需要填写 Base URL")
+    if vendor == "wenxin" and api_key:
+        client_id, client_secret = _split_wenxin_key(api_key)
+        if not client_id or not client_secret:
+            errors.append("百度文心凭证格式应为 API_KEY|SECRET_KEY")
 
     return errors
 
 
-def verify(data: dict) -> VerifyResult:
-    """验证 API Key 是否有效。保证不抛出异常。"""
+def verify_vendor(vendor: str, data: dict) -> VerifyResult:
+    """验证指定厂商的 API Key 是否有效。保证不抛出异常。"""
     try:
         data = data or {}
-        vendor = data.get("vendor") or "openai"
         config = VENDOR_CONFIGS.get(vendor)
         if config is None:
             return VerifyResult(status="error", message=f"不支持的厂商: {vendor}")
@@ -533,10 +533,9 @@ def verify(data: dict) -> VerifyResult:
         return VerifyResult(status="error", message=f"插件执行异常: {exc}")
 
 
-def get_display_summary(data: dict) -> str:
+def display_summary(vendor: str, data: dict) -> str:
     """凭据列表中的简短展示文本。"""
     data = data or {}
-    vendor = data.get("vendor", "?")
     config = VENDOR_CONFIGS.get(vendor, {})
     name = config.get("name", vendor)
     base_url = data.get("base_url") or config.get("default_base_url", "")

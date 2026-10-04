@@ -1,6 +1,6 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { useVaultStore } from '@/stores/vault'
 import { api } from '@/api'
@@ -33,12 +33,8 @@ const plugins = computed(() => vaultStore.enabledPlugins)
 
 const groupOptions = computed(() => vaultStore.groupOptions)
 
-const typeOptions = computed(() =>
-  plugins.value.map((plugin) => ({
-    label: `${plugin.icon || '🔑'} ${plugin.name}`,
-    value: plugin.credential_type,
-  })),
-)
+// 类型选项按插件类别分组（el-option-group），下拉支持关键词搜索
+const typeGroups = computed(() => vaultStore.typeGroups)
 
 const currentPlugin = computed(
   () => plugins.value.find((plugin) => plugin.credential_type === form.credential_type) || null,
@@ -160,6 +156,30 @@ function close() {
   emit('update:modelValue', false)
 }
 
+/** 创建前重复检测：敏感字段值与既有凭据任一字段值相同即提示。 */
+async function confirmIfDuplicate(payload) {
+  let matches = []
+  try {
+    matches = await api.checkDuplicateCredential(payload.credential_type, payload.data)
+  } catch {
+    return true // 检测失败不阻断保存
+  }
+  if (!Array.isArray(matches) || !matches.length) return true
+  const lines = matches
+    .map((item) => `「${item.name}」（${item.credential_type}）`)
+    .join('、')
+  try {
+    await ElMessageBox.confirm(
+      `检测到相同凭据已存在：${lines}。确定要继续添加吗？`,
+      '重复凭据提醒',
+      { type: 'warning', confirmButtonText: '继续添加', cancelButtonText: '取消' },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function submit() {
   if (!formRef.value) return
   try {
@@ -176,6 +196,11 @@ async function submit() {
       group_id: form.group_id ?? null,
       data: buildData(),
       auto_verify: form.auto_verify,
+    }
+
+    if (!isEdit.value) {
+      const confirmed = await confirmIfDuplicate(payload)
+      if (!confirmed) return
     }
 
     let saved
@@ -221,9 +246,17 @@ async function submit() {
         <el-input v-model="form.name" placeholder="例如：OpenAI 生产账号" clearable maxlength="100" />
       </el-form-item>
 
-      <el-form-item label="凭据类型" prop="credential_type">
-        <el-select v-model="form.credential_type" placeholder="请选择凭据类型" :disabled="isEdit" class="full-width">
-          <el-option v-for="option in typeOptions" :key="option.value" :label="option.label" :value="option.value" />
+      <el-form-item label="服务" prop="credential_type">
+        <el-select
+          v-model="form.credential_type"
+          placeholder="输入关键词搜索服务"
+          :disabled="isEdit"
+          filterable
+          class="full-width"
+        >
+          <el-option-group v-for="group in typeGroups" :key="group.label" :label="group.label">
+            <el-option v-for="option in group.options" :key="option.value" :label="option.label" :value="option.value" />
+          </el-option-group>
         </el-select>
       </el-form-item>
 
@@ -266,6 +299,7 @@ async function submit() {
             v-else-if="field.type === 'select'"
             v-model="form.data[field.key]"
             :placeholder="field.placeholder || '请选择'"
+            filterable
             class="full-width"
           >
             <el-option v-for="option in field.options || []" :key="option" :label="option" :value="option" />

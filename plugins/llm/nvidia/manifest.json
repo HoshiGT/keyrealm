@@ -1,0 +1,32 @@
+{
+  "name": "NVIDIA NIM",
+  "version": "1.0.0",
+  "credential_type": "llm_nvidia",
+  "author": "Credential Vault",
+  "description": "验证 NVIDIA NIM API Key 有效性",
+  "icon": "🤖",
+  "fields": [
+    {
+      "key": "base_url",
+      "label": "Base URL",
+      "type": "url",
+      "required": false,
+      "placeholder": "留空使用默认地址",
+      "default": "https://integrate.api.nvidia.com/v1"
+    },
+    {
+      "key": "api_key",
+      "label": "API Key",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "nvapi-..."
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

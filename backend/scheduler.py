@@ -74,22 +74,18 @@ def verify_single_credential(cred_id: int, trigger_type: str = "schedule") -> di
         "message": result.message,
         "account_info": getattr(result, "account_info", None),
     }
+    status_detail["duration_ms"] = duration_ms
 
     now = datetime.now(timezone.utc).isoformat()
-    db.update_credential(
-        cred_id,
-        status=result.status,
-        status_detail=status_detail,
-        last_verified_at=now,
-    )
-    db.add_verification_record(
-        credential_id=cred_id,
-        status=result.status,
-        result_data=status_detail,
-        error_message=result.message if result.status == "error" else "",
-        trigger_type=trigger_type,
-        duration_ms=duration_ms,
-    )
+    updates = {
+        "status": result.status,
+        "status_detail": status_detail,
+        "last_verified_at": now,
+    }
+    # 仅当验证结果为有效时刷新「最后有效时间」
+    if result.status == "valid":
+        updates["last_valid_at"] = now
+    db.update_credential(cred_id, **updates)
 
     updated = db.get_credential(cred_id)
     if updated:

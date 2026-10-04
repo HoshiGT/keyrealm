@@ -38,6 +38,80 @@ function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value))
 }
 
+/** 与后端 crypto.mask_secret 保持一致的掩码规则 */
+function maskSecret(value) {
+  const text = String(value || '')
+  if (!text) return ''
+  if (text.length <= 10) return `${text.slice(0, 2)}…`
+  return `${text.slice(0, 6)}…${text.slice(-4)}`
+}
+
+// ── Mock 子插件定义（与 plugins/<类别>/<服务>/ 目录结构一致）─────────────
+const LLM_VENDORS = [
+  ['openai', 'OpenAI'], ['anthropic', 'Anthropic'], ['deepseek', 'DeepSeek'],
+  ['openrouter', 'OpenRouter'], ['gemini', 'Google Gemini'], ['minimax', 'MiniMax'],
+  ['nvidia', 'NVIDIA NIM'], ['moonshot', 'Moonshot Kimi'], ['siliconflow', 'SiliconFlow'],
+  ['dashscope', '阿里云百炼'], ['huawei_maas', '华为云 MaaS'], ['glm', '智谱 GLM'],
+  ['glm_anthropic', '智谱 GLM（Anthropic 兼容）'], ['doubao', '火山引擎豆包'],
+  ['tongyi', '通义千问'], ['wenxin', '百度文心'],
+  ['openai_compatible', 'OpenAI 兼容接口'], ['anthropic_compatible', 'Anthropic 兼容接口'],
+]
+const API_SERVICES = [
+  ['firecrawl', 'Firecrawl'], ['tavily', 'Tavily'], ['coze', 'Coze'],
+]
+
+function makeFieldsSchema(isCompatible) {
+  return [
+    { key: 'base_url', label: 'Base URL', type: 'url', required: !!isCompatible, sensitive: false, default: null, placeholder: 'https://api.example.com/v1', options: null },
+    { key: 'api_key', label: 'API Key', type: 'password', required: true, sensitive: true, default: null, placeholder: 'sk-...', options: null },
+    { key: 'notes', label: '备注', type: 'textarea', required: false, sensitive: false, default: null, placeholder: '用途说明', options: null },
+  ]
+}
+
+function buildPlugins() {
+  const plugins = []
+  let id = 0
+  for (const [vendor, name] of LLM_VENDORS) {
+    id += 1
+    plugins.push({
+      id,
+      name,
+      version: '1.0.0',
+      author: 'Credential Vault',
+      description: `${name} API Key 管理与验证`,
+      credential_type: `llm_${vendor}`,
+      icon: '🤖',
+      category: 'llm',
+      category_name: 'LLM 模型',
+      is_builtin: true,
+      enabled: true,
+      installed_at: daysAgo(30),
+      credential_count: 0,
+      fields_schema: makeFieldsSchema(vendor.endsWith('_compatible')),
+    })
+  }
+  for (const [service, name] of API_SERVICES) {
+    id += 1
+    plugins.push({
+      id,
+      name,
+      version: '1.0.0',
+      author: 'Credential Vault',
+      description: `${name} API Key 管理与验证`,
+      credential_type: `api_${service}`,
+      icon: '🔌',
+      category: 'api',
+      category_name: 'API 服务',
+      is_builtin: true,
+      enabled: true,
+      installed_at: daysAgo(30),
+      credential_count: 0,
+      fields_schema: makeFieldsSchema(false),
+    })
+  }
+  return plugins
+}
+
 function createState() {
   const groups = [
     { id: 1, name: '工作项目', description: '2026 年 Q4 核心项目', color: '#409EFF', sort_order: 0, created_at: daysAgo(30), credential_count: 3 },
@@ -45,69 +119,16 @@ function createState() {
     { id: 3, name: '基础设施', description: '云资源访问密钥', color: '#E6A23C', sort_order: 2, created_at: daysAgo(12), credential_count: 1 },
   ]
 
-  const plugins = [
-    {
-      id: 1,
-      name: 'LLM API Key',
-      version: '1.0.0',
-      author: 'Credential Vault',
-      description: '管理和验证各大 LLM 厂商的 API Key',
-      credential_type: 'llm_api_key',
-      icon: '🤖',
-      is_builtin: true,
-      enabled: true,
-      installed_at: daysAgo(30),
-      credential_count: 4,
-      fields_schema: [
-        { key: 'vendor', label: '厂商', type: 'select', required: true, sensitive: false, default: 'openai', placeholder: null, options: ['openai', 'anthropic', 'google', 'azure', 'deepseek'] },
-        { key: 'base_url', label: 'Base URL', type: 'url', required: true, sensitive: false, default: 'https://api.openai.com/v1', placeholder: 'https://api.openai.com/v1', options: null },
-        { key: 'api_key', label: 'API Key', type: 'password', required: true, sensitive: true, default: null, placeholder: 'sk-...', options: null },
-        { key: 'note', label: '备注', type: 'textarea', required: false, sensitive: false, default: null, placeholder: '用途说明', options: null },
-      ],
-    },
-    {
-      id: 2,
-      name: 'Cloud AK/SK',
-      version: '0.1.0',
-      author: 'community',
-      description: 'AWS / 阿里云 / 腾讯云 AK/SK 验证',
-      credential_type: 'cloud_aksk',
-      icon: '☁️',
-      is_builtin: false,
-      enabled: true,
-      installed_at: daysAgo(8),
-      credential_count: 2,
-      fields_schema: [
-        { key: 'provider', label: '云厂商', type: 'select', required: true, sensitive: false, default: 'aws', placeholder: null, options: ['aws', 'aliyun', 'tencent'] },
-        { key: 'access_key_id', label: 'Access Key ID', type: 'text', required: true, sensitive: false, default: null, placeholder: 'AKIA...', options: null },
-        { key: 'access_key_secret', label: 'Access Key Secret', type: 'password', required: true, sensitive: true, default: null, placeholder: null, options: null },
-        { key: 'region', label: 'Region', type: 'text', required: false, sensitive: false, default: 'us-east-1', placeholder: 'us-east-1', options: null },
-        { key: 'alert_threshold', label: '余额告警阈值', type: 'number', required: false, sensitive: false, default: '100', placeholder: '100', options: null },
-        { key: 'enable_monitor', label: '启用监控', type: 'checkbox', required: false, sensitive: false, default: 'true', placeholder: null, options: null },
-        { key: 'note', label: '备注', type: 'textarea', required: false, sensitive: false, default: null, placeholder: null, options: null },
-      ],
-    },
-  ]
+  const plugins = buildPlugins()
 
   const credentials = [
-    { id: 1, name: 'OpenAI 生产账号', credential_type: 'llm_api_key', group_id: 1, data_plain: { vendor: 'openai', base_url: 'https://api.openai.com/v1', api_key: 'sk-proj-demo-aaaaaaaaaaaaaaaa', note: '生产环境主账号' }, status: 'valid', status_detail: { message: '验证通过', account_info: { organization: 'Acme Inc', balance: '$128.40' } }, last_verified_at: minutesAgo(2), created_at: daysAgo(30), updated_at: minutesAgo(2) },
-    { id: 2, name: 'Claude 主账号', credential_type: 'llm_api_key', group_id: 1, data_plain: { vendor: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_key: 'sk-ant-demo-bbbbbbbbbbbb', note: '内部工具调用' }, status: 'invalid', status_detail: { message: '401 Unauthorized' }, last_verified_at: minutesAgo(60), created_at: daysAgo(25), updated_at: minutesAgo(60) },
-    { id: 3, name: '测试 Key', credential_type: 'llm_api_key', group_id: null, data_plain: { vendor: 'deepseek', base_url: 'https://api.deepseek.com/v1', api_key: 'sk-demo-cccccccccccc', note: '' }, status: 'error', status_detail: { message: '连接超时' }, last_verified_at: minutesAgo(180), created_at: daysAgo(10), updated_at: minutesAgo(180) },
-    { id: 4, name: 'AWS 生产 AK', credential_type: 'cloud_aksk', group_id: 3, data_plain: { provider: 'aws', access_key_id: 'AKIAIOSFODNN7EXAMPLE', access_key_secret: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY', region: 'us-east-1', alert_threshold: 100, enable_monitor: true, note: '生产账户' }, status: 'unknown', status_detail: {}, last_verified_at: null, created_at: daysAgo(7), updated_at: daysAgo(7) },
-    { id: 5, name: '阿里云备份', credential_type: 'cloud_aksk', group_id: 2, data_plain: { provider: 'aliyun', access_key_id: 'LTAI5tExample', access_key_secret: 'demo-secret-value', region: 'cn-hangzhou', alert_threshold: 50, enable_monitor: false, note: '' }, status: 'valid', status_detail: { message: '验证通过' }, last_verified_at: minutesAgo(25), created_at: daysAgo(5), updated_at: minutesAgo(25) },
-    { id: 6, name: 'Google Gemini', credential_type: 'llm_api_key', group_id: 2, data_plain: { vendor: 'google', base_url: 'https://generativelanguage.googleapis.com/v1beta', api_key: 'AIza-demo-dddddddddddd', note: '' }, status: 'valid', status_detail: { message: '验证通过' }, last_verified_at: minutesAgo(45), created_at: daysAgo(3), updated_at: minutesAgo(45) },
+    { id: 1, name: 'OpenAI 生产账号', credential_type: 'llm_openai', group_id: 1, data_plain: { base_url: 'https://api.openai.com/v1', notes: '生产环境主账号' }, secret: 'sk-proj-demo-aaaaaaaaaaaaaaaa', status: 'valid', status_detail: { message: '验证通过', account_info: { organization: 'Acme Inc' }, duration_ms: 320 }, last_verified_at: minutesAgo(2), last_valid_at: minutesAgo(2), created_at: daysAgo(30), updated_at: minutesAgo(2) },
+    { id: 2, name: 'Claude 主账号', credential_type: 'llm_anthropic', group_id: 1, data_plain: { base_url: 'https://api.anthropic.com', notes: '内部工具调用' }, secret: 'sk-ant-demo-bbbbbbbbbbbb', status: 'invalid', status_detail: { message: '401 Unauthorized', duration_ms: 210 }, last_verified_at: minutesAgo(60), last_valid_at: daysAgo(4), created_at: daysAgo(25), updated_at: minutesAgo(60) },
+    { id: 3, name: 'DeepSeek 测试', credential_type: 'llm_deepseek', group_id: null, data_plain: { base_url: 'https://api.deepseek.com/v1', notes: '' }, secret: 'sk-demo-cccccccccccc', status: 'valid', status_detail: { message: '验证通过', account_info: { balance: 12.34, currency: 'CNY' }, duration_ms: 180 }, last_verified_at: minutesAgo(10), last_valid_at: minutesAgo(10), created_at: daysAgo(10), updated_at: minutesAgo(10) },
+    { id: 4, name: 'Gemini 个人', credential_type: 'llm_gemini', group_id: 2, data_plain: { notes: '' }, secret: 'AIza-demo-dddddddddddd', status: 'error', status_detail: { message: '连接超时', duration_ms: 20000 }, last_verified_at: minutesAgo(180), last_valid_at: null, created_at: daysAgo(3), updated_at: minutesAgo(180) },
+    { id: 5, name: 'Tavily 搜索', credential_type: 'api_tavily', group_id: 3, data_plain: { notes: '搜索 API' }, secret: 'tvly-demo-eeeeeeeeeeee', status: 'unknown', status_detail: {}, last_verified_at: null, last_valid_at: null, created_at: daysAgo(7), updated_at: daysAgo(7) },
+    { id: 6, name: '硅基流动', credential_type: 'llm_siliconflow', group_id: 2, data_plain: { notes: '' }, secret: 'sk-demo-ffffffffffffff', status: 'valid', status_detail: { message: '验证通过', account_info: { balance: 8.5, currency: 'CNY' }, duration_ms: 260 }, last_verified_at: minutesAgo(45), last_valid_at: minutesAgo(45), created_at: daysAgo(5), updated_at: minutesAgo(45) },
   ]
-
-  const history = credentials.map((credential, index) => ({
-    id: index + 1,
-    credential_id: credential.id,
-    status: credential.status === 'unknown' ? 'error' : credential.status,
-    result_data: credential.status_detail,
-    error_message: credential.status === 'invalid' ? '401 Unauthorized' : '',
-    trigger_type: 'manual',
-    duration_ms: 180 + index * 40,
-    verified_at: credential.last_verified_at || daysAgo(7),
-  }))
 
   const mcpPermissions = [
     { tool_name: 'vault_list_credentials', enabled: true, description: '列出凭据' },
@@ -120,7 +141,6 @@ function createState() {
     { tool_name: 'vault_delete_credential', enabled: false, description: '删除凭据' },
     { tool_name: 'vault_batch_verify', enabled: false, description: '批量验证' },
     { tool_name: 'vault_create_group', enabled: false, description: '创建分组' },
-    { tool_name: 'vault_install_plugin', enabled: false, description: '安装插件' },
     { tool_name: 'vault_get_secret', enabled: false, description: '获取明文密钥（高危）' },
   ]
 
@@ -132,7 +152,6 @@ function createState() {
     groups,
     plugins,
     credentials,
-    history,
     mcpPermissions,
     mcpToken: {
       id: 1,
@@ -149,7 +168,7 @@ function createState() {
     logs: [
       { level: 'INFO', text: logLine('INFO', 'main', '应用启动（frozen=False，日志级别=INFO，数据目录=…）', minutesDate(32)) },
       { level: 'DEBUG', text: logLine('DEBUG', 'backend.scheduler', '调度器已启动，加载 2 个计划', minutesDate(32)) },
-      { level: 'INFO', text: logLine('INFO', 'backend.plugin_manager', '内置插件 llm_api_key 加载成功', minutesDate(30)) },
+      { level: 'INFO', text: logLine('INFO', 'backend.plugin_manager', '扫描到 21 个子插件（2 个类别）', minutesDate(30)) },
       { level: 'WARNING', text: logLine('WARNING', 'backend.api', '事件推送失败 vault:mcp_status: window not ready', minutesDate(14)) },
       { level: 'ERROR', text: logLine('ERROR', 'backend.scheduler', '加载计划失败 id=2: 触发器参数无效', minutesDate(6)) },
     ],
@@ -167,8 +186,25 @@ export function createMockApi() {
     return group ? group.name : null
   }
 
+  const pluginOf = (credentialType) =>
+    state.plugins.find((p) => p.credential_type === credentialType)
+
+  /** 根据插件 fields_schema 计算敏感字段掩码（模拟后端 data_masked） */
+  const maskedOf = (credential) => {
+    const plugin = pluginOf(credential.credential_type)
+    if (!plugin) return {}
+    const masked = {}
+    plugin.fields_schema
+      .filter((f) => f.sensitive)
+      .forEach((f) => {
+        if (credential.secret) masked[f.key] = maskSecret(credential.secret)
+      })
+    return masked
+  }
+
   const decorate = (credential) => ({
     group_name: groupName(credential.group_id),
+    data_masked: maskedOf(credential),
     ...credential,
   })
 
@@ -241,17 +277,19 @@ export function createMockApi() {
     },
 
     // ── 凭据 ──────────────────────────────────────────────
-    async list_credentials(groupId = null, credentialType = null, status = null, search = null) {
+    async list_credentials(groupId = null, credentialType = null, status = null, search = null, credentialTypes = null) {
       await delay()
       requireUnlocked()
       const keyword = search ? String(search).toLowerCase() : null
+      const typeSet = Array.isArray(credentialTypes) && credentialTypes.length ? new Set(credentialTypes) : null
       const items = state.credentials
         .filter((item) => (groupId == null ? true : item.group_id === groupId))
         .filter((item) => (credentialType == null ? true : item.credential_type === credentialType))
+        .filter((item) => (typeSet == null ? true : typeSet.has(item.credential_type)))
         .filter((item) => (status == null ? true : item.status === status))
         .filter((item) => {
           if (!keyword) return true
-          const plugin = state.plugins.find((p) => p.credential_type === item.credential_type)
+          const plugin = pluginOf(item.credential_type)
           const haystack = [item.name, item.credential_type, plugin ? plugin.name : '', groupName(item.group_id) || '']
             .join(' ')
             .toLowerCase()
@@ -266,25 +304,32 @@ export function createMockApi() {
       requireUnlocked()
       const found = state.credentials.find((item) => item.id === Number(id))
       if (!found) throw new Error(`凭据 #${id} 不存在`)
-      return clone(decorate(found))
+      // 编辑表单需要明文预填：mock 直接把 secret 放回 api_key
+      const result = decorate(found)
+      result.data = { ...(clone(found.data_plain) || {}), api_key: found.secret }
+      return clone(result)
     },
 
     // 与真实后端签名保持一致：(name, credential_type, data, group_id, auto_verify)
     async create_credential(name, credentialType, data = {}, groupId = null, autoVerify = true) {
       await delay(180)
       requireUnlocked()
+      const now = iso()
       const created = {
         id: nextId(),
         name,
         credential_type: credentialType,
         group_id: groupId == null ? null : Number(groupId),
         data_plain: clone(data) || {},
+        secret: data.api_key || '',
         status: autoVerify ? 'valid' : 'unknown',
-        status_detail: autoVerify ? { message: '验证通过' } : {},
-        last_verified_at: autoVerify ? iso() : null,
-        created_at: iso(),
-        updated_at: iso(),
+        status_detail: autoVerify ? { message: '验证通过', duration_ms: 200 } : {},
+        last_verified_at: autoVerify ? now : null,
+        last_valid_at: autoVerify ? now : null,
+        created_at: now,
+        updated_at: now,
       }
+      delete created.data_plain.api_key
       state.credentials.unshift(created)
       recomputeCounts()
       emit('vault:credentials_changed', {})
@@ -298,7 +343,12 @@ export function createMockApi() {
       if (!target) throw new Error(`凭据 #${id} 不存在`)
       if (name != null) target.name = name
       if (groupId != null) target.group_id = Number(groupId)
-      if (data != null) target.data_plain = clone(data)
+      if (data != null) {
+        if (data.api_key) target.secret = data.api_key
+        const plain = clone(data)
+        delete plain.api_key
+        target.data_plain = plain
+      }
       target.updated_at = iso()
       recomputeCounts()
       emit('vault:credentials_changed', {})
@@ -324,20 +374,12 @@ export function createMockApi() {
       const roll = Math.random()
       const status = roll > 0.7 ? 'invalid' : roll > 0.55 ? 'error' : 'valid'
       const message = status === 'valid' ? '验证通过' : status === 'invalid' ? '401 Unauthorized' : '连接超时'
+      const now = iso()
       target.status = status
-      target.status_detail = { message }
-      target.last_verified_at = iso()
-      target.updated_at = iso()
-      state.history.unshift({
-        id: nextId(),
-        credential_id: target.id,
-        status,
-        result_data: target.status_detail,
-        error_message: status === 'valid' ? '' : message,
-        trigger_type: 'manual',
-        duration_ms: 200 + Math.round(Math.random() * 300),
-        verified_at: iso(),
-      })
+      target.status_detail = { message, duration_ms: 200 + Math.round(Math.random() * 300) }
+      target.last_verified_at = now
+      if (status === 'valid') target.last_valid_at = now
+      target.updated_at = now
       emit('vault:credential_updated', clone(decorate(target)))
       return { status, message, account_info: status === 'valid' ? { organization: 'Mock Org' } : null }
     },
@@ -355,9 +397,11 @@ export function createMockApi() {
         await delay(220)
         const roll = Math.random()
         const status = roll > 0.75 ? 'invalid' : roll > 0.6 ? 'error' : 'valid'
+        const now = iso()
         target.status = status
-        target.status_detail = { message: status === 'valid' ? '验证通过' : status === 'invalid' ? '401 Unauthorized' : '连接超时' }
-        target.last_verified_at = iso()
+        target.status_detail = { message: status === 'valid' ? '验证通过' : status === 'invalid' ? '401 Unauthorized' : '连接超时', duration_ms: 220 }
+        target.last_verified_at = now
+        if (status === 'valid') target.last_valid_at = now
         if (status === 'valid') valid += 1
         else if (status === 'invalid') invalid += 1
         else error += 1
@@ -373,13 +417,20 @@ export function createMockApi() {
       return { ok: true, total: targets.length }
     },
 
-    async get_verification_history(credentialId, limit = 20) {
-      await delay()
+    async check_duplicate_credential(credentialType, data = {}) {
+      await delay(120)
       requireUnlocked()
-      const items = state.history
-        .filter((item) => item.credential_id === Number(credentialId))
-        .slice(0, Number(limit) || 20)
-      return clone(items)
+      const plugin = pluginOf(credentialType)
+      const newValues = new Set(
+        (plugin ? plugin.fields_schema : [])
+          .filter((f) => f.sensitive)
+          .map((f) => String(data[f.key] || '').trim())
+          .filter(Boolean),
+      )
+      if (!newValues.size) return []
+      return state.credentials
+        .filter((item) => item.secret && newValues.has(item.secret))
+        .map((item) => ({ id: item.id, name: item.name, credential_type: item.credential_type }))
     },
 
     // ── 分组 ──────────────────────────────────────────────
@@ -420,55 +471,11 @@ export function createMockApi() {
       return { ok: true }
     },
 
-    // ── 插件 ──────────────────────────────────────────────
+    // ── 插件（放入 plugins/ 目录即自动加载）────────────────
     async list_plugins() {
       await delay()
       recomputeCounts()
       return clone(state.plugins)
-    },
-
-    async install_plugin(zipPath) {
-      await delay(600)
-      const type = `mock_plugin_${nextId()}`
-      const plugin = {
-        id: nextId(),
-        name: String(zipPath).split('/').pop().replace(/\.zip$/i, '') || 'Mock 插件',
-        version: '0.1.0',
-        author: 'mock',
-        description: '开发模式安装了本地插件包（模拟）',
-        credential_type: type,
-        icon: '📦',
-        is_builtin: false,
-        enabled: true,
-        installed_at: iso(),
-        credential_count: 0,
-        fields_schema: [
-          { key: 'token', label: 'Token', type: 'password', required: true, sensitive: true, default: null, placeholder: null, options: null },
-        ],
-      }
-      state.plugins.push(plugin)
-      emit('vault:plugin_installed', clone(plugin))
-      return { ok: true, message: `插件 ${plugin.name} 安装成功` }
-    },
-
-    async uninstall_plugin(credentialType) {
-      await delay(300)
-      const index = state.plugins.findIndex((item) => item.credential_type === credentialType)
-      if (index === -1) return { ok: false, message: '插件不存在' }
-      if (state.plugins[index].is_builtin) return { ok: false, message: '内置插件不可卸载' }
-      state.plugins.splice(index, 1)
-      state.credentials = state.credentials.filter((item) => item.credential_type !== credentialType)
-      recomputeCounts()
-      emit('vault:credentials_changed', {})
-      return { ok: true, message: '插件已卸载' }
-    },
-
-    async toggle_plugin(credentialType, enabled) {
-      await delay(120)
-      const target = state.plugins.find((item) => item.credential_type === credentialType)
-      if (!target) return { ok: false, message: '插件不存在' }
-      target.enabled = !!enabled
-      return { ok: true }
     },
 
     // ── MCP ───────────────────────────────────────────────

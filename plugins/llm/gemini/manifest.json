@@ -1,0 +1,32 @@
+{
+  "name": "Google Gemini",
+  "version": "1.0.0",
+  "credential_type": "llm_gemini",
+  "author": "Credential Vault",
+  "description": "验证 Google Gemini API Key 有效性",
+  "icon": "🤖",
+  "fields": [
+    {
+      "key": "base_url",
+      "label": "Base URL",
+      "type": "url",
+      "required": false,
+      "placeholder": "留空使用默认地址",
+      "default": "https://generativelanguage.googleapis.com/v1beta"
+    },
+    {
+      "key": "api_key",
+      "label": "API Key",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "AIza..."
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

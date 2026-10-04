@@ -1,7 +1,11 @@
-"""第三方 API 服务 Key 验证插件。
+"""API 服务类别共享模块：各服务验证处理器。
+
+plugins/api/ 下的每个子插件（firecrawl、tavily、coze……）都是独立插件，
+通过 `from api_common import ...` 复用本模块；删除任一子插件目录
+不影响其他子插件运行。
 
 支持 Firecrawl（网页抓取）、Tavily（搜索）、字节扣子 Coze（Agent 平台）。
-插件完全独立，不导入 backend 包，可脱离主程序单独运行。
+本模块完全独立，不导入 backend 包，可脱离主程序单独运行。
 """
 from __future__ import annotations
 
@@ -52,7 +56,7 @@ SERVICE_CONFIGS = {
 
 
 def _log(message: str) -> None:
-    print(f"[api_service] {message}", file=sys.stderr)
+    print(f"[api] {message}", file=sys.stderr)
 
 
 def _safe_json(response: httpx.Response) -> Optional[dict]:
@@ -141,12 +145,23 @@ def _verify_coze(base_url: str, api_key: str) -> VerifyResult:
     return _unconfirmed(status, _body_snippet(resp))
 
 
-# ── 入口 ─────────────────────────────────────────────────
+_SERVICE_VERIFIERS = {
+    "firecrawl": _verify_firecrawl,
+    "tavily": _verify_tavily,
+    "coze": _verify_coze,
+}
 
-def validate(data: dict) -> list[str]:
+
+# ── 子插件入口（service 由子插件显式传入） ───────────────
+
+def validate_common(service: str, data: dict) -> list[str]:
     """校验配置，返回错误列表（空列表表示通过）。"""
     if not data:
         return ["配置数据为空"]
+
+    config = SERVICE_CONFIGS.get(service)
+    if config is None:
+        return [f"不支持的服务: {service}"]
 
     errors: list[str] = []
 
@@ -154,27 +169,20 @@ def validate(data: dict) -> list[str]:
     if not api_key:
         errors.append("API Key 不能为空")
 
-    vendor = data.get("vendor")
-    if not vendor:
-        errors.append("服务不能为空")
-    elif vendor not in SERVICE_CONFIGS:
-        errors.append(f"不支持的服务: {vendor}")
-    else:
-        base_url = (data.get("base_url") or "").strip()
-        if not SERVICE_CONFIGS[vendor]["default_base_url"] and not base_url:
-            errors.append(f"服务「{SERVICE_CONFIGS[vendor]['name']}」需要填写 Base URL")
+    base_url = (data.get("base_url") or "").strip()
+    if not config["default_base_url"] and not base_url:
+        errors.append(f"服务「{config['name']}」需要填写 Base URL")
 
     return errors
 
 
-def verify(data: dict) -> VerifyResult:
-    """验证 API Key 是否有效。保证不抛出异常。"""
+def verify_service(service: str, data: dict) -> VerifyResult:
+    """验证指定服务的 API Key 是否有效。保证不抛出异常。"""
     try:
         data = data or {}
-        vendor = data.get("vendor") or "firecrawl"
-        config = SERVICE_CONFIGS.get(vendor)
+        config = SERVICE_CONFIGS.get(service)
         if config is None:
-            return VerifyResult(status="error", message=f"不支持的服务: {vendor}")
+            return VerifyResult(status="error", message=f"不支持的服务: {service}")
 
         api_key = (data.get("api_key") or "").strip()
         if not api_key:
@@ -184,13 +192,10 @@ def verify(data: dict) -> VerifyResult:
         if not base_url:
             return VerifyResult(status="error", message=f"服务「{config['name']}」需要填写 Base URL")
 
-        if vendor == "firecrawl":
-            return _verify_firecrawl(base_url, api_key)
-        if vendor == "tavily":
-            return _verify_tavily(base_url, api_key)
-        if vendor == "coze":
-            return _verify_coze(base_url, api_key)
-        return VerifyResult(status="error", message=f"未知服务: {vendor}")
+        verifier = _SERVICE_VERIFIERS.get(service)
+        if verifier is None:
+            return VerifyResult(status="error", message=f"未知服务: {service}")
+        return verifier(base_url, api_key)
 
     except httpx.TimeoutException:
         return VerifyResult(status="error", message=f"请求超时（{int(TIMEOUT)} 秒）")
@@ -201,11 +206,10 @@ def verify(data: dict) -> VerifyResult:
         return VerifyResult(status="error", message=f"插件执行异常: {exc}")
 
 
-def get_display_summary(data: dict) -> str:
+def display_summary(service: str, data: dict) -> str:
     """凭据列表中的简短展示文本。"""
     data = data or {}
-    vendor = data.get("vendor", "?")
-    config = SERVICE_CONFIGS.get(vendor, {})
-    name = config.get("name", vendor)
+    config = SERVICE_CONFIGS.get(service, {})
+    name = config.get("name", service)
     base_url = data.get("base_url") or config.get("default_base_url", "")
     return f"{name} | {base_url}"

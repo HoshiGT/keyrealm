@@ -1,7 +1,7 @@
 """用真实 API Key 验证插件对全部厂商的支持情况。
 
 读取 data/real_keys.json（含真实密钥，已被 .gitignore 排除），按每条数据的
-credential_type 选择对应插件（llm_api_key / api_service）调用 verify()，
+vendor 加载对应子插件（plugins/llm/<厂商>/ 或 plugins/api/<服务>/）调用 verify()，
 对比表格中的预期（valid=可用 / overdue=欠费）。
 
 运行：source .venv/bin/activate && python tests/test_real_vendors.py
@@ -15,12 +15,23 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# credential_type -> 插件文件路径
-PLUGIN_PATHS = {
-    "llm_api_key": os.path.join(BASE_DIR, "plugins", "llm_api_key", "plugin.py"),
-    "api_service": os.path.join(BASE_DIR, "plugins", "api_service", "plugin.py"),
-}
 KEYS_PATH = os.path.join(BASE_DIR, "data", "real_keys.json")
+
+# 子插件通过 `from llm_common import ...` / `from api_common import ...`
+# 复用类别共享模块，需把类别目录加入 sys.path（与 plugin_base 的加载行为一致）
+for _category in ("llm", "api"):
+    _cat_dir = os.path.join(BASE_DIR, "plugins", _category)
+    if os.path.isdir(_cat_dir) and _cat_dir not in sys.path:
+        sys.path.insert(0, _cat_dir)
+
+
+def plugin_path_for(vendor: str) -> str:
+    """vendor 名即子插件目录名，先查 llm 类别再查 api 类别。"""
+    for category in ("llm", "api"):
+        path = os.path.join(BASE_DIR, "plugins", category, vendor, "plugin.py")
+        if os.path.exists(path):
+            return path
+    raise KeyError(f"未找到厂商 {vendor} 对应的子插件目录")
 
 
 def load_plugin(name: str, path: str):
@@ -32,9 +43,14 @@ def load_plugin(name: str, path: str):
     return mod
 
 
-def load_plugins() -> dict:
-    """加载全部插件，按 credential_type 建立索引。"""
-    return {name: load_plugin(name, path) for name, path in PLUGIN_PATHS.items()}
+def load_plugins(items) -> dict:
+    """按 real_keys 中出现的 vendor 加载对应子插件，vendor -> module。"""
+    plugins = {}
+    for item in items:
+        vendor = item["vendor"]
+        if vendor not in plugins:
+            plugins[vendor] = load_plugin(vendor, plugin_path_for(vendor))
+    return plugins
 
 
 def mask(key: str) -> str:
@@ -42,11 +58,10 @@ def mask(key: str) -> str:
 
 
 def verify_one(plugins, item):
-    """按 credential_type 选择插件调用 verify（两插件入参结构一致）。"""
-    credential_type = item.get("credential_type", "llm_api_key")
-    plugin = plugins[credential_type]
+    """按 vendor 选择子插件调用 verify（各子插件入参结构一致）。"""
+    plugin = plugins[item["vendor"]]
     result = plugin.verify(
-        {"vendor": item["vendor"], "base_url": item["base_url"], "api_key": item["api_key"]}
+        {"base_url": item["base_url"], "api_key": item["api_key"]}
     )
     return item, result
 
@@ -75,8 +90,8 @@ def main() -> None:
     with open(KEYS_PATH, "r", encoding="utf-8") as f:
         items = json.load(f)
 
-    plugins = load_plugins()
-    print(f"共 {len(items)} 个真实 Key，开始验证…\n")
+    plugins = load_plugins(items)
+    print(f"共 {len(items)} 个真实 Key（{len(plugins)} 个子插件），开始验证…\n")
 
     stats = {"PASS": 0, "FAIL": 0, "NETERR": 0, "SKIP": 0}
     failures = []
