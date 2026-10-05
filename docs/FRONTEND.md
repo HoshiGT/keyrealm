@@ -255,6 +255,21 @@ App.vue
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
+**点「验证」之后：后台跑，界面不阻塞**
+
+- 顶部出现一条**非阻塞横幅**：运行中显示 `正在批量验证 12/83 · 当前：<凭据名>` + 「查看任务」按钮（直达 `/tasks`）；
+  完成后同一位置变成结果摘要（`有效 73 · 无效 0 · 异常 7（跳过 3）`，有异常用 warning 色；被取消时显示
+  `已取消（已处理 n/m）`），可手动关掉。
+- **不再用模态弹窗**：以前是一个不可关闭的 dialog，等于把整个界面按在前台、切页都做不到。
+  现在横幅只提示，用户可以照常切页、看别的凭据、去「任务」页看进度。
+- **被测条目**的「验证」按钮转为 loading 且不可点——id 列表由 `vault:batch_verify_started` 下发，
+  避免同一条被重复触发。
+- **运行期间列表进入只读**：新增 / 批量验证 / 行内 编辑·删除·操作 / 多选一律锁上，由**一个**
+  `batchRunning` computed 驱动；免得验证还没结束就把条目改掉、结果与界面对不上。
+  **刻意不禁导航**——用户就是要能在后台跑的同时去「任务」页。
+- 进度与**取消**都在「任务」页（批量验证会登记成一条 `kind=batch_verify` 的任务；取消是协作式的，
+  见 ARCHITECTURE §2.4）。
+
 **添加凭据**：表单的「服务」下拉支持**关键词搜索**，选项按插件类别分组
 （LLM / API 服务）。保存前自动做**重复凭据检测**——凭据值与既有凭据任一字段
 相同即弹出确认框，用户可选择继续添加或取消。
@@ -742,7 +757,8 @@ await window.pywebview.api.confirm_close_action('quit', true)
 |--------|----------|--------|
 | `vault:credential_updated` | 凭据状态变化 | `{id, status, status_detail}` |
 | `vault:credentials_changed` | 凭据增删 | `{}` |
+| `vault:batch_verify_started` | 批量验证开始 | `{total, skipped, credentials:[凭据id…]}`——前端据此把对应行的「验证」按钮置成 loading |
 | `vault:batch_verify_progress` | 批量验证进度 | `{done, total, current_id}` |
-| `vault:batch_verify_done` | 批量验证完成 | `{total, valid, invalid, error, skipped}`（skipped = 因 `batch_verify=false` 被跳过的条数） |
+| `vault:batch_verify_done` | 批量验证完成 | `{total, valid, invalid, error, skipped}`（skipped = 因 `batch_verify=false` 被跳过的条数）；被取消时额外带 `canceled: true` 与 `done: <已处理条数>` |
 | `vault:mcp_status` | MCP 服务状态变化 | `{status, port}` |
 | `vault:close_confirm` | 用户点击关闭且关闭行为为"询问" | `{}`（前端弹出退出/后台选择框） |

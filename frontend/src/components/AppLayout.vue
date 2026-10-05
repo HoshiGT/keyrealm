@@ -29,7 +29,6 @@ const appStore = useAppStore()
 const vaultStore = useVaultStore()
 
 const collapsed = ref(localStorage.getItem('vault.layout.asideCollapsed') === '1')
-const batchDialog = ref(false)
 
 watch(collapsed, (value) => {
   localStorage.setItem('vault.layout.asideCollapsed', value ? '1' : '0')
@@ -205,28 +204,39 @@ onBeforeUnmount(() => {
 
 const pageTitle = computed(() => route.meta.title || 'Credential Vault')
 
-const batchPercent = computed(() => {
-  const { done, total } = vaultStore.batch
-  if (!total) return 0
-  return Math.min(100, Math.round((done / total) * 100))
+/* ── 批量验证横幅 ───────────────────────────────────────
+ * 刻意做成**非阻塞**的横幅而不是模态弹窗：批量验证可能跑很久，模态会把整个界面按在前台，
+ * 用户既看不了别的凭据、也去不了「任务」页。横幅只提示，其余操作照常可用
+ * （「验证期间禁止改动凭据」那条互斥由 Credentials.vue 自己控制）。
+ */
+const batchBannerVisible = computed(
+  () => vaultStore.batch.running || !!vaultStore.batch.result,
+)
+
+/** 完成后横幅的配色：有异常要一眼看出来，正常则是成功色。 */
+const batchBannerType = computed(() => {
+  const result = vaultStore.batch.result
+  if (!result || result.canceled) return 'info'
+  return result.error > 0 ? 'warning' : 'success'
 })
 
-watch(
-  () => vaultStore.batch.running,
-  (running) => {
-    if (running) batchDialog.value = true
-  },
-)
+const batchSummary = computed(() => {
+  const result = vaultStore.batch.result
+  if (!result) return ''
+  if (result.canceled) {
+    return `批量验证已取消（已处理 ${result.done ?? 0}/${result.total ?? 0}）`
+  }
+  const skipped = result.skipped ? `（跳过 ${result.skipped}）` : ''
+  return `批量验证完成：有效 ${result.valid} · 无效 ${result.invalid} · 异常 ${result.error}${skipped}`
+})
 
-watch(
-  () => vaultStore.batch.result,
-  (result) => {
-    if (result) batchDialog.value = true
-  },
-)
-
-function closeBatchDialog() {
+/** 关掉结果横幅 = 认掉这次结果；下一次验证开始时横幅会自然重新出现。 */
+function closeBatchResult() {
   vaultStore.batch.result = null
+}
+
+function goTasks() {
+  router.push('/tasks')
 }
 
 async function handleLock() {
@@ -321,52 +331,42 @@ async function handleMinimize() {
         </div>
       </el-header>
 
+      <!-- 批量验证横幅：不阻塞、不遮罩，用户仍可切页 / 翻凭据 / 去「任务」页 -->
+      <el-alert
+        v-if="batchBannerVisible"
+        class="batch-banner"
+        :type="batchBannerType"
+        :closable="!vaultStore.batch.running"
+        show-icon
+        @close="closeBatchResult"
+      >
+        <template #default>
+          <span class="batch-banner-row">
+            <span class="batch-banner-text">
+              <template v-if="vaultStore.batch.running">
+                正在批量验证
+                <strong>{{ vaultStore.batch.done }}/{{ vaultStore.batch.total || '—' }}</strong>
+                · 当前：<strong>{{ vaultStore.batch.currentName || '准备中…' }}</strong>
+              </template>
+              <template v-else>{{ batchSummary }}</template>
+            </span>
+            <el-button
+              v-if="vaultStore.batch.running"
+              size="small"
+              text
+              type="primary"
+              @click="goTasks"
+            >查看任务</el-button>
+          </span>
+        </template>
+      </el-alert>
+
       <el-main class="layout-main">
         <router-view v-slot="{ Component }">
           <component :is="Component" />
         </router-view>
       </el-main>
     </el-container>
-
-    <el-dialog
-      v-model="batchDialog"
-      title="批量验证"
-      width="520px"
-      :close-on-click-modal="false"
-      :close-on-press-escape="!vaultStore.batch.running"
-      :show-close="!vaultStore.batch.running"
-      @closed="closeBatchDialog"
-    >
-      <div v-if="vaultStore.batch.running" class="batch-progress">
-        <el-progress :percentage="batchPercent" :stroke-width="14" striped striped-flow />
-        <p class="batch-line">
-          正在验证：<strong>{{ vaultStore.batch.currentName || '准备中…' }}</strong>
-          <span class="batch-count">{{ vaultStore.batch.done }} / {{ vaultStore.batch.total || '—' }}</span>
-        </p>
-        <p class="batch-hint">验证过程中请勿关闭应用，可在后台继续运行。</p>
-      </div>
-
-      <div v-else-if="vaultStore.batch.result" class="batch-result">
-        <el-result icon="success" title="批量验证完成">
-          <template #sub-title>
-            <div class="result-grid">
-              <span>总计 <strong>{{ vaultStore.batch.result.total }}</strong></span>
-              <span class="is-valid">有效 {{ vaultStore.batch.result.valid }}</span>
-              <span class="is-invalid">失效 {{ vaultStore.batch.result.invalid }}</span>
-              <span class="is-error">错误 {{ vaultStore.batch.result.error }}</span>
-              <span v-if="vaultStore.batch.result.skipped" class="is-skipped">
-                跳过 {{ vaultStore.batch.result.skipped }}（需手动验证）
-              </span>
-            </div>
-          </template>
-        </el-result>
-      </div>
-
-      <template #footer>
-        <el-button v-if="vaultStore.batch.running" disabled loading>验证中…</el-button>
-        <el-button v-else type="primary" @click="batchDialog = false">关闭</el-button>
-      </template>
-    </el-dialog>
   </el-container>
 </template>
 
@@ -591,48 +591,30 @@ async function handleMinimize() {
   background: var(--el-bg-color-page);
 }
 
-.batch-progress {
-  padding: 4px 2px;
+/* 批量验证横幅：贴在内容区顶部，宽满、不抢占滚动的 el-main */
+.batch-banner {
+  flex-shrink: 0;
+  border-radius: 0;
 }
 
-.batch-line {
+.batch-banner :deep(.el-alert__content) {
+  width: 100%;
+  padding-right: 4px;
+}
+
+.batch-banner-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin: 16px 0 4px;
-}
-
-.batch-count {
-  color: var(--el-text-color-secondary);
+  gap: 12px;
   font-size: 13px;
+  line-height: 20px;
 }
 
-.batch-hint {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-  margin: 0;
-}
-
-.result-grid {
-  display: flex;
-  gap: 18px;
-  justify-content: center;
-  flex-wrap: wrap;
-}
-
-.result-grid .is-valid {
-  color: var(--el-color-success);
-}
-
-.result-grid .is-invalid {
-  color: var(--el-color-danger);
-}
-
-.result-grid .is-error {
-  color: var(--el-color-warning);
-}
-
-.result-grid .is-skipped {
-  color: var(--el-text-color-secondary);
+.batch-banner-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

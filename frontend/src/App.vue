@@ -56,6 +56,7 @@ onMounted(() => {
   disposers.push(
     onEvent(EVENTS.pluginsChanged, () => guard(vaultStore.fetchPlugins())),
   )
+  disposers.push(onEvent(EVENTS.batchStarted, (detail) => vaultStore.applyBatchStarted(detail)))
   disposers.push(onEvent(EVENTS.batchProgress, (detail) => vaultStore.applyBatchProgress(detail)))
   disposers.push(
     onEvent(EVENTS.batchDone, (detail) => guard(vaultStore.applyBatchDone(detail))),
@@ -79,6 +80,8 @@ onMounted(() => {
   disposers.push(() => document.removeEventListener('visibilitychange', handleVisibility))
 
   guard(appStore.refreshTray())
+  // 页面重载会丢掉已推送的批量验证事件；这里从任务列表兜一次底，避免横幅「凭空消失」
+  guard(vaultStore.resumeBatchFromTasks())
 })
 
 onBeforeUnmount(() => {

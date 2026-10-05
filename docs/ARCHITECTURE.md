@@ -243,6 +243,13 @@ plugins/
 **运行参数（`backend/verify_options.py`）**：批量验证的**并发线程数**（默认 8，1–32）与**请求超时**（默认 20 秒，5–300 秒）在「批量验证」对话框里就地调整，是这两项的**单一事实来源**——持久化到 `settings` 表的 `batch_concurrency` / `verify_timeout`，前端取值范围也由它下发（`limits()`），避免前后端各写一份常量。两条消费路径：
 
 - **并发数**：`scheduler.batch_verify()` 内层 `ThreadPoolExecutor(max_workers=verify_options.concurrency(...))`，取 `min(并发设置, 待验证条数)`；手动批量传本次选择，定时任务不传 → 读已保存的设置。
+- **登记成后台任务**：批量验证会建一条 `kind=batch_verify` 的 `tasks` 任务，把 done/total 喂给任务表
+  （「任务」页因此能看到进度并**随时取消**）。取消是协作式的：消费循环每收一个结果前查一次
+  `tasks.should_cancel()`，命中就 `pool.shutdown(wait=False, cancel_futures=True)` 收尾
+  （正在跑的那几个让它自己跑完，不强杀线程），任务标成「已取消」并如实写「已处理 n/m」。
+- **三个事件**（前端据此做横幅与行内 loading，不用模态弹窗把人按在前台）：
+  `vault:batch_verify_started`（带本次要验证的凭据 id 列表）、`..._progress`、`..._done`
+  （取消时额外带 `canceled` 与 `done`）。
 - **超时**：同样借环境变量下发（插件不允许 `import backend`）——`apply_timeout()` 把值写入 `VAULT_TIMEOUT`，插件侧 `timeout()` 每次发请求时读取，改完立即生效。外部显式设置的同名变量优先。机制与 `VAULT_PROXY` 同构，见 `docs/PLUGIN_GUIDE.md` 第 2.3 节。
 
 **单条验证的并发保护**：`verify_single_credential()` 外层套了一个**同 id in-flight 集合**

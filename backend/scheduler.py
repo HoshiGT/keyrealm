@@ -17,6 +17,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from . import database as db
 from . import logger
 from . import plugin_manager
+from . import tasks
 from . import verify_options
 
 _log = logger.get_logger(__name__)
@@ -165,17 +166,37 @@ def batch_verify(
                     {"total": 0, "valid": 0, "invalid": 0, "error": 0, "skipped": skipped})
         return
 
+    # 批量验证登记成一条**后台任务**：界面上只弹一条横幅提示，进度在「任务」页看。
+    # 不再用「不可关闭的模态弹窗」把用户按在前台（那是「卡住」的来源）。
+    task = tasks.create(
+        "batch_verify",
+        "批量验证（定时）" if trigger_type == "schedule" else "批量验证",
+    )
+    task_id = task["id"]
+    should_cancel = tasks.should_cancel(task_id)
+    # 前端据此把对应条目的「验证」按钮置成 loading，避免重复点
+    _push_event("vault:batch_verify_started", {
+        "total": total,
+        "skipped": skipped,
+        "credentials": [c["id"] for c in creds],
+    })
+
     def _run():
         valid = invalid = error = 0
         done = 0
+        canceled = False
         workers = min(verify_options.concurrency(concurrency), total)
         # 每个凭据一个任务并发执行；结果在 as_completed 的消费线程里单线程汇总
-        with ThreadPoolExecutor(max_workers=workers) as pool:
+        pool = ThreadPoolExecutor(max_workers=workers)
+        try:
             fut_cred = {
                 pool.submit(verify_single_credential, c["id"], trigger_type): c
                 for c in creds
             }
             for fut in as_completed(fut_cred):
+                if should_cancel():
+                    canceled = True          # 用户点了「取消」：不再收新的结果
+                    break
                 cred = fut_cred[fut]
                 try:
                     result = fut.result()
@@ -189,12 +210,30 @@ def batch_verify(
                 else:
                     error += 1
                 done += 1
+                tasks.progress(task_id, done, total, cred.get("name", ""))
                 _push_event("vault:batch_verify_progress", {
                     "current": done,
                     "total": total,
                     "credential_name": cred.get("name", ""),
                     "status": status,
                 })
+        finally:
+            # 取消时不再等队列里那些（正在跑的几个让它自己跑完，不强杀线程）
+            pool.shutdown(wait=not canceled, cancel_futures=canceled)
+
+        if canceled:
+            message = f"已取消（已处理 {done}/{total}）"
+            tasks.finish(task_id, ok=False, output=message, canceled=True)
+            _push_event("vault:batch_verify_done", {
+                "total": total, "valid": valid, "invalid": invalid, "error": error,
+                "skipped": skipped, "canceled": True, "done": done,
+            })
+            _log.info("批量验证已取消（触发: %s）：已处理 %d/%d", trigger_type, done, total)
+            return
+
+        summary = (f"共 {total} 条：有效 {valid}，无效 {invalid}，异常 {error}"
+                   + (f"，跳过 {skipped}" if skipped else ""))
+        tasks.finish(task_id, ok=True, output=summary)
         _push_event("vault:batch_verify_done", {
             "total": total, "valid": valid, "invalid": invalid, "error": error, "skipped": skipped,
         })

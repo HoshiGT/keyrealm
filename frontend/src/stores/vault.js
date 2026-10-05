@@ -16,6 +16,9 @@ const emptyBatch = () => ({
   total: 0,
   currentName: '',
   status: '',
+  // 本次要验证的凭据 id（由 batch_started 事件给）。让对应行的「验证」按钮转成 loading，
+  // 免得用户对着已被后台处理的条目重复点。
+  ids: [],
   result: null,
 })
 
@@ -270,11 +273,47 @@ export const useVaultStore = defineStore('vault', {
       this.batch.status = detail.status || ''
     },
 
+    /** 批量验证开始：记下本次涉及的凭据 id（行内按钮据此转 loading），并顺手重置进度，
+     *  免得上一次的计数在第一条进度到达前先显示出来。 */
+    applyBatchStarted(detail) {
+      if (!detail) return
+      this.batch.running = true
+      this.batch.done = 0
+      this.batch.total = detail.total ?? 0
+      this.batch.currentName = ''
+      this.batch.status = ''
+      this.batch.ids = Array.isArray(detail.credentials) ? detail.credentials : []
+    },
+
     async applyBatchDone(detail) {
       this.batch.running = false
+      // 结束时必须清掉：留着会让整批条目一直显示 loading，直到下一次批量验证
+      this.batch.ids = []
       this.batch.result = detail || null
       await this.fetchCredentials()
       return this.batch.result
+    },
+
+    /** 重载页面后把仍在跑的批量验证接回界面。
+     *  started / progress 都是「推送」事件，重载后已经错过，只能拿一次任务快照兜底。
+     *  任务里不存凭据 id，所以行内 loading 恢复不了——这里只保证横幅还能显示进度。 */
+    async resumeBatchFromTasks() {
+      if (this.batch.running) return
+      let list = []
+      try {
+        list = await api.listTasks()
+      } catch {
+        // 未解锁 / 后端未就绪：静默，批量验证本来就是后台自己的事
+        return
+      }
+      const task = (Array.isArray(list) ? list : []).find(
+        (item) => item && item.kind === 'batch_verify' && item.status === 'running',
+      )
+      if (!task) return
+      this.batch.running = true
+      this.batch.done = Number(task.current) || 0
+      this.batch.total = Number(task.total) || 0
+      this.batch.currentName = task.text || ''
     },
   },
 })

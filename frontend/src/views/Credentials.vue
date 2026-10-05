@@ -48,6 +48,21 @@ const batchConcurrency = ref(8)
 const batchTimeout = ref(20)
 const batchLimits = ref({ concurrency_range: [1, 32], timeout_range: [5, 300] })
 
+// 批量验证运行期间列表进入「只读」：新增、批量验证、行内动作一律锁上，免得验证还没结束
+// 就把条目改掉/删掉，让结果与界面对不上。**刻意不禁导航**——用户就是要能在后台跑的同时
+// 去「任务」页看进度。所有互斥都由这一个 computed 驱动，不散着写。
+const batchRunning = computed(() => vaultStore.batch.running)
+
+// 本次批量验证覆盖的凭据 id（后端 batch_verify_started 事件下发）。
+// 用字符串归一后比较：id 走一趟 JSON 之后到底是数字还是字符串不值得赌。
+const batchVerifyIds = computed(
+  () => new Set((vaultStore.batch.ids || []).map((id) => String(id))),
+)
+
+function isBatchVerifying(id) {
+  return batchVerifyIds.value.has(String(id))
+}
+
 /** 该类型是否允许批量验证（manifest batch_verify=false 的类型只能手动单条验证） */
 function canBatchVerify(type) {
   const plugin = pluginFor(type)
@@ -69,6 +84,8 @@ const pickIndeterminate = computed(
 )
 
 function openBatchPick() {
+  // 批量验证进行中不允许再开一轮（按钮也已置灰，这里防的是快捷键/程序化入口）
+  if (batchRunning.value) return
   batchPickIds.value = pickableCredentials.value.map((c) => c.id)
   batchPickVisible.value = true
   // 回填上次保存的并发数 / 超时与取值范围（失败不阻塞对话框，沿用本地默认值）
@@ -1515,8 +1532,8 @@ onMounted(async () => {
         :loading="vaultStore.loadingCredentials"
         @click="load"
       >刷新</el-button>
-      <el-button :icon="Refresh" :loading="batchStarting" @click="openBatchPick">批量验证</el-button>
-      <el-button type="primary" :icon="Plus" @click="openCreate">添加凭据</el-button>
+      <el-button :icon="Refresh" :loading="batchStarting" :disabled="batchRunning" @click="openBatchPick">批量验证</el-button>
+      <el-button type="primary" :icon="Plus" :disabled="batchRunning" @click="openCreate">添加凭据</el-button>
     </div>
 
     <el-card shadow="never">
@@ -1676,6 +1693,7 @@ onMounted(async () => {
                 <el-button
                   v-if="pluginFor(row.credential_type)?.has_actions"
                   size="small"
+                  :disabled="batchRunning"
                   @click="openActions(row, $event)"
                 >
                   操作
@@ -1684,13 +1702,14 @@ onMounted(async () => {
                   size="small"
                   type="primary"
                   plain
-                  :loading="verifyingIds.includes(row.id)"
+                  :loading="verifyingIds.includes(row.id) || isBatchVerifying(row.id)"
+                  :disabled="batchRunning || isBatchVerifying(row.id)"
                   @click="verifyRow(row)"
                 >
                   验证
                 </el-button>
-                <el-button size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
-                <el-button size="small" type="danger" plain :icon="Delete" @click="removeRow(row)" />
+                <el-button size="small" :icon="Edit" :disabled="batchRunning" @click="openEdit(row)">编辑</el-button>
+                <el-button size="small" type="danger" plain :icon="Delete" :disabled="batchRunning" @click="removeRow(row)" />
               </div>
             </template>
           </el-table-column>
@@ -1708,6 +1727,7 @@ onMounted(async () => {
         <el-checkbox
           :model-value="pickAllChecked"
           :indeterminate="pickIndeterminate"
+          :disabled="batchRunning"
           @change="onPickAll"
         >全选</el-checkbox>
         <span class="pick-count text-muted">
@@ -1749,7 +1769,7 @@ onMounted(async () => {
             class="pick-row"
             :class="{ 'is-disabled': !canBatchVerify(row.credential_type) }"
           >
-            <el-checkbox :value="row.id" :disabled="!canBatchVerify(row.credential_type)">
+            <el-checkbox :value="row.id" :disabled="batchRunning || !canBatchVerify(row.credential_type)">
               <span class="pick-name">{{ row.name }}</span>
               <span class="pick-type text-muted">{{ typeLabel(row.credential_type) }}</span>
             </el-checkbox>
@@ -1766,7 +1786,7 @@ onMounted(async () => {
       </div>
       <template #footer>
         <el-button @click="batchPickVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="!batchPickIds.length" @click="startPickedBatch">
+        <el-button type="primary" :disabled="!batchPickIds.length || batchRunning" @click="startPickedBatch">
           验证 {{ batchPickIds.length }} 条
         </el-button>
       </template>

@@ -107,6 +107,8 @@ export const EVENTS = {
   credentialsChanged: 'vault:credentials_changed',
   pluginsChanged: 'vault:plugins_changed',
   actionStream: 'vault:action_stream',
+  // 批量验证开始：detail 带本次要验证的凭据 id 列表，前端据此把对应行的「验证」按钮置成 loading
+  batchStarted: 'vault:batch_verify_started',
   batchProgress: 'vault:batch_verify_progress',
   batchDone: 'vault:batch_verify_done',
   mcpStatus: 'vault:mcp_status',
