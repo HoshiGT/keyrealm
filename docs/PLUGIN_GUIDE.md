@@ -20,7 +20,7 @@ plugins/
 │   ├── deepseek/
 │   │   ├── manifest.json
 │   │   └── plugin.py
-│   └── …（共 18 个子插件）
+│   └── …（共 20 个子插件）
 ├── api/                        # 类别目录（API 服务）
 │   ├── category.json
 │   ├── api_common.py
@@ -32,7 +32,8 @@ plugins/
 │   ├── dns_common.py
 │   ├── dnspod/
 │   ├── duckdns/
-│   └── godaddy/
+│   ├── godaddy/
+│   └── cloudflare/
 ├── dev/                        # 类别目录（开发者平台）
 │   ├── category.json
 │   ├── dev_common.py
@@ -52,12 +53,10 @@ plugins/
 │   ├── category.json
 │   ├── cloud_common.py
 │   ├── aliyun/
-│   ├── tencentcloud/
-│   └── cloudflare/
+│   └── tencentcloud/
 ├── exchange/                   # 类别目录（交易所）
 │   ├── category.json
 │   ├── exchange_common.py
-│   ├── ht/
 │   ├── okx/
 │   └── binance/
 ├── mail/                       # 类别目录（邮箱）
@@ -123,10 +122,12 @@ plugins/
 | 字段 | 说明 |
 |------|------|
 | `credential_type` | **插件身份，全局唯一**。它是数据库插件表的 UNIQUE 键、模块缓存键、凭据与插件的关联键。同类插件约定前缀：`llm_<厂商>`、`api_<服务>` |
-| `fields[].type` | `text` / `url` / `password` / `textarea` / `select`（配 `options`）/ `number` / `checkbox` |
+| `fields[].type` | `text` / `url` / `password` / `textarea` / `select`（配 `options`）/ `number` / `checkbox` / `model`（**可下拉可自由输入**的模型名，候选来自 `list_models`，取不到也能手打） |
+| `fields[].preset` | 可选，是否允许作为「类别/插件默认设置」被预设。**默认允许**（只要非敏感）；填 `false` 可排除该字段。**敏感字段永远不可预设**（默认值表是明文列） |
+| `fields[].hint` | 可选，字段下方的一行灰字说明。用于解释开关或高级项（如 LLM 的「余额未知时发一次对话探测」），前端 `CredentialForm.vue` 渲染为 `.field-hint` |
 | `fields[].sensitive` | `true` 的字段加密存储（AES-256-GCM），列表页只显示掩码（`crypto.mask_secret`，形如 `sk-123…cdef`），也参与重复凭据检测 |
 | `icon` | 服务显示图标。填 emoji（如 `🐋`）直接使用；也可填插件目录内的图片文件名（如 `"logo.png"`，支持 png/jpg/svg/webp/ico/gif），后端读取为 data URL 返回（`icon_image` 字段），前端优先展示图片，缺省回退 emoji `🔑` |
-| `batch_verify` | 是否参与批量验证，默认 `true`。**无法自动化验证或有写副作用**的插件应设为 `false`（如 `duckdns`、`wechat_ilink`、`ht`）：前端在选中该类型时禁用「批量验证」按钮，只能逐条手动验证；后端批量时也会跳过这些类型并在结果里统计「跳过 N」 |
+| `batch_verify` | 是否参与批量验证，默认 `true`。**无法自动化验证或有写副作用**的插件应设为 `false`（如 `duckdns`、`wechat_ilink`）：前端在选中该类型时禁用「批量验证」按钮，只能逐条手动验证；后端批量时也会跳过这些类型并在结果里统计「跳过 N」 |
 
 ---
 
@@ -136,6 +137,28 @@ plugins/
 应用启动时把它写入环境变量 `VAULT_PROXY`，各插件在发起请求时读取该变量（见 `plugins/<类别>/<类别>_common.py` 的 `make_client()`）。
 解析优先级：`VAULT_PROXY` > `ALL_PROXY`/`all_proxy` > `HTTPS_PROXY`/`https_proxy`；
 若 `VAULT_PROXY` 由外部环境显式设置，则它优先于界面设置。socks5 需 `httpx[socks]`（`socksio`），已在 `requirements.txt` 声明。
+
+**多代理与「按调用生效」的覆盖值**：代理现在可以配多个（各自取名，存 `proxies` 表）。
+解析按优先级逐层找：**本条凭据 > 该插件预设 > 所属类别预设 > 全局默认**；
+「跟随上层设置」= 本层不指定、继续往上找（改上层预设，已有凭据会跟着变）。
+批量验证是并发的，所以不能靠改环境变量——
+框架用 `backend/vault_proxy_ctx.py` 提供一条**线程隔离**的覆盖通道，启动时以固定别名注册进
+`sys.modules["vault_proxy_ctx"]`。各 `<类别>_common.py` 的 `proxy()` 会**先查它**：
+
+```python
+def proxy():
+    ctx = sys.modules.get("vault_proxy_ctx")     # 脱离主程序单独跑时取不到 → 退回环境变量
+    if ctx is not None:
+        value = ctx.current()
+        if value is not ctx.UNSET:
+            return None if value is ctx.DIRECT else value   # DIRECT = 本次强制直连，压过所有环境变量
+    for key in ("VAULT_PROXY", "ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"):
+        ...
+```
+
+**子插件什么都不用做**：`make_client()` 签名没变，它会自动带上本次调用该用的代理。
+框架在 `plugin_manager` 的四个入口（验证 / 简易操作 / 模型列表 / 流式操作）设好作用域，
+所以单条、批量、MCP、流式四条路径都正确且互不干扰。
 
 > **打包时注意**：httpx 是在**函数体内** `import socksio` 的，构建机没装这个包时
 > PyInstaller 既不报错也不会打包它，症状是 exe 里一用 socks5 代理就抛
@@ -164,8 +187,107 @@ plugins/
 | 使用率（plan/额度制） | `{"usage_rate": 0.52}` | 使用率 52%（已用 ÷ 总额度，按服务适配） |
 | 其它可读字段 | 如 `organization` / `domain_count` / `account_id` | `组织 Xxx` / `域名数 1` / `账号 ID …` |
 
-- **LLM 类**：附加信息只展示**余额**；无余额概念的 plan 账号展示**使用率**。余额由 `llm_common` 按厂商 `balance_url`/`balance_kind` best-effort 查询——目前 DeepSeek / Moonshot 有余额接口，OpenRouter 用 `/credits` 计算余额与使用率；OpenAI / Anthropic / Gemini / 智谱 / 中转等多数无公开余额接口，附加信息为空。
+- **LLM 类**：附加信息只展示**余额**；无余额概念的 plan 账号展示**使用率**。余额由 `llm_common` 按厂商 `balance_url`/`balance_kind` best-effort 查询——目前 DeepSeek / Moonshot 有余额接口，OpenRouter 用 `/credits` 计算余额与使用率；OpenAI / Anthropic / Gemini / 智谱等多数无公开余额接口，附加信息为空。
+- **金额合理性闸**：one-api / new-api 类中转站在「不限额」时会把硬限额（`hard_limit_usd`）填成 `99999999.99`、`1e8` 这类哨兵值，拿它去减消耗就会得出 `99999996.47` 这种假余额。所有要展示的金额都必须先过 `llm_common.plausible_amount()`（有限数值且绝对值 < `AMOUNT_LIMIT = 1e7`），不通过就**宁可不显示**。新增带余额的厂商/中转插件时务必一并加这道闸。
+- **中转站**：`openai_compatible`（通用 OpenAI 兼容）与 `newapi`（New API 中转站专用）都走 one-api 兼容的 `/dashboard/billing/subscription` + `/dashboard/billing/usage`。New API 的 `hard_limit_usd` 是**令牌总额度（剩余 + 已用）**，`total_usage` 单位是**美分**，故 `余额 = hard_limit_usd − total_usage / 100`；命中哨兵值则按「不限额度」处理，改为展示 `套餐 不限额度` 而非数字。
 - 无信息量的字段（`object` / `type` / `auth_mode` / 原始时间戳等）不展示，前端 `extraInfo()` 统一处理。
+
+---
+
+## 2.3 验证超时
+
+单个请求的连接/读取超时可调，入口在**「凭据管理 → 批量验证」对话框**（默认 20 秒，
+范围 5–300 秒），持久化到 settings 表的 `verify_timeout`。与代理同一套机制：应用启动与
+保存设置时把它写入环境变量 `VAULT_TIMEOUT`，插件侧读取——**插件不允许 `import backend`**，
+环境变量是唯一的参数通道。
+
+各 `<类别>_common.py` 用 `timeout()` 取代裸常量 `TIMEOUT`：
+
+```python
+def timeout() -> float:
+    """实际使用的超时秒数：VAULT_TIMEOUT（应用设置写入）> 模块默认 TIMEOUT。"""
+    raw = os.environ.get("VAULT_TIMEOUT")
+    ...
+```
+
+用法：`make_client()` 里 `httpx.Client(timeout=timeout(), ...)`、`guarded()` 的超时提示
+`f"请求超时（{int(timeout())} 秒）"`、以及非 httpx 的插件（`mail_smtp` 用标准库
+`smtplib`/`imaplib`，默认 15 秒）各自在连接处传 `timeout()`。
+
+- `timeout()` **每次发请求时读取**，所以改完立即生效、无需重启；
+- `VAULT_TIMEOUT` 由外部环境显式设置时优先于设置页的值（与 `VAULT_PROXY` 同约定）；
+- 模块里的 `TIMEOUT` 常量退化为**默认值**，不再是唯一来源。源码见 `backend/verify_options.py`。
+
+---
+
+## 2.4 欠费探测（quota_probe）
+
+**问题**：`GET /v1/models` 这类探针只证明「Key 认证通过」，证明不了「账户有钱」。厂商没有
+余额接口时（OpenAI / Anthropic / Gemini / 智谱 …），或中转站令牌是「不限额度」哨兵
+（见 §2.2）时，凭据明明有效、实际一发对话就报欠费——界面却显示「凭证有效」。
+
+**办法**：给这类凭据**可选地**补发一次 `max_tokens=1` 的最小对话请求，用真实计费路径换一个
+确定结论。这是**凭据层面**的配置：LLM 插件的 manifest 里声明两个字段，用户在「新增/编辑凭据」
+表单里逐条勾选，默认**关闭**（会真实消耗极少量额度）。
+
+| manifest 字段 | 类型 | 含义 |
+|---------------|------|------|
+| `probe_chat` | `checkbox` | 余额未知时是否发一次最小对话探测，默认 false |
+| `probe_model` | `model` | 探测模型（可下拉可手输）；留空 = 自动从模型列表挑一个便宜的 |
+
+后端在验证通过、且 `account_info` 里**没有** `balance` 也没有 `usage_rate` 时，才会把机会交给
+插件的 `quota_probe`（见 `backend/plugin_manager._apply_quota_probe`）。有余额的凭据不会再花
+这一发请求。
+
+**接入方式**
+
+*通用协议*（OpenAI / Anthropic / Gemini）——子插件一行即可（`<对话协议>` 是
+`openai` / `anthropic` / `gemini`，注意不是模块里的 `PROTOCOL` 常量）：
+
+```python
+from llm_common import VerifyResult, guarded, make_quota_probe
+...
+quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai")
+```
+
+*鉴权或端点非通用格式*——插件**自己实现** `quota_probe(data)`，复用 `llm_common` 提供的
+读取与结论辅助函数即可，不必重复造轮子：
+
+```python
+from llm_common import probe_requested, probe_model, quota_ok, quota_insufficient
+from llm_protocols import is_insufficient_balance
+
+def quota_probe(data: dict):
+    if not probe_requested(data):           # 该凭据是否勾选了 probe_chat
+        return None
+    ...                                     # 自己的鉴权 + 最小对话请求
+    if 请求成功:
+        return quota_ok()
+    if 厂商错误码/文案表示欠费:
+        return quota_insufficient()
+    return None                             # 其它情况一律不下结论
+```
+
+实例：`plugins/llm/wenxin/plugin.py`——文心要用 `API_KEY|SECRET_KEY` 换 `access_token`、
+聊天端点还带模型后缀，通用实现拼不出来；且它有个坑：**免费档模型（ernie-speed / lite / tiny）
+不计费，欠费时照样能对话**，所以自动选型只挑付费档（`ernie-3.5-8k`）。
+
+`quota_probe(data)` 的返回约定（后端消费，插件不必自己判断展示）：
+
+| 返回 | 含义 |
+|------|------|
+| `None` | 未开启探测 / 无结论 / 实测未发现异常（后端什么都不改） |
+| `quota_ok()` → `{"account_info": {"chat_probe": "可用"}}` | 实测通过 →「附加信息」补一项「实测 可用」 |
+| `quota_insufficient()` → `{"message": "..."}` | 实测发现欠费 → 替换状态说明（`status` 仍是 `valid`，欠费 ≠ 凭据失效） |
+
+判定细节（`llm_protocols.quota_chat_probe`，通用实现）：
+
+- **模型选择**：凭据里指定的模型 > 自动挑便宜的（优先名字含 `flash`/`lite`/`mini`/`nano`/
+  `haiku`/`turbo` 等，并排除 `embed`/`rerank`/`tts`/图像类）；候选最多试 3 个，模型不存在就换下一个。
+- **结论只认两种**：请求成功 → 可用；错误含 `402` 或 `余额不足`/`insufficient` 等关键字 → 欠费。
+  其它错误（401/403/429/模型不存在）**不下结论**，避免误报。自建实现请沿用同一原则。
+- **开关与模型从凭据数据里读**（`data["probe_chat"]` / `data["probe_model"]`），不经环境变量——
+  数据本来就在插件手里。插件侧没有 `quota_probe` 属性时后端直接跳过，故**接入是可选的**。
 
 ---
 
@@ -230,44 +352,165 @@ def get_display_summary(data):
 - `account_info` 为可选 dict，验证通过后回传账户信息（见「附加信息」约定），前端凭据列表会展示。
 - 插件模块**不应导入 backend 包**，保持可脱离主程序独立运行（便于直接脚本调试）。
 
-### 3.1 可选「简易操作」（actions / run_action）
+### 3.1 可选「简易操作」（actions / run_action / capabilities）
 
-插件可选实现两个函数，为凭据提供额外操作（前端凭据行的「操作」按钮）：
+插件可选实现这几个函数，为凭据提供额外操作（前端凭据行的「操作」按钮）：
 
-- `actions(data) -> list[dict]`：声明可用操作，每项形如
-  `{"id": "chat", "name": "简单对话", "kind": "chat", "model": "<默认模型>"}`；
-  返回空列表表示无操作（前端不显示按钮）。
-- `run_action(action_id, params, data) -> dict`：执行操作，返回
-  `{"ok": True, "output": "..."}` 或 `{"ok": False, "error": "..."}`。
+| 函数 | 必需 | 作用 |
+|------|------|------|
+| `actions(data) -> list[dict]` | ✅ | 声明有哪些操作；返回 `[]` 表示没有（前端不显示按钮）。**必须是本地、便宜、无副作用的**——它只负责渲染菜单 |
+| `run_action(action_id, params, data) -> dict` | ✅ | 执行操作 |
+| `capabilities(data) -> dict` | 可选 | **探测该凭据真正能用哪些操作**（可联网）；没实现 = 全部可用 |
+| `list_models(data) -> list` | 可选 | 可用模型名列表（LLM「简单对话」把它变成可搜索下拉） |
+| `stream_action(action_id, params, data, on_delta)` | 可选 | 流式执行；未实现时自动回退 `run_action` |
 
-例：LLM 厂商插件复用 `llm_protocols.chat_completion(...)` 提供「简单对话」（`kind: "chat"`）；
-DNS 插件提供「查看/修改解析记录」、SMTP 插件提供「查看收件箱」（`kind: "form"`）。
+#### 操作项（action）的字段
 
-**操作项（action）字段**：
+| 字段 | 适用 | 说明 |
+|------|------|------|
+| `id` / `name` | 全部 | 标识与显示名（`run_action` 按 id 分发） |
+| `kind` | 全部 | **前端渲染方式：`chat`（对话气泡）/ `form`（动态表单）/ `list`（表格 + 行内按钮）** |
+| `group` / `order` / `description` | 全部 | 可选。多个操作时弹选择菜单，按 `group` 分组、`order` 排序（小的在前） |
+| `fields` | `form` / `list` | 输入项：`[{key,label,type(text/password/select/textarea/number),default,placeholder,options,required}]`。**`list` 也能带 fields**：点「拉取/刷新」时把表单值作为 `params` 传进 `run_action` |
+| `submit` | `form` / `list` | 提交/刷新按钮文案（默认「运行」） |
+| `write` | 全部 | 可选布尔，声明为**会改动远端数据**。前端在**提交前**弹二次确认（只列非敏感字段值） |
+| `model` | `chat` | 默认模型名（用户可改） |
+| `columns` | `list` | `[{key,label,width?,mono?(等宽),type?("text"/"number"/"tag")}]` |
+| `row_actions` | `list` | 每行的按钮，见 §3.1.2 |
+| `empty_text` | `list` | 空列表文案 |
+| `save_to` | `form` / `list` | 下载类操作，见 §3.1.3 |
 
-| 字段 | 说明 |
-|------|------|
-| `id` / `name` | 操作标识与显示名（`run_action` 按 id 分发） |
-| `kind` | 前端渲染方式：`chat`（对话气泡）或 `form`（动态表单 + 文本输出） |
-| `fields` | `kind=form` 时的输入项：`[{key,label,type(text/password/select/textarea),default,placeholder,options,required}]` |
-| `submit` | 提交按钮文案（默认「运行」） |
-| `model` | `kind=chat` 时的默认模型（可编辑） |
-| `write` | 可选布尔，**声明为会改动远端数据的写操作**（如新增/修改解析记录、发送消息）。前端在执行前弹二次确认框（列出非密码字段的取值），确认后才提交。只读操作不填。 |
+`run_action` 的返回：
 
-`run_action(action_id, params, data)` 中 `params` 即用户在表单里填的值（或对话的 `{model, messages}`），
-返回 `{"ok": True, "output": "多行文本"}` 或 `{"ok": False, "error": "..."}`。
-**必须在整体 try/except 内，绝不抛异常；输出里不得回显密钥/密码/token。**
+- 普通：`{"ok": True, "output": "多行文本"}` 或 `{"ok": False, "error": "人话原因"}`
+  —— **失败时 `error` 会原样展示给用户**，别写「执行失败」这种没信息量的。
+- **列表**：`{"ok": True, "rows": [{"<列key>": 值, ...}], "columns"?, "row_actions"?, "empty_text"?, "total"?, "has_more"?}`
+  —— `rows` 里每项的键就是 `columns` 的 `key`；后四个可以在返回里**覆盖声明**（做动态列）。
 
-> **输出净化（后端统一兜底）**：即使插件未自行脱敏，`backend/api.py` 也会在返回前把该凭据
-> 所有 `sensitive` 字段的明文（长度 ≥ 6）在 `output`/`error`/流式 `delta` 中替换成 `***`。
-> 因此密钥在异常文本、URL 回显等处的泄露会被全局拦截；插件侧仍应尽量不自造含密钥的错误串。
+#### 3.1.1 `kind: "list"` 长什么样
 
-可选再实现 `list_models(data) -> list`：返回该凭据可用的模型名列表。
-LLM「简单对话」会据此把模型输入框变成**可搜索下拉**（失败/无权限时回退为手动输入）。
+```
+╔══════════════════════════════════════════╗
+║ 站点列表                          [刷新] ║   ← submit 文案
+╠══════════════════════════════════════════╣
+║ 站点       记录数  状态      操作        ║   ← columns / row_actions
+║ a.com          12  正常     [解析][新增] ║
+║ b.com           3  待续费   [解析][新增] ║
+╚══════════════════════════════════════════╝
+```
+点「解析」会**下钻**到另一个 `list`（前端自动加面包屑与「返回」，返回时直接还原上一帧、不重新请求）；
+点「新增」会打开一个 `form`（自动预填当前行的域名）。加载中、空、出错各有独立表现，出错**不关弹窗**并提供「重试」。
 
-还可实现 `stream_action(action_id, params, data, on_delta) -> dict`：**流式**执行操作，
-每收到一段文本调用 `on_delta(text)`，返回结构同 `run_action`（含 `output` 全文）。
-LLM「简单对话」据此逐段显示；未实现时后端自动回退到 `run_action`（一次性返回）。
+#### 3.1.2 `row_actions`：行内按钮与下钻
+
+```python
+{"id": "list_records",          # 目标 action 的 id（必须在同一个 actions() 里声明）
+ "label": "解析",               # 按钮文字
+ "params": {"zone": "$row.zone", "type": "A"},   # 字面量 + `$row.<列key>` 模板
+ "write": True}                 # 可选：目标操作是写操作时带上
+```
+- `params` 里字符串形式的 `$row.<列key>` 会被替换成**该行**的值；**解析不到的行，按钮自动置灰**（绝不会把 `undefined` 传给你的插件）。
+- 点下去后按**目标 action 的 `kind`** 分派：`form` → 打开表单并预填；`list` → 下钻；其它 → 直接执行。
+- 所以**同一个 action 既可以被菜单直接调用、又可以被某一行调用**，靠 `params` 里有没有值来区分。例如
+  `add_record` 直接调用时让用户填域名，从某一行调用时自动带上域名。
+
+#### 3.1.3 `save_to`：下载类操作（会自动弹「另存为」）
+
+```python
+{"id": "download_repo", "name": "打包下载", "kind": "form",
+ "fields": [{"key": "repo", "label": "仓库", "required": True}],
+ "save_to": {"key": "path", "default_name": "$row.name.zip"}}
+```
+执行顺序由框架保证：**先确认（若 `write`）→ 前端弹系统「另存为」拿到路径 → 路径塞进 `params` → 调 `run_action`**。
+插件侧只负责把内容写进那个路径，用各类别 `*_common.py` 里的原子落盘辅助：
+
+```python
+path = (params.get("path") or "").strip()
+if not path:
+    return {"ok": False, "error": "未指定保存路径"}
+with make_client() as client:
+    with client.stream("GET", url, headers=headers) as resp:
+        ok, message = download_to_file(resp, path)
+        if not ok:
+            return {"ok": False, "error": message}
+return {"ok": True, "output": f"已保存到 {path}"}
+```
+
+- `download_to_file(response, path) -> (ok, message)`：**非 200 直接失败、不碰磁盘**；先写 `.part` 再 `os.replace` 原子替换，
+  避免留下「名字正常、内容截断」的半成品。**不要去插件里自己 open/write。**
+- **插件绝不要弹任何对话框**：流式路径上插件跑在新建线程里，跨线程弹窗会卡界面；而且对话框属于界面层的事。
+
+#### 3.1.4 `capabilities`：权限探测（隐藏用不了的操作）
+
+```python
+def capabilities(data: dict) -> dict:
+    """{"available": ["list_buckets", "list_instances"], "note": "具备云主机与对象存储权限"}"""
+```
+- 前端**只在点「操作」时调一次**（按凭据缓存，不落 localStorage），所以这里可以联网——但要**串行、每个都 try、给足超时**，别让用户等太久。
+- `available` 列出**当前凭据真正可用**的操作 id：**没权限的操作会被隐藏**；`available == []` 时前端把 `note` 展示给用户。
+- **探测失败必须 fail-open**：拿不准时**抛异常**（框架会兜住并当作「未知 → 全部可用」）或返回 `{"available": None}`。
+  **千万不要为了省事返回空列表** —— 那等于一次网络抖动就把用户能用的功能全藏了。
+- 三种状态在前端是可区分的：**没有操作** / **有操作但没权限（显示 note）** / **探测失败（全部展示）**。
+
+#### 3.1.5 可复用的辅助（各类别 `*_common.py` 里都有）
+
+| 辅助 | 用途 |
+|---|---|
+| `make_client()` / `safe_json()` / `body_snippet()` / `guarded()` / `timeout()` | 原有 |
+| `first_list(payload, *keys) -> list` | 从各家五花八门的 JSON 信封里捞第一个列表（`items`/`list`/`data`/`ZoneList`…）。**拿不准就显式传 keys** |
+| `download_to_file(response, path) -> (ok, message)` | 原子落盘（见 §3.1.3） |
+
+#### 3.1.6 一个可以照抄的最小骨架
+
+```python
+def actions(data: dict) -> list[dict]:
+    if not (data or {}).get("api_key"):
+        return []
+    return [
+        {"id": "list_things", "name": "资源列表", "kind": "list", "group": "查看", "order": 10,
+         "submit": "刷新",
+         "columns": [{"key": "name", "label": "名称"}, {"key": "id", "label": "ID", "mono": True}],
+         "row_actions": [{"id": "add_thing", "label": "新增", "params": {"name": "$row.name"}}],
+         "empty_text": "还没有资源"},
+        {"id": "add_thing", "name": "新增资源", "kind": "form", "group": "管理", "order": 20,
+         "write": True, "submit": "创建",
+         "fields": [{"key": "name", "label": "名称", "required": True},
+                    {"key": "type", "label": "类型", "type": "select", "options": ["A", "B"]}]},
+    ]
+
+
+def capabilities(data: dict) -> dict:
+    available, notes = [], []
+    try:
+        _call(data, "GET", "/ping")           # 只读探测
+        available.append("list_things")
+        available.append("add_thing")
+    except Exception:
+        notes.append("缺少读权限")
+    return {"available": available, "note": "；".join(notes)}
+
+
+def run_action(action_id: str, params: dict, data: dict) -> dict:
+    params = params or {}
+    try:
+        if action_id == "list_things":
+            payload = _call(data, "GET", "/things")
+            rows = [{"name": item.get("name", ""), "id": item.get("id", "")}
+                    for item in first_list(payload, "items", "data")]
+            return {"ok": True, "rows": rows, "total": len(rows)}
+        if action_id == "add_thing":
+            _call(data, "POST", "/things", json={"name": params.get("name"), "type": params.get("type")})
+            return {"ok": True, "output": f"已创建 {params.get('name')}"}
+        return {"ok": False, "error": "未知操作"}
+    except Exception as exc:  # noqa: BLE001 - 操作边界兜底
+        return {"ok": False, "error": f"执行失败：{type(exc).__name__}"}
+```
+
+#### 3.1.7 输出净化（后端统一兜底）
+
+即使插件未自行脱敏，`backend/api.py` 也会在返回前**递归**把该凭据所有 `sensitive` 字段的明文
+（长度 ≥ 6）替换成 `***` —— 覆盖 `output` / `error` / 流式 `delta`，**以及 `rows` 等任意嵌套结构**。
+插件侧仍应尽量不自造含密钥的错误串。
 
 ---
 
@@ -315,46 +558,86 @@ def get_display_summary(data):
 
 ## 5. 插件清单
 
-**llm/ 类别（18 个）**：openai、anthropic、deepseek、openrouter、gemini、minimax、
+**llm/ 类别（20 个）**：openai、anthropic、deepseek、openrouter、gemini、minimax、
 nvidia、moonshot、siliconflow（硅基流动）、dashscope（阿里百炼）、huawei_maas、
-glm（智谱）、glm_anthropic、doubao（豆包）、tongyi（通义）、wenxin（文心）、
-openai_compatible、anthropic_compatible（两类兼容中转）。
+glm（智谱）、doubao（豆包）、tongyi（通义）、wenxin（文心）、
+openai_compatible（第三方中转）、newapi（New API 中转站）、
+sensenova（商汤日日新，OpenAI 兼容）、codex（Codex / ChatGPT 登录态）、
+codebuddy（腾讯 CodeBuddy 客户端登录态）。
 
-**api/ 类别（3 个）**：firecrawl（网页抓取）、tavily（搜索）、coze（字节扣子）。
+> **同一厂商的多种接口格式不拆分插件**，而是合成一个。用不用「格式」字段取决于**key 是否按协议分权**：
+>
+> - **不分权就不设字段**——`glm`（智谱）即如此：2026-10-05 实测同一把 key 在 OpenAI 端点与
+>   Anthropic 端点都能通过（智谱把 `claude-sonnet-4` 之类模型名也做了映射），所以插件只有一条
+>   路径（OpenAI 兼容端点），既不设开关、也不对旧地址做特判。普通平台用默认地址，Coding Plan
+>   在 Base URL 里填 `/api/coding/paas/v4`。
+> - **部署形态真的不同才设字段**——`openai_compatible`（第三方中转）保留 `api_style` 下拉：
+>   中转站千差万别，有只暴露 `/v1/messages` 的 Claude 专属站，光靠 URL 猜不可靠。
+>
+> 格式字段一律**只认显式值**（manifest 给默认），不做 Base URL 嗅探，也不为旧凭据类型写数据迁移
+> ——**1.0 之前不考虑向下兼容（含旧版本数据库）**，旧的 `llm_glm_anthropic` /
+> `llm_anthropic_compatible` 类型不再有对应插件，那类凭据直接在界面上删掉、按新插件重建即可。
 
-**dns/ 类别（3 个）**：dnspod、duckdns、godaddy。
+**api/ 类别（4 个）**：firecrawl（网页抓取）、tavily（搜索）、metaso（秘塔 AI 搜索）、coze（字节扣子）。
+
+**dns/ 类别（4 个）**：dnspod、duckdns、godaddy、cloudflare（从 cloud/ 移入：它就是域名解析类）。
 
 **dev/ 类别（3 个）**：github（令牌）、huggingface、wandb（Weights & Biases）。
 
 **im/ 类别（6 个）**：feishu（飞书）、dingtalk（钉钉）、telegram、discord（Webhook）、
 qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）。
 
-**cloud/ 类别（3 个）**：aliyun（阿里云 AK/SK）、tencentcloud（腾讯云 SecretId/Key）、
-cloudflare（API Token 或 Global API Key）。
+**cloud/ 类别（2 个）**：aliyun（阿里云 AK/SK）、tencentcloud（腾讯云 SecretId/Key）。
+（Cloudflare 已移到 `dns/` —— 它本质是域名解析类。）
 
-**exchange/ 类别（3 个）**：ht（华泰证券）、okx、binance。
+**exchange/ 类别（2 个）**：okx、binance。
 
 **mail/ 类别（1 个）**：smtp（通用 SMTP，覆盖 Gmail / QQ / 163 / 126 等）。
 
 > 说明：`duckdns` 的校验本身是写操作（先写入 `1.1.1.1` 确认生效再还原原值），
-> `wechat_ilink` 与 `ht` 无公开校验接口——三者均标记 `batch_verify: false`，只能手动单个验证。
+> `wechat_ilink` 无公开校验接口——它与 `duckdns` 均标记 `batch_verify: false`，只能手动单个验证。
 
 ### 内置「简易操作」一览
 
-凭据齐全时，凭据行会出现「操作」按钮（见 §3.1）。当前内置操作：
+凭据齐全时，凭据行会出现「操作」按钮（见 §3.1）。一个凭据有多个操作时先弹选择菜单，
+**只有一个就直接进**；带「（写）」的是 `write: true`，提交前会二次确认。
 
-- **llm**：全部 18 个厂商 —— 简单对话
-- **dns**：dnspod（查看解析记录、新增/修改解析记录）、godaddy（查看域名解析记录、查看域名列表）、
-  duckdns（查看当前解析）
-- **cloud**：cloudflare（查看站点、查看/修改 DNS 记录）、aliyun / tencentcloud（查看调用者身份）
-- **dev**：github（查看账号信息、查看我的仓库）、huggingface / wandb（查看账号信息）
-- **im**：telegram（查看机器人信息、发送消息）、discord（查看 Webhook 信息）
-- **exchange**：okx（查看账户余额）、binance（查看账户信息、查看交易所时间）
-- **api**：coze（查看工作区）、tavily（执行搜索）、firecrawl（抓取网页）
-- **mail**：smtp（查看收件箱，IMAP 只读）
+- **llm**：18 个厂商 —— 简单对话（`chat`，流式）；另有 `codex` / `codebuddy` 两个**登录态类**凭据，
+  操作为「登录态详情 / 登录态信息」（`token_info`，只读解析本地 JWT，**不回显任何令牌**）。
+- **dns**：
+  - dnspod / godaddy / cloudflare —— **域名（站点）列表 → 行内「解析」下钻到解析记录 → 行内「修改」**，
+    以及行内「新增」；前两者是 `write`，Cloudflare 用同一个表单（留空 `record_id` 即新增）
+  - duckdns —— 查看当前解析（它没有域名列表/新增解析的开放接口，只有 DoH 查询）
+- **cloud**：aliyun / tencentcloud 同构 ——
+  `whoami`（身份 + **探测到的权限**）· `list_instances`（云主机）·
+  `list_buckets`（**对象存储**桶列表）→ 行内「预览」下钻 `list_objects`（对象 key/大小/时间，前 50）
+- **dev**：github —— 账号信息（含 `X-OAuth-Scopes` 权限）· **仓库列表 → 行内「打包下载」（`save_to`，弹另存为）**
+  与行内「详情」下钻；huggingface / wandb —— 查看账号信息
+- **im**：feishu —— 应用信息与权限 · 机器人信息 · 用户详情（按 `open_id` 或邮箱）· 群组 · 知识库 · 云文档；
+  telegram（机器人信息、发送消息（写））· discord（Webhook 信息）
+- **exchange**：okx（账户余额）· binance（账户信息、交易所时间）
+- **api**：coze（工作区列表）· tavily（执行搜索）· firecrawl（抓取网页）·
+  metaso（搜索（`list`，行内「阅读」下钻）· 网页解析）
+- **mail**：smtp —— 收件箱（`list`，可填拉取封数/文件夹/IMAP 主机与端口）→ 行内「看正文」下钻
 
-> 写操作（名称中已标注，如「新增/修改解析记录」「发送消息」）会真实改动远端数据，请谨慎使用。
+> **按权限显隐**：aliyun / tencentcloud / feishu / github 实现了 `capabilities()`，没权限的操作不会出现在菜单里；
+> 一个都没有时给出说明。**探测失败一律 fail-open**（全都展示）——只有上游**明确**说「密钥无效」才判定为无可用操作。
 
+#### 附：阿里云 OSS 与腾讯云 COS 的签名（自建在各自 plugin.py 内）
+
+两者都**不复用**云 API 的签名，写新对象存储插件时别搞混：
+
+- **OSS V1**：`StringToSign = VERB\nContent-MD5\nContent-Type\nDate\nCanonicalizedOSSHeaders + CanonicalizedResource`，
+  `Signature = base64(HMAC-SHA1(AccessKeySecret, StringToSign))`（**key 不加 `&`**，这点与云 API RPC v1 不同），
+  请求头 `Date`(RFC1123 GMT) + `Authorization: OSS <AK>:<Sig>`；`max-keys`/`prefix`/`marker` **不进**规范串。
+- **COS**：`q-sign-algorithm=sha1`。`signKey = HMAC-SHA1(SecretKey, signTime)` —— **单次** HMAC！
+  （曾误写成 `HMAC(HMAC(SecretKey, signTime), keyTime)` 的双重形式，那会让所有请求 403。）
+  `httpString = <method 小写>\n<path>\n<params>\n<headers>\n`（k/v 都 `quote(x, safe="-_.~")`、按字典序 `&` 连接），
+  `stringToSign = "sha1\n" + signTime + "\n" + sha1(httpString) + "\n"`，`signature = HMAC-SHA1(signKey, stringToSign)`。
+- 两家的响应都是 **XML**（用 `response.text` + `xml.etree.ElementTree`，用 `tag.rsplit('}', 1)[-1]` 绕开 namespace），
+  **不要**用 `safe_json`。
+
+---
 ---
 
 ## 6. 调试

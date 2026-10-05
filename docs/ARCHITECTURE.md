@@ -45,6 +45,15 @@
 
 ## 2. 核心模块
 
+**启动与单实例**（`backend/single_instance.py`）：`main()` 的**第一件事**就是取单实例锁
+——Windows 用命名互斥体 `CreateMutexW`（内核在进程退出时自动释放，**不像 pid 文件那样会在
+崩溃/被强杀后留下陈旧锁**），其它平台用 `data/.instance.lock` 上的 `fcntl.flock`。
+取不到锁说明已有实例在跑：第二套进程**不创建界面**，而是 `FindWindowW("Credential Vault")`
++ `ShowWindow` + `SetForegroundWindow` 把已有窗口拉到前台，然后自己退出——用户感知上就是
+「双击 exe 就出来了」。拿不到句柄/目录不可写等意外一律**放行**（宁可多开，也不能让应用起不来）。
+互斥检查放在 `logger.setup_logging()` 之前，因为重复启动不该产生任何副作用；而
+`--print-paths` 这个调试分支在 `main()` 之外，不受影响。
+
 ### 2.1 加密模块（crypto.py）
 
 **职责**：主密码管理、AES 密钥派生、字段级加密/解密。
@@ -111,13 +120,13 @@ plugins/
 │   │   ├── manifest.json
 │   │   └── plugin.py
 │   ├── deepseek/
-│   └── …                     # 共 18 个 LLM 子插件
-├── api/                      # API 服务类别（firecrawl / tavily / coze，共 3 个）
-├── dns/                      # 域名解析：dnspod / duckdns / godaddy
+│   └── …                     # 共 20 个 LLM 子插件
+├── api/                      # API 服务类别（firecrawl / tavily / metaso / coze，共 4 个）
+├── dns/                      # 域名解析：dnspod / duckdns / godaddy / cloudflare
 ├── dev/                      # 开发者平台：github / huggingface / wandb
 ├── im/                       # 即时通讯：feishu / dingtalk / telegram / discord / qq_bot / wechat_ilink
-├── cloud/                    # 云服务商：aliyun / tencentcloud / cloudflare
-├── exchange/                 # 交易所：ht / okx / binance
+├── cloud/                    # 云服务商：aliyun / tencentcloud
+├── exchange/                 # 交易所：okx / binance
 └── mail/                     # 邮箱：smtp（通用 SMTP，覆盖 Gmail/QQ/163/126）
 ```
 
@@ -126,9 +135,39 @@ plugins/
 - **一个服务 = 一个独立子插件**：各自持有 `manifest.json`（字段 schema、credential_type）与薄 `plugin.py`；删除任一子插件目录不影响其他子插件运行。根目录下直接含 `manifest.json` 的目录视为无类别的平铺插件。
 - **类别共享模块**：`<类别>_common.py` 只放**底层通用工具 + 子插件原型接口**（`VerifyResult` / `make_client` / `safe_json` / `guarded` 等）；**协议级工具**（如 `plugins/llm/llm_protocols.py` 的探针与 `chat_completion`）另建独立工具模块供子插件按需引用。加载子插件时临时将其目录与类别目录注入 `sys.path`（见 plugin_base.load_plugin_module）。**服务专属逻辑在各子插件内自带，新增插件无需改动共享模块。**
 - **同步流程**：启动时 `sync_plugins()` 扫描两层结构 → upsert plugins 表（含 category / category_name / batch_verify）→ 清理已消失插件的记录与模块缓存。
-- **批量验证开关**：manifest 的 `batch_verify`（默认 true）落库到 plugins.batch_verify；调度器与前端批量时跳过为 false 的类型（无法自动化或有写副作用，如 duckdns / wechat_ilink / ht）——前端在批量勾选弹窗中禁用其勾选。
+- **批量验证开关**：manifest 的 `batch_verify`（默认 true）落库到 plugins.batch_verify；调度器与前端批量时跳过为 false 的类型（无法自动化或有写副作用，如 duckdns / wechat_ilink）——前端在批量勾选弹窗中禁用其勾选。
 
-**插件模块约定**：必须暴露 `verify(data)`；可选 `validate(data)`、`get_display_summary(data)`。`verify` 返回值鸭子类型兼容 VerifyResult / dataclass / dict。
+**插件模块约定**：必须暴露 `verify(data)`；可选 `validate(data)`、`get_display_summary(data)`。
+`verify` 返回值鸭子类型兼容 VerifyResult / dataclass / dict。
+
+**「操作」框架（`actions` / `run_action` / `capabilities` / `stream_action`）**：插件可选声明一组操作，
+前端凭据行的「操作」按钮据此渲染。数据流：
+
+```
+前端 openActions(row)
+  ├─ list_credential_actions(id)   → plugin_manager.plugin_actions（纯本地，渲染菜单）
+  └─ credential_capabilities(id)   → plugin_manager.plugin_capabilities → 插件的 capabilities()
+                                      （会联网探权限，包在代理作用域里；失败一律 fail-open）
+        │
+        ├─ 1 个操作 → 直接进；≥2 个 → 弹选择菜单，探测结果回来再收敛
+        ▼
+  run_credential_action(id, action_id, params)
+        → plugin_manager.run_plugin_action → 插件的 run_action(action_id, params, data)
+        → 结果经 _redact_deep 递归净化后才回前端
+```
+
+三个设计要点：
+
+- **`actions()` 必须便宜且无副作用**，`capabilities()` 才是联网探测的那个 —— 分开才能把
+  「没有操作 / 有操作但没权限 / 探测失败」三种状态说清楚（混在一起时，探测失败会伪装成「没有操作」，用户
+  就分不清该去修密钥还是修网络）。
+- **`kind: "list"`** 让插件用 `columns` + `rows` + `row_actions` 描述一个表格，行内按钮的 `params`
+  支持 `$row.<列key>` 模板，目标 action 是 `form` 就预填、是 `list` 就下钻（前端用栈保存上一帧，返回零请求）。
+- **净化边界在 `backend/api.py`**：`_redact_deep` 递归遍历**整个结果**（`output`/`error`/`rows`/任意嵌套）
+  把该凭据 `sensitive` 字段的明文替换掉。早先只扫顶层两个字段，列表类操作一上来就会把密钥从 `rows` 里漏出去。
+- **下载类操作**（`save_to`）：前端先弹「另存为」拿路径，路径经 `params` 交给插件，**插件自己下载**
+  —— 不让插件返回 `{url, headers}` 由后端代下，是因为那会把鉴权头/预签名 URL 送进结果 dict 并穿到 JS 桥。
+  对话框只在 `backend/api.py` 里弹：流式路径的插件跑在新建线程上，跨线程弹窗会卡界面。
 
 ---
 
@@ -149,7 +188,7 @@ plugins/
     ▼ 查询目标凭据（全部 / 指定分组 / 指定类型）
     │   （自动剔除 batch_verify=false 的类型，计为「跳过」）
     │
-    ▼ 并发调用各插件的 verify()（每条凭据一个任务，BATCH_CONCURRENCY=8 并发）
+    ▼ 并发调用各插件的 verify()（每条凭据一个任务，并发数可配，见下）
     │
     ▼ 更新 credentials.status / last_verified_at
     │   （status == valid 时同时更新 last_valid_at）
@@ -157,7 +196,66 @@ plugins/
     ▼ 通过 pywebview 事件通知前端刷新
 ```
 
-**验证代理**：插件发起校验请求时的代理由 `backend/proxy.py` 统一管理——它把「系统设置」中的代理写入环境变量 `VAULT_PROXY`，各 `<类别>_common.py` 的 `make_client()` 读取该变量（外部同名环境变量优先）。见 `docs/PLUGIN_GUIDE.md` 第 2.1 节。
+**验证代理（多代理 + 按调用生效）**：代理存在 `proxies` 表里、各自取名，**其它地方一律按 id 引用**
+（`proxy_store`）。解析时**按优先级逐层找**，第一层给出可用的指定就停：
+
+| 优先级 | 来源 | 怎么设 |
+|---|---|---|
+| 1 | **本条凭据** | 凭据编辑表单里的「使用代理」（`data._proxy_mode` / `_proxy_id`） |
+| 2 | **子模块预设** | 该插件的默认设置（`preset_defaults` scope=`plugin`） |
+| 3 | **上层模块预设** | 所属类别的默认设置（scope=`category`） |
+| 4 | **全局** | 「系统设置 → 网络与代理」的默认代理（写进 `settings.global_proxy_id` + 环境变量 `VAULT_PROXY`） |
+
+第 1 层里「跟随上层设置」（`_proxy_mode = global` 或缺省）**不表示「用全局」**，而是「本层不指定，
+继续往上找」——所以改了插件/类别的预设，已有凭据会跟着变。**引用的代理被删了也一样往上找**
+（不直接掉到全局，更不报错）。第 2、3 层的合并顺序由 `preset_store.defaults_for()` 保证（插件覆盖类别）。
+
+难点在于**批量验证是并发的**：不同凭据可能要走不同出口，而插件只认进程级环境变量
+`VAULT_PROXY`，直接改环境变量会互相踩。所以引入了一条**按调用生效**的通道：
+
+- `backend/vault_proxy_ctx.py`（框架持有）用 `threading.local()` 存「本次调用用哪个代理」，
+  两个哨兵 `UNSET`（未指定 → 回退环境变量）与 `DIRECT`（强制直连、压过所有代理变量）
+  必须分开——用同一个 `None` 表达会让「跟随全局」在外部设了 `ALL_PROXY` 时无法正确回退。
+- `main.py` 启动时把它以**固定别名**注册进 `sys.modules`：`sys.modules["vault_proxy_ctx"]`。
+  各 `<类别>_common.py` 的 `proxy()` **懒查**这个名字（插件不允许 import backend，
+  且脱离主程序单独跑时自然取不到 → 退回环境变量），因此**插件代码一行都不用改**。
+- 收口在 `plugin_manager` 的四个入口（`verify_credential` / `run_plugin_action` /
+  `plugin_models` / `stream_plugin_action`）用 `credential_proxy_scope(data)` 包住，
+  于是单条 / 批量 / MCP / 流式四条路径全自动覆盖。**必须 `begin/end(token)` 成对还原**：
+  `ThreadPoolExecutor` 会复用线程，不还原就会把上一条凭据的代理带给下一条。
+  `stream_credential_action` 另开线程，作用域因此只能建在它调的 plugin_manager 里，
+  建在调用线程里会静默失效。
+
+进程环境变量那条通道仍然保留（`backend/proxy.py` 的 `apply_proxy()`），给没走 ctx 的场景兜底。
+
+**类别 / 插件默认设置（`backend/preset_store.py`）**：新建凭据时的预填值，存
+`preset_defaults` 表，按「插件级 > 类别级 > manifest 的 `field.default`」继承。框架只做
+**存 + 继承 + 注入**三件事，「哪些字段可以预设」由插件自己在 manifest 里声明——默认全部
+**非敏感**字段都可预设，加 `"preset": false` 可排除；`api_key` 之类的敏感字段**永远不进默认值**
+（`values` 是明文列，写入 / 读取 / 注入三处各剔一次）。注入点有三处且**缺一不可**：
+前端新增表单（`CredentialForm.loadDefaults`）、`api.create_credential`（**在校验之前**，
+默认值可能正好满足必填项）、以及 MCP 的 `vault_create_credential`——后者原本是复制出来的
+第二份创建逻辑，现已改为直接调用 `api.create_credential`，避免「表单继承、MCP 不继承」这类
+不一致再次出现。**更新（update）一律不套默认**，否则用户显式清空的字段会被复活。
+
+**运行参数（`backend/verify_options.py`）**：批量验证的**并发线程数**（默认 8，1–32）与**请求超时**（默认 20 秒，5–300 秒）在「批量验证」对话框里就地调整，是这两项的**单一事实来源**——持久化到 `settings` 表的 `batch_concurrency` / `verify_timeout`，前端取值范围也由它下发（`limits()`），避免前后端各写一份常量。两条消费路径：
+
+- **并发数**：`scheduler.batch_verify()` 内层 `ThreadPoolExecutor(max_workers=verify_options.concurrency(...))`，取 `min(并发设置, 待验证条数)`；手动批量传本次选择，定时任务不传 → 读已保存的设置。
+- **超时**：同样借环境变量下发（插件不允许 `import backend`）——`apply_timeout()` 把值写入 `VAULT_TIMEOUT`，插件侧 `timeout()` 每次发请求时读取，改完立即生效。外部显式设置的同名变量优先。机制与 `VAULT_PROXY` 同构，见 `docs/PLUGIN_GUIDE.md` 第 2.3 节。
+
+**单条验证的并发保护**：`verify_single_credential()` 外层套了一个**同 id in-flight 集合**
+（`_inflight` + 锁），同一凭据已在验证中时直接返回「该凭据正在验证中，请稍候」而不重复发请求。
+批量验证走的也是这个函数，所以「手动点验证」与「定时/批量」撞车时同样只会跑一次。
+前端另有一层：验证状态记的是 **id 列表**而非单个 id，逐行独立 loading。
+
+**欠费探测后置检查（`plugin_manager._apply_quota_probe`）**：一次凭据验证的主流程是
+`api/scheduler → plugin_manager.verify_credential() → call_verify(module, data)`；返回前多一道**可选**检查——
+仅当结果 `valid`、且 `account_info` 里既无 `balance` 也无 `usage_rate` 时，才调用插件的
+`quota_probe(data)`（未接入该函数的插件直接跳过）。这是「Key 有效」与「账户有钱」之间的补丁：
+`/models` 探针对欠费账户同样返回 200，只有真实发一次 `max_tokens=1` 的对话才能分辨。开关与模型是
+**凭据自身**的字段（manifest 的 `probe_chat` / `probe_model`，随 `data` 一起进插件），逐条凭据独立、
+默认关闭——**不经过全局设置，也不需要环境变量**（数据本来就在插件手里）。后置检查里的任何异常都被
+吞掉并只写日志——**它绝不允许影响主验证结果**。详见 `docs/PLUGIN_GUIDE.md` 第 2.4 节。
 
 **代理连通性诊断**（`backend/proxy_test.py`）：代理字符串本身看不出好坏，故做一次**对照实验**——同一批探测分别在「直连」与「走代理」下各跑一遍，再比对：① 国内站点（baidu.com）可达性 ② 国外站点（gstatic.com/generate_204）可达性 ③ 出口 IP 与归属地。综合给出 `ok / warn / fail` 结论（如「出口 IP 已切换」「经代理国内外站点均不可达」「出口 IP 与直连相同：代理可能未生效」）。
 
@@ -173,7 +271,9 @@ plugins/
 
 判定与文案集中在 `backend/proxy.py`：`needs_socks()` / `socks_available()` / `SOCKS_HINT`（单一事实来源，三层共用）。
 
-**备份 / 恢复**：`backend/backup.py` 负责构建/导入备份文档（JSON）。加密备份的敏感字段直接沿用库中密文，只能用同一主密码导入；明文备份可跨主密码导入（以当前主密钥重新加密写库）。导入按「类型 + 敏感值」去重，并跳过插件未安装的条目；文件读写通过 pywebview 的原生文件对话框（`api._file_dialog`）。
+**备份 / 恢复**：`backend/backup.py` 负责构建/导入备份文档（JSON）。加密备份的敏感字段直接沿用库中密文，只能用同一主密码导入；明文备份可跨主密码导入（以当前主密钥重新加密写库）。导入按「类型 + 敏感值」去重，并跳过插件未安装的条目；文件读写通过 pywebview 的原生文件对话框（`api._file_dialog`，优先用 `webview.FileDialog` 枚举——旧的模块级 `SAVE_DIALOG`/`OPEN_DIALOG` 常量会打印弃用警告）。
+
+导出有两个**互不重叠**的维度：`scope` 决定是否附带**分组与偏好设置**（`all` 带、`credentials` 不带），`credential_ids` 决定**导出哪些凭据**（`None` = 全部，给定列表 = 只导这些；不影响 scope 语义）。因此「全部 + 勾选若干」与「仅凭据 + 勾选若干」的差别仍然只是分组/偏好设置那部分，文档里写入 `credential_ids` 便于回溯。前端「备份」页把两者做成两组控件（范围单选 + 凭据勾选列表）。
 
 ---
 
@@ -181,7 +281,14 @@ plugins/
 
 **职责**：为 AI Agent 提供凭据管理接口。
 
-**传输**：SSE（Server-Sent Events），默认端口 `8765`。不随应用自动启动，由用户在「MCP 设置」页手动开启；开启后窗口最小化到托盘仍持续运行。
+**传输**：SSE（Server-Sent Events），默认监听 `127.0.0.1:8765`。不随应用自动启动，由用户在「MCP 设置」页手动开启；开启后窗口最小化到托盘仍持续运行。
+
+**监听地址可配**：`settings` 的 `mcp_host` / `mcp_port`（默认 `127.0.0.1` / `8765`）。
+`start_server(host, port)` 不再把 `127.0.0.1` 写死，也**去掉了原来的「端口被占就 +1/+2」降级**
+——端口是用户显式配的，悄悄换一个会让人对着「配了 9000 却在 9001」的界面发懵；现在占用就直接
+报错。保存设置时若服务在运行，会先停、等端口真正释放、再按新地址起；**若新端口起不来，会把
+原地址的服务起回去**并返回错误，不把用户留在「改完啥都没了」的状态。host 只接受合法 IP 或
+`localhost`（防止误把凭据服务挂到公网）。
 
 **Token 鉴权**（必须）：
 ```

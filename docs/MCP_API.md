@@ -356,6 +356,52 @@ claude mcp add credential-vault \
 
 ---
 
+## 备份
+
+> 与界面上的「备份」页共用同一套实现（`backend/backup.py` + `api.build_backup_doc` /
+> `api.apply_backup_doc`），区别是 **MCP 没有文件对话框**：导出要么把文档直接返回，要么
+> 明确给一个 `path` 落盘；导入要么给文档对象，要么给文件路径。两个工具都**默认关闭**。
+
+#### `vault_export_backup`
+**默认权限：❌ 关闭（高危）**
+
+导出备份文档。触及整库数据，因此与 `vault_get_secret` 同级管控。
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `scope` | `"all"` / `"credentials"` | `"all"` | `all` = 凭据 + 分组 + 偏好设置；`credentials` = 仅凭据 |
+| `encrypted` | bool | `true` | `true` 敏感字段保持密文（需**同一主密码**导入）；**`false` 会把密钥明文写出，危险** |
+| `credential_ids` | list[int] | 省略 | 只导出这些凭据 id；省略 = 全部 |
+| `path` | str | 省略 | 写入该文件；**省略则把文档放在返回值的 `document` 字段里** |
+
+```json
+// 省略 path：文档直接返回，便于转手交给 vault_import_backup 或由 Agent 自行保存
+{ "ok": true, "count": 12, "scope": "all", "encrypted": true, "document": { "format": "credential-vault-backup", "...": "..." } }
+
+// 给了 path：落盘并回显路径
+{ "ok": true, "count": 12, "scope": "all", "encrypted": true, "path": "D:/bak/vault-20261005.json" }
+```
+
+#### `vault_import_backup`
+**默认权限：❌ 关闭（高危）**
+
+把备份并入当前库（合并语义）。`document` 与 `path` **二选一**。
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `document` | object | — | 备份 JSON 对象（可直接用 `vault_export_backup` 的返回值） |
+| `path` | str | — | 备份文件路径（服务端所在机器的路径） |
+| `dedupe` | bool | `true` | 「同类型 + 敏感值相同」的凭据跳过 |
+
+```json
+// 出参
+{ "ok": true, "encrypted": true, "imported": 9, "skipped_plugin": 0, "skipped_duplicate": 3, "created_groups": 1, "source": "document" }
+```
+
+加密备份需与当前主密码一致，否则返回 `{"ok": false, "message": "备份是加密的，且与当前主密码不匹配，无法导入"}`。
+
+---
+
 ## 权限管理
 
 ### 双层权限模型
@@ -378,7 +424,7 @@ claude mcp add credential-vault \
 |----------|------|------|
 | 只读 | `vault_list_credentials`, `vault_verify_credential`, `vault_list_groups`, `vault_list_plugins` | ✅ 开启 |
 | 写操作 | `vault_get_credential`, `vault_create_*`, `vault_update_*`, `vault_delete_*`, `vault_batch_verify` | ❌ 关闭 |
-| 高危 | `vault_get_secret` | ❌ 关闭（需二次确认） |
+| 高危 | `vault_get_secret`, `vault_export_backup`, `vault_import_backup` | ❌ 关闭（需二次确认） |
 
 ### 未授权调用响应
 

@@ -35,10 +35,14 @@ CREATE TABLE settings (
 | `schema_version` | 数据库版本号 | `"4"` |
 | `salt` | PBKDF2 盐值（base64） | `"a3f2..."` |
 | `verify_token` | 主密码验证密文（base64） | `"x9k1..."` |
-| `mcp_port` | MCP Server 端口 | `"8765"` |
+| `mcp_host` | MCP Server 监听地址（仅 IP / localhost，默认 `127.0.0.1`） | `"127.0.0.1"` |
+| `mcp_port` | MCP Server 监听端口（1–65535，默认 `8765`；被占用时报错不自动换） | `"8765"` |
 | `auto_verify` | 保存时自动验证 | `"true"` |
 | `log_level` | 日志级别 | `"INFO"` |
-| `verify_proxy` | 验证代理（空 = 直连；http/https/socks5） | `"socks5://127.0.0.1:10808"` |
+| `verify_proxy` | **全局代理地址的快照**（由 `global_proxy_id` 解析后写入，供 `VAULT_PROXY` 环境变量那条老通道用） | `"socks5://127.0.0.1:10808"` |
+| `global_proxy_id` | 全局默认代理在 `proxies` 表里的 id（空 = 直连） | `"2"` |
+| `batch_concurrency` | 批量验证并发线程数（1–32，空 = 默认 8） | `"8"` |
+| `verify_timeout` | 验证请求超时秒数（5–300，空 = 默认 20） | `"20"` |
 | `close_action` | 关闭主窗口行为（ask / quit / background） | `"ask"` |
 
 ---
@@ -96,6 +100,15 @@ CREATE INDEX idx_credentials_status ON credentials(status);
   "notes": "生产环境主账号"
 }
 ```
+
+> **LLM 类**凭据还会在 `data_plain` 里带两个**可选**字段（非敏感，逐条凭据独立配置）：
+> `probe_chat`（布尔，余额未知时是否发一次最小对话探测欠费，默认 false）与
+> `probe_model`（字符串，探测模型，空 = 自动选）。见 `docs/PLUGIN_GUIDE.md` 第 2.4 节。
+>
+> **所有类别**的凭据还可能带两个代理保留键（同样非敏感）：`_proxy_mode`
+> （`global` / `proxy` / `direct`）与 `_proxy_id`（`mode=proxy` 时有效）。
+> 放进 `data` 而不另建表，是为了让四条验证路径（单条 / 批量 / MCP / 流式）都不必改签名
+> ——`data` 本来就会原样交到插件手里。见 `docs/ARCHITECTURE.md` 的「按调用生效的代理」。
 
 > 设计原则：`data_encrypted` 存放密钥类敏感字段；`data_plain` 存放展示类非敏感字段，避免每次列表查询都需要解密。
 > 不再维护独立的验证历史表：只保留 `created_at`（添加时间）、`last_verified_at`、`last_valid_at` 三个时间戳。
@@ -155,6 +168,44 @@ CREATE TABLE plugins (
 
 ---
 
+### proxies — 代理注册表
+
+```sql
+CREATE TABLE IF NOT EXISTS proxies (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,          -- 用户取的名字，仅用于展示
+    url         TEXT NOT NULL,          -- http:// / https:// / socks4:// / socks5:// / socks5h://
+    sort_order  INTEGER DEFAULT 0,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+> **其它模块一律按 `id` 引用代理**，不传名字、也不传地址：全局默认存
+> `settings.global_proxy_id`，每条凭据存自己 `data` 里的 `_proxy_mode` / `_proxy_id`。
+> 删除某个代理后，引用它的凭据会在解析时回退到全局（不报错）。
+
+---
+
+### preset_defaults — 类别 / 插件默认设置
+
+```sql
+CREATE TABLE IF NOT EXISTS preset_defaults (
+    scope       TEXT NOT NULL,          -- 'category' | 'plugin'
+    scope_key   TEXT NOT NULL,          -- 类别目录名（llm / dns / …）或 credential_type
+    values      TEXT NOT NULL DEFAULT '{}',   -- JSON：{"base_url": "...", "_proxy_mode": "direct", ...}
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (scope, scope_key)
+);
+```
+
+> 新建凭据时的预填值，按「**插件级 > 类别级 > manifest 的 field.default**」继承。
+> `values` 是**明文列**，因此敏感字段永远不写入（写入 / 读取 / 注入三处各剔一次，
+> 见 `backend/preset_store.py`）。键里可以带代理保留键 `_proxy_mode` / `_proxy_id`。
+> 继承在**读取时**按目标插件的可预设字段再过滤一次：类别级设了某键、但该子插件没有这个
+> 字段时会自动丢掉，不会把未知键塞进凭据数据。
+
+---
+
 ### mcp_permissions — MCP 工具全局权限
 
 ```sql
@@ -166,7 +217,7 @@ CREATE TABLE mcp_permissions (
 );
 ```
 
-**初始工具列表**（共 11 个）：
+**初始工具列表**（共 13 个）：
 
 | tool_name | 默认 | 说明 |
 |-----------|------|------|
@@ -181,6 +232,8 @@ CREATE TABLE mcp_permissions (
 | `vault_create_group` | ❌ 关 | 创建分组 |
 | `vault_list_plugins` | ✅ 开 | 列出插件 |
 | `vault_get_secret` | ❌ 关 | 获取解密后的敏感字段（高危） |
+| `vault_export_backup` | ❌ 关 | 导出备份（高危；`encrypted=false` 会把密钥明文写出） |
+| `vault_import_backup` | ❌ 关 | 导入备份（高危：会合并凭据、可能覆盖偏好设置） |
 
 ---
 
