@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -12,12 +12,14 @@ import {
   Grid,
   InfoFilled,
   Key,
+  List,
   RefreshLeft,
   Setting,
   Lock,
   Minus,
 } from '@element-plus/icons-vue'
 
+import { api, EVENTS } from '@/api'
 import { useAppStore } from '@/stores/app'
 import { useVaultStore } from '@/stores/vault'
 
@@ -40,6 +42,7 @@ const NAV_ITEMS = [
   { path: '/groups', title: '分组管理', icon: FolderOpened },
   { path: '/mcp', title: 'MCP 设置', icon: Connection },
   { path: '/logs', title: '日志', icon: Document },
+  { path: '/tasks', title: '任务', icon: List },
   { path: '/settings', title: '系统设置', icon: Setting },
   { path: '/backup', title: '备份', icon: Download },
   { path: '/about', title: '关于', icon: InfoFilled },
@@ -146,6 +149,60 @@ async function resetNavOrder() {
 
 const activePath = computed(() => route.path)
 
+/* ── 后台任务角标 ───────────────────────────────────────
+ * 侧栏上要能一眼看到「还有几个任务在跑」，所以这里自己维护一个计数。
+ * 关键是**别每次进度推送都拉全量**：进度事件一秒可能好几条，拉全量会白打后端。
+ * 于是记一份「任务 id → 状态」，靠快照的前后对比算出增减：
+ * 状态从非进行中变成进行中 → +1，反之 → -1，其余（同一状态内的进度刷新）不动。
+ * 拿不准的场合（拿到还没见过的任务）只影响增量，不影响准确性——计数与 id 表始终一致。
+ */
+const runningCount = ref(0)
+const taskStatusById = new Map()
+
+function applyTaskCountSnapshot(snapshot) {
+  if (!snapshot || !snapshot.id) return
+  const wasRunning = taskStatusById.get(snapshot.id) === 'running'
+  const isRunning = snapshot.status === 'running'
+  taskStatusById.set(snapshot.id, snapshot.status)
+  if (isRunning && !wasRunning) runningCount.value += 1
+  else if (!isRunning && wasRunning) runningCount.value = Math.max(0, runningCount.value - 1)
+}
+
+/** 整表重算（首次进入、以及事件给的快照用不上时的兜底）。 */
+async function refreshTaskCount() {
+  try {
+    const list = await api.listTasks()
+    taskStatusById.clear()
+    let count = 0
+    for (const task of Array.isArray(list) ? list : []) {
+      if (!task || !task.id) continue
+      taskStatusById.set(task.id, task.status)
+      if (task.status === 'running') count += 1
+    }
+    runningCount.value = count
+  } catch {
+    // 未解锁 / 后端未就绪时静默：角标只是提示，不该弹错误打扰用户。
+  }
+}
+
+function onTasksChanged(event) {
+  const snapshot = event && event.detail
+  if (!snapshot || !snapshot.id) {
+    refreshTaskCount()
+    return
+  }
+  applyTaskCountSnapshot(snapshot)
+}
+
+onMounted(() => {
+  window.addEventListener(EVENTS.tasksChanged, onTasksChanged)
+  refreshTaskCount()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener(EVENTS.tasksChanged, onTasksChanged)
+})
+
 const pageTitle = computed(() => route.meta.title || 'Credential Vault')
 
 const batchPercent = computed(() => {
@@ -237,6 +294,11 @@ async function handleMinimize() {
         >
           <el-icon><component :is="item.icon" /></el-icon>
           <template #title>{{ item.title }}</template>
+          <!-- 进行中任务数角标：为 0 时不渲染（不占位、不显示「0」） -->
+          <span
+            v-if="item.path === '/tasks' && runningCount > 0"
+            class="nav-badge"
+          >{{ runningCount }}</span>
         </el-menu-item>
       </el-menu>
     </el-aside>
@@ -401,6 +463,32 @@ async function handleMinimize() {
 
 .layout-menu :deep(.el-menu-item.is-drop-after)::before {
   bottom: -1px;
+}
+
+/* 进行中任务角标。菜单项本身已是 position: relative，这里直接绝对定位；
+   收起态没有标题文字，就把角标挪到图标右上角，免得无处可依。 */
+.nav-badge {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: var(--el-color-primary);
+  color: #fff;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.layout-aside.is-collapsed .nav-badge {
+  right: 6px;
+  top: 6px;
+  transform: none;
 }
 
 .brand.is-collapsed {

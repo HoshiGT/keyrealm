@@ -676,7 +676,10 @@ async function runActionForm() {
   // 由 handleActionStream 渲染进度条，并把终态写回 output / error（并负责结束 busy）。
   if (dialog.progressEnabled) {
     try {
-      const res = await api.streamCredentialAction(dialog.credentialId, dialog.actionId, params)
+      // title 给「任务」页用（操作名 · 凭据名），后端据此登记一条后台任务
+      const res = await api.streamCredentialAction(
+        dialog.credentialId, dialog.actionId, params, dialog.title,
+      )
       if (res && res.ok === false) {
         dialog.busy = false
         dialog.error = res.error || '执行失败'
@@ -1922,6 +1925,14 @@ onMounted(async () => {
           <el-button type="primary" :loading="actionDialog.busy" @click="runActionForm">
             {{ actionDialog.submitLabel }}
           </el-button>
+          <!-- 带进度的操作本质是个后台任务：关掉弹窗它照样跑，可以在「任务」页看进度、随时取消 -->
+          <el-button
+            v-if="actionDialog.busy && actionDialog.progressEnabled"
+            @click="actionDialog.visible = false"
+          >转到后台</el-button>
+        </div>
+        <div v-if="actionDialog.busy && actionDialog.progressEnabled" class="bg-hint">
+          也可以关掉本窗口，任务会继续在后台运行——在左侧「任务」里看进度或取消。
         </div>
         <div v-if="actionDialog.progress" class="action-progress">
           <el-progress
@@ -2553,6 +2564,12 @@ onMounted(async () => {
 /* 带进度的操作（下载/打包）：进度条 + 一行说明（如「12.3 MB / 45.0 MB」） */
 .action-progress {
   margin-top: 12px;
+}
+
+.bg-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .action-progress .progress-text {

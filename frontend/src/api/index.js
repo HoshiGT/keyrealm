@@ -111,6 +111,9 @@ export const EVENTS = {
   batchDone: 'vault:batch_verify_done',
   mcpStatus: 'vault:mcp_status',
   closeConfirm: 'vault:close_confirm',
+  // 后台任务变更。detail 是**发生变化的那一条任务快照**（不是全量列表），
+  // 消费方就地更新/插入对应行即可；拿不到快照时才回退到 listTasks()。
+  tasksChanged: 'vault:tasks',
 }
 
 export const api = {
@@ -163,7 +166,8 @@ export const api = {
   runCredentialAction: (id, actionId, params) => call('run_credential_action', id, actionId, params),
   listCredentialModels: (id) => call('list_credential_models', id),
   listDraftModels: (credentialType, data = null) => call('list_draft_models', credentialType, data),
-  streamCredentialAction: (id, actionId, params) => call('stream_credential_action', id, actionId, params),
+  streamCredentialAction: (id, actionId, params, title) =>
+    call('stream_credential_action', id, actionId, params, title),
   batchVerify: (scope = 'all', groupId = null, credentialType = null, credentialIds = null,
     concurrency = null, timeout = null) =>
     call('batch_verify', scope, groupId, credentialType, credentialIds, concurrency, timeout),
@@ -251,6 +255,15 @@ export const api = {
   // search 为空串时后端按"不过滤"处理，与传 null 等价。
   getLogs: (limit = 200, level = '', search = '') => call('get_logs', limit, level, search),
   clearLogs: () => call('clear_logs'),
+
+  // ── 后台任务 ────────────────────────────────────────────
+  // 长操作（下载/打包等）跑在后台线程，关掉弹窗也在继续。listTasks 返回的数组
+  // 已按「进行中在前、其内按创建时间倒序」排好，前端照序渲染即可。
+  listTasks: () => call('list_tasks'),
+  // 协作式取消：只置标志位，插件在下一个检查点停下（不是立刻杀线程）。
+  cancelTask: (taskId) => call('cancel_task', taskId),
+  // 清掉已结束（已完成/失败/已取消）的记录，进行中的不动。
+  clearFinishedTasks: () => call('clear_finished_tasks'),
 }
 
 export default api

@@ -9,6 +9,7 @@ import PluginManager from '@/views/PluginManager.vue'
 import Groups from '@/views/Groups.vue'
 import McpSettings from '@/views/McpSettings.vue'
 import Logs from '@/views/Logs.vue'
+import Tasks from '@/views/Tasks.vue'
 import Settings from '@/views/Settings.vue'
 import Backup from '@/views/Backup.vue'
 import About from '@/views/About.vue'
@@ -27,6 +28,7 @@ const router = createRouter({
         { path: 'groups', name: 'groups', component: Groups, meta: { title: '分组管理' } },
         { path: 'mcp', name: 'mcp', component: McpSettings, meta: { title: 'MCP 设置' } },
         { path: 'logs', name: 'logs', component: Logs, meta: { title: '日志' } },
+        { path: 'tasks', name: 'tasks', component: Tasks, meta: { title: '任务' } },
         { path: 'settings', name: 'settings', component: Settings, meta: { title: '系统设置' } },
         { path: 'backup', name: 'backup', component: Backup, meta: { title: '备份' } },
         { path: 'about', name: 'about', component: About, meta: { title: '关于' } },
