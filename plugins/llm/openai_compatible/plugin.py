@@ -9,7 +9,7 @@ from datetime import date
 from typing import Optional
 
 from llm_common import VerifyResult, guarded, make_client, safe_json
-from llm_protocols import probe_openai_models, chat_completion, fetch_models
+from llm_protocols import probe_openai_models, chat_completion, fetch_models, chat_completion_stream
 
 NAME = "第三方中转 (OpenAI 兼容)"
 DEFAULT_BASE_URL = ""
@@ -146,6 +146,25 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
         protocol="openai",
     )
 
+
+
+def stream_action(action_id: str, params: dict, data: dict, on_delta) -> dict:
+    """流式执行操作：简单对话（每段文本调用 on_delta(text)）。"""
+    if action_id != "chat":
+        return {"ok": False, "error": "未知操作"}
+    data = data or {}
+    params = params or {}
+    base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
+    if not base_url:
+        return {"ok": False, "error": "需要填写 Base URL"}
+    return chat_completion_stream(
+        base_url,
+        (data.get("api_key") or "").strip(),
+        params.get("model") or CHAT_MODEL,
+        params.get("messages") or [],
+        protocol="openai",
+        on_delta=on_delta,
+    )
 
 
 def get_display_summary(data: dict) -> str:

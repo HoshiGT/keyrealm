@@ -104,6 +104,9 @@ class VaultApi:
     def list_credential_models(self, credential_id: int):
         return api.list_credential_models(credential_id)
 
+    def stream_credential_action(self, credential_id: int, action_id: str, params=None):
+        return api.stream_credential_action(credential_id, action_id, params)
+
     def install_plugin(self, category: str, service: str):
         return api.install_plugin(category, service)
 

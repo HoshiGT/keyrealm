@@ -35,6 +35,7 @@ from .plugin_base import (
     call_display_summary,
     call_list_models,
     call_run_action,
+    call_stream_action,
     call_validate,
     call_verify,
     load_manifest,
@@ -402,6 +403,15 @@ def plugin_models(credential_type: str, data: dict) -> list:
     """该插件对给定凭据可用的模型列表（可选能力）。"""
     module = get_module(credential_type)
     return call_list_models(module, data) if module else []
+
+
+def stream_plugin_action(credential_type: str, action_id: str, params: dict, data: dict,
+                         on_delta) -> dict:
+    """流式执行插件操作；插件未实现时回退为普通执行。"""
+    module = get_module(credential_type)
+    if module is None:
+        return {"ok": False, "error": "插件未安装或加载失败"}
+    return call_stream_action(module, action_id, params, data, on_delta)
 
 
 def list_installed_plugins() -> list[dict]:

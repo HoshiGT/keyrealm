@@ -246,6 +246,10 @@ DNS 插件提供「查看/修改解析记录」、SMTP 插件提供「查看收�
 可选再实现 `list_models(data) -> list`：返回该凭据可用的模型名列表。
 LLM「简单对话」会据此把模型输入框变成**可搜索下拉**（失败/无权限时回退为手动输入）。
 
+还可实现 `stream_action(action_id, params, data, on_delta) -> dict`：**流式**执行操作，
+每收到一段文本调用 `on_delta(text)`，返回结构同 `run_action`（含 `output` 全文）。
+LLM「简单对话」据此逐段显示；未实现时后端自动回退到 `run_action`（一次性返回）。
+
 ---
 
 ## 4. 编写一个新插件（以新增 OpenAI 兼容服务为例）

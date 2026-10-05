@@ -103,6 +103,7 @@ export const EVENTS = {
   credentialUpdated: 'vault:credential_updated',
   credentialsChanged: 'vault:credentials_changed',
   pluginsChanged: 'vault:plugins_changed',
+  actionStream: 'vault:action_stream',
   batchProgress: 'vault:batch_verify_progress',
   batchDone: 'vault:batch_verify_done',
   mcpStatus: 'vault:mcp_status',
@@ -154,6 +155,7 @@ export const api = {
   listCredentialActions: (id) => call('list_credential_actions', id),
   runCredentialAction: (id, actionId, params) => call('run_credential_action', id, actionId, params),
   listCredentialModels: (id) => call('list_credential_models', id),
+  streamCredentialAction: (id, actionId, params) => call('stream_credential_action', id, actionId, params),
   batchVerify: (scope = 'all', groupId = null, credentialType = null, credentialIds = null) =>
     call('batch_verify', scope, groupId, credentialType, credentialIds),
   checkDuplicateCredential: (credentialType, data) =>

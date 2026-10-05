@@ -5,7 +5,7 @@ Base URL 无默认值，必须由用户填写（如 https://relay.example.com）
 from __future__ import annotations
 
 from llm_common import VerifyResult, guarded
-from llm_protocols import probe_anthropic_models, chat_completion, fetch_models
+from llm_protocols import probe_anthropic_models, chat_completion, fetch_models, chat_completion_stream
 
 NAME = "第三方中转 (Anthropic 协议)"
 DEFAULT_BASE_URL = ""
@@ -79,6 +79,25 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
         protocol="anthropic",
     )
 
+
+
+def stream_action(action_id: str, params: dict, data: dict, on_delta) -> dict:
+    """流式执行操作：简单对话（每段文本调用 on_delta(text)）。"""
+    if action_id != "chat":
+        return {"ok": False, "error": "未知操作"}
+    data = data or {}
+    params = params or {}
+    base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
+    if not base_url:
+        return {"ok": False, "error": "需要填写 Base URL"}
+    return chat_completion_stream(
+        base_url,
+        (data.get("api_key") or "").strip(),
+        params.get("model") or CHAT_MODEL,
+        params.get("messages") or [],
+        protocol="anthropic",
+        on_delta=on_delta,
+    )
 
 
 def get_display_summary(data: dict) -> str:

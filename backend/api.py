@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import threading
+import uuid
 from datetime import datetime
 from typing import Any, Optional, Union
 
@@ -471,6 +472,46 @@ def list_credential_models(credential_id: int) -> list:
     except Exception:
         data = {}
     return plugin_manager.plugin_models(cred["credential_type"], data)
+
+
+def stream_credential_action(credential_id: int, action_id: str, params: Optional[dict] = None) -> dict:
+    """流式执行某凭据的插件操作：后台线程边收边推送 vault:action_stream 事件。
+
+    事件 detail：
+      - {"stream_id": ..., "delta": "…"}                        逐段增量
+      - {"stream_id": ..., "done": true, "ok": .., "output": .., "error": ..}  结束
+    """
+    key = _get_key()
+    if key is None:
+        return {"error": "vault_locked"}
+    cred = db.get_credential(credential_id)
+    if not cred:
+        return {"ok": False, "error": "凭据不存在"}
+    try:
+        data = decrypt_dict(key, cred["data_encrypted"])
+    except Exception:
+        data = {}
+
+    stream_id = str(uuid.uuid4())
+    credential_type = cred["credential_type"]
+
+    def _run():
+        def on_delta(text: str) -> None:
+            push_event("vault:action_stream", {"stream_id": stream_id, "delta": text})
+
+        result = plugin_manager.stream_plugin_action(
+            credential_type, action_id, params or {}, data, on_delta
+        )
+        push_event("vault:action_stream", {
+            "stream_id": stream_id,
+            "done": True,
+            "ok": bool(result.get("ok")),
+            "output": result.get("output", ""),
+            "error": result.get("error", ""),
+        })
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "stream_id": stream_id}
 
 
 def delete_plugin(credential_type: str) -> dict:

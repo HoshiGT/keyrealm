@@ -229,3 +229,14 @@ def call_list_models(module: Any, data: dict) -> list:
         return [str(x) for x in result] if isinstance(result, list) else []
     except Exception:
         return []
+
+
+def call_stream_action(module: Any, action_id: str, params: dict, data: dict, on_delta) -> dict:
+    """流式执行插件的操作；插件未实现 `stream_action` 时回退到 `run_action`（无分段）。"""
+    if not hasattr(module, "stream_action"):
+        return call_run_action(module, action_id, params, data)
+    try:
+        result = module.stream_action(action_id, params or {}, data or {}, on_delta)
+        return result if isinstance(result, dict) else {"ok": False, "error": "插件返回了非预期结果"}
+    except Exception as e:
+        return {"ok": False, "error": f"操作失败: {e}"}

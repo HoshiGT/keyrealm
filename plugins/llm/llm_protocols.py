@@ -11,6 +11,7 @@ plugins/llm/<厂商>/plugin.py 内。
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
 import httpx
@@ -117,8 +118,124 @@ def chat_completion(base_url: str, api_key: str, model: str, messages: list,
     return {"ok": False, "error": f"HTTP {status}" + (f": {snippet}" if snippet else "")}
 
 
-# ── 模型列表（供「简单对话」选择模型）────────────────────
+# ── 流式简单对话 ─────────────────────────────────────────
 
+def _extract_delta(protocol: str, line: str) -> str:
+    """从一行 SSE 数据里取出新增文本（无则返回空串）。"""
+    if isinstance(line, bytes):
+        line = line.decode("utf-8", "ignore")
+    line = line.strip()
+    if not line.startswith("data:"):
+        return ""
+    payload = line[5:].strip()
+    if not payload or payload == "[DONE]":
+        return ""
+    try:
+        obj = json.loads(payload)
+    except Exception:
+        return ""
+    if not isinstance(obj, dict):
+        return ""
+
+    if protocol == "gemini":
+        candidates = obj.get("candidates")
+        if isinstance(candidates, list) and candidates and isinstance(candidates[0], dict):
+            parts = (candidates[0].get("content") or {}).get("parts")
+            if isinstance(parts, list):
+                return "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+        return ""
+    if protocol == "anthropic":
+        if obj.get("type") == "content_block_delta":
+            return str((obj.get("delta") or {}).get("text") or "")
+        return ""
+    choices = obj.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        return str((choices[0].get("delta") or {}).get("content") or "")
+    return ""
+
+
+def chat_completion_stream(base_url: str, api_key: str, model: str, messages: list,
+                           protocol: str = "openai", max_tokens: int = 512,
+                           on_delta=None) -> dict:
+    """流式对话：每收到一段文本即调用 `on_delta(text)`。
+
+    返回 {"ok": True, "output": 全文} 或 {"ok": False, "error": ..., "output": 已收到的部分}。
+    """
+    if not model:
+        return {"ok": False, "error": "未指定模型", "output": ""}
+    if not api_key:
+        return {"ok": False, "error": "缺少 API Key", "output": ""}
+
+    root = base_url.rstrip("/")
+    messages = messages or []
+    parts: list = []
+    emit = on_delta or (lambda _t: None)
+
+    if protocol == "gemini":
+        contents = [
+            {
+                "role": "model" if (m.get("role") == "assistant") else "user",
+                "parts": [{"text": str(m.get("content", ""))}],
+            }
+            for m in messages
+        ]
+        request = dict(
+            method="POST",
+            url=f"{root}/models/{model}:streamGenerateContent",
+            params={"key": api_key, "alt": "sse"},
+            headers={"Content-Type": "application/json"},
+            json={"contents": contents},
+        )
+    elif protocol == "anthropic":
+        request = dict(
+            method="POST",
+            url=root + "/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json={"model": model, "max_tokens": max_tokens, "messages": messages, "stream": True},
+        )
+    else:
+        request = dict(
+            method="POST",
+            url=root + "/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"model": model, "messages": messages, "max_tokens": max_tokens, "stream": True},
+        )
+
+    try:
+        with make_client() as client:
+            with client.stream(**request) as resp:
+                if resp.status_code != 200:
+                    resp.read()
+                    snippet = body_snippet(resp)
+                    detail = f": {snippet}" if snippet else ""
+                    if resp.status_code in (400, 401, 403):
+                        return {"ok": False, "error": f"鉴权或请求错误 (HTTP {resp.status_code}){detail}",
+                                "output": "".join(parts)}
+                    return {"ok": False, "error": f"HTTP {resp.status_code}{detail}",
+                            "output": "".join(parts)}
+                for line in resp.iter_lines():
+                    text = _extract_delta(protocol, line)
+                    if text:
+                        parts.append(text)
+                        emit(text)
+    except httpx.TimeoutException:
+        return {"ok": False, "error": f"请求超时（{int(TIMEOUT)} 秒）", "output": "".join(parts)}
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": f"网络请求失败（{type(exc).__name__}）", "output": "".join(parts)}
+    except Exception as exc:  # noqa: BLE001 - 操作边界兜底
+        return {"ok": False, "error": f"执行异常（{type(exc).__name__}）", "output": "".join(parts)}
+
+    output = "".join(parts)
+    if not output.strip():
+        return {"ok": False, "error": "响应中没有可读内容", "output": ""}
+    return {"ok": True, "output": output.strip()}
+
+
+# ── 模型列表（供「简单对话」选择模型）────────────────────
 def fetch_models(protocol: str, base_url: str, api_key: str) -> list:
     """获取该厂商可用模型列表（best-effort，失败/无权限返回 []）。
 

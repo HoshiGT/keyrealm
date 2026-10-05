@@ -783,6 +783,26 @@ export function createMockApi() {
       return ['mock-model', 'mock-model-mini', 'mock-model-pro']
     },
 
+    async stream_credential_action(credentialId, actionId, params) {
+      requireUnlocked()
+      const streamId = `mock-${Date.now()}`
+      const messages = (params && params.messages) || []
+      const last = messages.length ? messages[messages.length - 1].content : ''
+      const reply = `（Mock 流式回复）你说的是：「${last}」`
+      const chunks = reply.match(/.{1,4}/g) || []
+      let index = 0
+      const timer = setInterval(() => {
+        if (index >= chunks.length) {
+          clearInterval(timer)
+          emit('vault:action_stream', { stream_id: streamId, done: true, ok: true, output: reply, error: '' })
+          return
+        }
+        emit('vault:action_stream', { stream_id: streamId, delta: chunks[index] })
+        index += 1
+      }, 70)
+      return { ok: true, stream_id: streamId }
+    },
+
     // ── 备份 / 恢复 ────────────────────────────────────────
     async export_backup(scope = 'all', encrypted = true) {
       await delay(140)

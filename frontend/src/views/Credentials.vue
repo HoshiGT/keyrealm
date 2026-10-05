@@ -171,24 +171,53 @@ async function runActionForm() {
   }
 }
 
+// ── 流式对话：后端逐段推送 vault:action_stream，前端按 stream_id 追加 ──
+function handleActionStream(detail) {
+  const dialog = actionDialog.value
+  if (!detail || !dialog.streamId || detail.stream_id !== dialog.streamId) return
+  if (detail.done) {
+    dialog.busy = false
+    dialog.streamId = null
+    if (detail.error) dialog.error = detail.error
+    const last = dialog.messages[dialog.messages.length - 1]
+    if (last && last.role === 'assistant' && !last.content && detail.output) last.content = detail.output
+    return
+  }
+  if (detail.delta) {
+    const last = dialog.messages[dialog.messages.length - 1]
+    if (last && last.role === 'assistant') last.content += detail.delta
+  }
+}
+
+function onActionStream(event) {
+  handleActionStream(event && event.detail)
+}
+
 async function sendChat() {
   const dialog = actionDialog.value
   const text = (dialog.input || '').trim()
   if (!text || dialog.busy) return
   dialog.messages.push({ role: 'user', content: text })
+  const payloadMessages = dialog.messages.map((m) => ({ role: m.role, content: m.content }))
+  dialog.messages.push({ role: 'assistant', content: '' })
   dialog.input = ''
   dialog.busy = true
   dialog.error = ''
   try {
-    const res = await api.runCredentialAction(dialog.credentialId, dialog.actionId, {
+    const res = await api.streamCredentialAction(dialog.credentialId, dialog.actionId, {
       model: dialog.model,
-      messages: dialog.messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: payloadMessages,
     })
-    if (res && res.ok) dialog.messages.push({ role: 'assistant', content: res.output })
-    else dialog.error = (res && res.error) || '执行失败'
+    if (res && res.ok === false) {
+      dialog.error = res.error || '执行失败'
+      dialog.messages.pop()
+      dialog.busy = false
+      return
+    }
+    dialog.streamId = res.stream_id
   } catch (err) {
     dialog.error = err.message || '执行失败'
-  } finally {
+    dialog.messages.pop()
     dialog.busy = false
   }
 }
@@ -657,6 +686,7 @@ function setupHeaderDrag() {
 }
 
 onBeforeUnmount(() => {
+  window.removeEventListener('vault:action_stream', onActionStream)
   dragCleanup.forEach((fn) => fn())
   dragCleanup = []
 })
@@ -750,6 +780,7 @@ watch(
 )
 
 onMounted(async () => {
+  window.addEventListener('vault:action_stream', onActionStream)
   await load()
   // 首次使用（无本地记录）时默认展开全部节点
   if (!expandedKeys.value.length) {
