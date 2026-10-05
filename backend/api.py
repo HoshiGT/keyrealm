@@ -458,6 +458,21 @@ def run_credential_action(credential_id: int, action_id: str, params: Optional[d
     )
 
 
+def list_credential_models(credential_id: int) -> list:
+    """某凭据对应插件可用的模型列表（供 LLM「简单对话」选择模型）。"""
+    key = _get_key()
+    if key is None:
+        return []
+    cred = db.get_credential(credential_id)
+    if not cred:
+        return []
+    try:
+        data = decrypt_dict(key, cred["data_encrypted"])
+    except Exception:
+        data = {}
+    return plugin_manager.plugin_models(cred["credential_type"], data)
+
+
 def delete_plugin(credential_type: str) -> dict:
     """删除插件及其凭据（前端确认后调用）。"""
     result = plugin_manager.delete_plugin(credential_type, delete_credentials=True)

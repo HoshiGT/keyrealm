@@ -90,6 +90,8 @@ const actionDialog = ref({
   kind: '',
   title: '',
   model: '',
+  models: [],
+  modelsLoading: false,
   fields: [],
   values: {},
   submitLabel: '运行',
@@ -99,6 +101,21 @@ const actionDialog = ref({
   busy: false,
   error: '',
 })
+
+/** 拉取该凭据可用模型列表（失败则回退为手动输入模型名） */
+async function loadModels() {
+  const dialog = actionDialog.value
+  if (!dialog.credentialId) return
+  dialog.modelsLoading = true
+  try {
+    const list = await api.listCredentialModels(dialog.credentialId)
+    dialog.models = Array.isArray(list) ? list : []
+  } catch {
+    dialog.models = []
+  } finally {
+    dialog.modelsLoading = false
+  }
+}
 
 async function openActions(row) {
   let actions = []
@@ -134,6 +151,7 @@ async function openActions(row) {
     busy: false,
     error: '',
   }
+  if (actionDialog.value.kind === 'chat') loadModels()
 }
 
 async function runActionForm() {
@@ -1034,7 +1052,24 @@ onMounted(async () => {
       <template v-if="actionDialog.kind === 'chat'">
         <div class="chat-model">
           <span class="text-muted">模型</span>
-          <el-input v-model="actionDialog.model" size="small" placeholder="模型名（可修改）" />
+          <el-select
+            v-model="actionDialog.model"
+            class="chat-model-select"
+            size="small"
+            filterable
+            allow-create
+            default-first-option
+            :loading="actionDialog.modelsLoading"
+            placeholder="选择或输入模型名"
+          >
+            <el-option v-for="m in actionDialog.models" :key="m" :label="m" :value="m" />
+          </el-select>
+          <el-button
+            v-if="!actionDialog.models.length"
+            size="small"
+            :loading="actionDialog.modelsLoading"
+            @click="loadModels"
+          >获取模型列表</el-button>
         </div>
         <div class="chat-box">
           <div
@@ -1358,8 +1393,8 @@ onMounted(async () => {
   margin-bottom: 10px;
 }
 
-.chat-model :deep(.el-input) {
-  max-width: 280px;
+.chat-model-select {
+  width: 300px;
 }
 
 .chat-box {

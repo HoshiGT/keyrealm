@@ -9,7 +9,7 @@ from datetime import date
 from typing import Optional
 
 from llm_common import VerifyResult, guarded, make_client, safe_json
-from llm_protocols import probe_openai_models, chat_completion
+from llm_protocols import probe_openai_models, chat_completion, fetch_models
 
 NAME = "第三方中转 (OpenAI 兼容)"
 DEFAULT_BASE_URL = ""
@@ -109,6 +109,13 @@ def _verify(data: dict) -> VerifyResult:
 def verify(data: dict) -> VerifyResult:
     """验证 API Key 是否有效。保证不抛出异常。"""
     return _verify(data or {})
+
+
+def list_models(data: dict) -> list:
+    """获取该厂商可用模型列表（供「简单对话」选择模型）。"""
+    data = data or {}
+    base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
+    return fetch_models("openai", base_url, (data.get("api_key") or "").strip())
 
 
 # ── 可选操作：简单对话 ──────────────────────────────────

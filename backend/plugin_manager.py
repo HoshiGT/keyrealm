@@ -33,6 +33,7 @@ from .plugin_base import (
     VerifyResult,
     call_actions,
     call_display_summary,
+    call_list_models,
     call_run_action,
     call_validate,
     call_verify,
@@ -395,6 +396,12 @@ def run_plugin_action(credential_type: str, action_id: str, params: dict, data: 
     if module is None:
         return {"ok": False, "error": "插件未安装或加载失败"}
     return call_run_action(module, action_id, params, data)
+
+
+def plugin_models(credential_type: str, data: dict) -> list:
+    """该插件对给定凭据可用的模型列表（可选能力）。"""
+    module = get_module(credential_type)
+    return call_list_models(module, data) if module else []
 
 
 def list_installed_plugins() -> list[dict]:

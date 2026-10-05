@@ -117,6 +117,56 @@ def chat_completion(base_url: str, api_key: str, model: str, messages: list,
     return {"ok": False, "error": f"HTTP {status}" + (f": {snippet}" if snippet else "")}
 
 
+# ── 模型列表（供「简单对话」选择模型）────────────────────
+
+def fetch_models(protocol: str, base_url: str, api_key: str) -> list:
+    """获取该厂商可用模型列表（best-effort，失败/无权限返回 []）。
+
+    protocol:
+      - "openai" / "openrouter" → GET {base}/models（Bearer）→ data[].id
+      - "anthropic"             → GET {base}/models（x-api-key）→ data[].id
+      - "gemini"                → GET {base}/models?key=… → models[].name（去掉 "models/" 前缀）
+    """
+    if not api_key:
+        return []
+    root = base_url.rstrip("/")
+    try:
+        with make_client() as client:
+            if protocol == "gemini":
+                resp = client.get(f"{root}/models", params={"key": api_key})
+            elif protocol == "anthropic":
+                resp = client.get(
+                    root + "/models",
+                    params={"limit": 100},
+                    headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                )
+            else:
+                resp = client.get(root + "/models", headers={"Authorization": f"Bearer {api_key}"})
+        if resp.status_code != 200:
+            return []
+        payload = safe_json(resp)
+    except Exception:  # noqa: BLE001 - 取列表失败即返回空
+        return []
+    if not isinstance(payload, dict):
+        return []
+
+    names: set = set()
+    if protocol == "gemini":
+        for item in payload.get("models") or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", ""))
+            if name.startswith("models/"):
+                name = name[len("models/"):]
+            if name:
+                names.add(name)
+    else:
+        for item in payload.get("data") or []:
+            if isinstance(item, dict) and item.get("id"):
+                names.add(str(item["id"]))
+    return sorted(names)
+
+
 # ── 校验探针 ─────────────────────────────────────────────
 
 def probe_openai_models(base_url: str, api_key: str) -> VerifyResult:

@@ -776,6 +776,13 @@ export function createMockApi() {
       return { ok: true, output: `（Mock 回复）你说的是：「${last}」` }
     },
 
+    async list_credential_models(credentialId) {
+      await delay(200)
+      const cred = state.credentials.find((c) => c.id === Number(credentialId))
+      if (!cred) return []
+      return ['mock-model', 'mock-model-mini', 'mock-model-pro']
+    },
+
     // ── 备份 / 恢复 ────────────────────────────────────────
     async export_backup(scope = 'all', encrypted = true) {
       await delay(140)

@@ -215,3 +215,17 @@ def call_run_action(module: Any, action_id: str, params: dict, data: dict) -> di
         return result if isinstance(result, dict) else {"ok": False, "error": "插件返回了非预期结果"}
     except Exception as e:
         return {"ok": False, "error": f"操作失败: {e}"}
+
+
+def call_list_models(module: Any, data: dict) -> list:
+    """调用插件的可选 list_models(data)：返回可用模型名列表。
+
+    未实现、取列表失败或异常时返回空列表（前端回退为手动输入）。
+    """
+    if not hasattr(module, "list_models"):
+        return []
+    try:
+        result = module.list_models(data or {})
+        return [str(x) for x in result] if isinstance(result, list) else []
+    except Exception:
+        return []
