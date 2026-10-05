@@ -11,11 +11,13 @@
 
 - ``access_token``（必需）：本地判过期 + 联网校验都用它；
 - ``account_id``（可选）：联网校验的 ``chatgpt-account-id`` 头，留空由 JWT claim 兜底；
-- ``id_token``（可选）：仅在 access_token 缺展示字段时补充。
+- ``id_token``（可选）：仅在 access_token 缺展示字段时补充；
+- ``refresh_token``（可选）：**只读校验路径绝不使用**；填了之后才会多出「刷新 access_token」
+  这个**手动**操作，由用户显式点击，用它在过期后换一组新令牌。
 
-**``refresh_token`` 从不收集、也从不使用**：整仓没有任何向 auth 端点换令牌的请求，
-插件只发 ``GET /v1/models`` 与 ``GET /backend-api/me`` 两个只读请求。代刷会轮换掉用户的
-刷新令牌，属于写副作用，明确不做——access_token 过期就让用户回 Codex 重新登录再更新。
+代刷令牌会**轮换** refresh_token，属写副作用，因此绝不混进校验路径——只有用户点那个按钮时才做，
+且换回来的新值由框架原子写回本凭据（见 backend/api.py 的 ``updated_data`` 约定），
+免得库里与本机 Codex CLI 的登录态错位。
 
 安全：任何 ``message`` / ``account_info`` / ``output`` / ``rows`` 都不出现令牌或 API Key 明文，
 展示只用 JWT 里的非敏感 claim（邮箱、套餐、账号 id 前 8 位……）。
@@ -50,6 +52,13 @@ CHATGPT_ME_URL = "https://chatgpt.com/backend-api/me"
 # （二进制 login/src/auth/default_client.rs:76 旁的默认值）。
 ORIGINATOR = "codex_cli_rs"
 USER_AGENT = "codex_cli_rs/0.157.1"
+
+# OAuth 换令牌端点与 Codex CLI 的**公开客户端 id**（不是密钥：它以明文出现在用户令牌的
+# `aud` 里，官方 CLI 二进制里也是硬编码的）。只有在用户**显式**点「刷新 access_token」时
+# 才会打到这个端点——换令牌会轮换 refresh_token，属写副作用，绝不能混进只读校验路径。
+OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
+OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+OAUTH_SCOPE = "openid profile email"
 
 # id_token / access_token 里自定义 claim 的命名空间
 AUTH_CLAIM_NS = "https://api.openai.com/auth"
@@ -254,7 +263,8 @@ def _read_auth(data: dict) -> dict:
     - ``account_id``：可选（联网校验的 ``chatgpt-account-id`` 头；留空由 JWT 里的 claim 兜底）
     - ``id_token``：可选（仅在 access_token 缺展示字段时补充）
 
-    ``refresh_token`` 刻意**不收**：本插件从不使用它，多存一份长期凭据只是白白扩大保存面。
+    ``refresh_token`` 只在用户**显式**点「刷新 access_token」时用到（那是一次会轮换令牌的
+    写操作），只读校验路径绝不碰它。
     """
     def _text(value) -> str:
         return str(value).strip() if value is not None else ""
@@ -263,7 +273,7 @@ def _read_auth(data: dict) -> dict:
         "access_token": _text(data.get("access_token")),
         "id_token": _text(data.get("id_token")),
         "account_id": _text(data.get("account_id")),
-        "refresh_token": "",
+        "refresh_token": _text(data.get("refresh_token")),
     }
 
 
@@ -486,6 +496,91 @@ _TOKEN_INFO_ACTION = {
 }
 
 
+_REFRESH_ACTION = {
+    "id": "refresh",
+    "name": "刷新 access_token",
+    "kind": "form",
+    "group": "维护",
+    "order": 20,
+    "submit": "刷新",
+    "write": True,
+    "fields": [],
+    # 覆盖默认的「会改动远端数据」文案：这里说清不可逆的副作用
+    "confirm": (
+        "将用 refresh_token 向 OpenAI 换取一组新的 access_token，并**轮换 refresh_token**。\n"
+        "成功后新值会自动写回本凭据；旧的 refresh_token 随即失效——如果你本机也在用 Codex CLI，"
+        "它可能需要重新登录。\n\n确认继续？"
+    ),
+    "description": "用 refresh_token 换一组新令牌（会轮换 refresh_token 并写回本凭据）",
+}
+
+
+def _do_refresh(data: dict) -> dict:
+    """用 refresh_token 换一组新令牌，返回 ``{"ok", "output"/"error", "updated_data"}``。
+
+    **只在用户显式点按钮时调用**：换令牌会轮换 refresh_token，必须把新值原子写回本凭据
+    （框架负责，见 backend/api.py 的 updated_data 约定），否则用户本机与库里的登录态就错位了。
+    """
+    refresh_token = (data.get("refresh_token") or "").strip()
+    if not refresh_token:
+        return {"ok": False, "error": "没有可用的 refresh_token（请先在字段里填入 auth.json 的 tokens.refresh_token）"}
+
+    body = {
+        "client_id": OAUTH_CLIENT_ID,
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "scope": OAUTH_SCOPE,
+    }
+    try:
+        with make_client() as client:
+            resp = client.post(
+                OAUTH_TOKEN_URL,
+                json=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "User-Agent": USER_AGENT,
+                    "originator": ORIGINATOR,
+                },
+            )
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": f"请求未完成（{type(exc).__name__}）"}
+
+    if resp.status_code != 200:
+        detail = ""
+        payload = safe_json(resp)
+        if isinstance(payload, dict):
+            detail = str(payload.get("error_description") or payload.get("error") or "").strip()
+        hint = "（refresh_token 已失效或被轮换过，请在 Codex 里重新登录）" \
+            if resp.status_code in (400, 401) else ""
+        suffix = f"：{detail[:160]}" if detail else ""
+        return {"ok": False, "error": f"刷新失败（HTTP {resp.status_code}）{suffix}{hint}"}
+
+    payload = safe_json(resp)
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "刷新响应不是 JSON"}
+
+    new_access = str(payload.get("access_token") or "").strip()
+    if not new_access:
+        return {"ok": False, "error": "刷新响应里没有 access_token"}
+
+    patch = {"access_token": new_access}
+    new_refresh = str(payload.get("refresh_token") or "").strip()
+    new_id = str(payload.get("id_token") or "").strip()
+    if new_refresh:
+        patch["refresh_token"] = new_refresh   # 轮换后的新刷新令牌，必须一并写回
+    if new_id:
+        patch["id_token"] = new_id
+
+    claims = _extract_claims(_decode_jwt_payload(new_access))
+    exp_text = _fmt_ts(claims.get("exp"))
+    parts = ["已刷新 access_token"]
+    if exp_text:
+        parts.append(f"新令牌有效期至 {exp_text}")
+    parts.append("refresh_token 已轮换并写回本凭据" if new_refresh else "响应里没有新 refresh_token（沿用原值）")
+    return {"ok": True, "output": "；".join(parts), "updated_data": patch}
+
+
 def actions(data: dict) -> list[dict]:
     """声明可用操作，按认证方式返回：
 
@@ -496,7 +591,11 @@ def actions(data: dict) -> list[dict]:
     if _is_chatgpt(data):
         if not (data.get("access_token") or "").strip():
             return []
-        return [dict(_TOKEN_INFO_ACTION)]
+        acts = [dict(_TOKEN_INFO_ACTION)]
+        # 只有填了 refresh_token 才给「刷新」——没它就无从刷新
+        if (data.get("refresh_token") or "").strip():
+            acts.append(dict(_REFRESH_ACTION))
+        return acts
     if not (data.get("api_key") or "").strip():
         return []
     return [dict(_CHAT_ACTION)]
@@ -508,6 +607,8 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
     params = params or {}
 
     if _is_chatgpt(data):
+        if action_id == "refresh":
+            return _do_refresh(data)
         if action_id != "token_info":
             return {"ok": False, "error": "未知操作"}
         try:

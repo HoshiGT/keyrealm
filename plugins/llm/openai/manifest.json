@@ -22,7 +22,7 @@
           "label": "ChatGPT 登录态（Codex）"
         }
       ],
-      "hint": "「API Key」= 填下面的 API Key。「ChatGPT 登录态（Codex）」= 打开 ~/.codex/auth.json，把 tokens 里的 access_token（必需）、account_id / id_token（可选）分别填到下面各自的字段里——不用粘贴整份 JSON。选好后只填对应的一组，另一组留空即可。"
+      "hint": "「API Key」= 用 API Key 调 api.openai.com；「ChatGPT 登录态（Codex）」= 用 Codex CLI 的登录态（~/.codex/auth.json）。选好后只显示该模式需要的字段。"
     },
     {
       "key": "base_url",
@@ -31,7 +31,10 @@
       "required": false,
       "placeholder": "留空使用默认地址",
       "default": "https://api.openai.com/v1",
-      "hint": "仅「认证方式」选 api_key 时有效；chatgpt 登录态固定走 chatgpt.com。"
+      "hint": "认证方式选「API Key」时有效；ChatGPT 登录态固定走 chatgpt.com。",
+      "show_if": {
+        "auth_mode": "api_key"
+      }
     },
     {
       "key": "api_key",
@@ -40,7 +43,10 @@
       "required": false,
       "sensitive": true,
       "placeholder": "sk-...",
-      "hint": "仅「认证方式」选 api_key 时填写。"
+      "hint": "认证方式选「API Key」时填写。",
+      "show_if": {
+        "auth_mode": "api_key"
+      }
     },
     {
       "key": "access_token",
@@ -49,7 +55,10 @@
       "required": false,
       "sensitive": true,
       "placeholder": "eyJhbGciOiJSUzI1NiIsImtpZCI6...",
-      "hint": "仅「认证方式」选 ChatGPT 登录态（Codex）时填写：打开 ~/.codex/auth.json，取 tokens.access_token 的值粘到这里（不是整份 JSON）。本插件只读取、绝不调用 refresh_token 换新令牌。"
+      "hint": "打开 ~/.codex/auth.json，取 tokens.access_token 的值粘到这里（是这一条的值，不是整份 JSON）。只读校验不会用它以外的令牌。",
+      "show_if": {
+        "auth_mode": "chatgpt"
+      }
     },
     {
       "key": "account_id",
@@ -57,7 +66,10 @@
       "type": "text",
       "required": false,
       "placeholder": "留空则自动从 access_token 里解析",
-      "hint": "可选。auth.json 里 tokens.account_id（形如 4d5f757d-…）。填了会让联网校验带上 chatgpt-account-id 头；留空也能用，插件会从 access_token 的 JWT 里取。"
+      "hint": "可选。auth.json 里 tokens.account_id（形如 4d5f757d-…）。填了会让联网校验带上 chatgpt-account-id 头；留空也能用，插件会从 access_token 的 JWT 里取。",
+      "show_if": {
+        "auth_mode": "chatgpt"
+      }
     },
     {
       "key": "id_token",
@@ -66,14 +78,32 @@
       "required": false,
       "sensitive": true,
       "placeholder": "留空即可（可选）",
-      "hint": "可选。auth.json 里 tokens.id_token；只在 access_token 缺少某些展示字段时用于补充，通常不用填。"
+      "hint": "可选。auth.json 里 tokens.id_token；只在 access_token 缺少某些展示字段时用于补充，通常不用填。",
+      "show_if": {
+        "auth_mode": "chatgpt"
+      }
+    },
+    {
+      "key": "refresh_token",
+      "label": "refresh_token",
+      "type": "password",
+      "required": false,
+      "sensitive": true,
+      "placeholder": "rt.1...（可选）",
+      "hint": "可选。auth.json 里 tokens.refresh_token（形如 rt.1.…）。只读校验**不会**用它；填了之后「操作」里会多出「刷新 access_token」，由你手动点、用它在过期后换一组新令牌（会轮换 refresh_token 并自动写回本凭据）。",
+      "show_if": {
+        "auth_mode": "chatgpt"
+      }
     },
     {
       "key": "probe_chat",
       "label": "余额未知时发一次对话探测",
       "type": "checkbox",
       "required": false,
-      "hint": "仅「认证方式」选 api_key 时有效。厂商无余额接口、或中转站令牌为「不限额度」时，验证会额外发一次 max_tokens=1 的对话请求实测账户是否可用（会消耗极少量额度）。默认关闭。"
+      "hint": "厂商无余额接口、或中转站令牌为「不限额度」时，验证会额外发一次 max_tokens=1 的对话请求实测账户是否可用（会消耗极少量额度）。默认关闭。",
+      "show_if": {
+        "auth_mode": "api_key"
+      }
     },
     {
       "key": "probe_model",
@@ -81,7 +111,10 @@
       "type": "model",
       "required": false,
       "placeholder": "留空自动选择",
-      "hint": "留空 = 自动从该凭据的模型列表里挑一个便宜的（优先 flash / lite / mini 等）。"
+      "hint": "留空 = 自动从该凭据的模型列表里挑一个便宜的（优先 flash / lite / mini 等）。",
+      "show_if": {
+        "auth_mode": "api_key"
+      }
     },
     {
       "key": "notes",
