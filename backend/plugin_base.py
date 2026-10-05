@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import logging
 import sys
@@ -320,12 +321,35 @@ def call_list_models(module: Any, data: dict) -> list:
         return []
 
 
-def call_stream_action(module: Any, action_id: str, params: dict, data: dict, on_delta) -> dict:
-    """流式执行插件的操作；插件未实现 `stream_action` 时回退到 `run_action`（无分段）。"""
+def _accepts_keyword(fn: Any, name: str) -> bool:
+    """函数是否接受名为 ``name`` 的关键字参数（显式写了，或带 ``**kwargs``）。
+
+    用它来**向后兼容**地扩展插件契约：老插件只写了 ``stream_action(a, p, d, on_delta)``，
+    新参数就不传给它，免得一个 TypeError 把好好的插件打成「执行失败」。
+    """
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if name in params:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def call_stream_action(module: Any, action_id: str, params: dict, data: dict, on_delta,
+                       on_progress: Any = None) -> dict:
+    """流式执行插件的操作；插件未实现 `stream_action` 时回退到 `run_action`（无分段）。
+
+    ``on_progress(current, total, text)`` 是**可选**的进度回调（``total <= 0`` 表示总量未知）：
+    只有插件把 ``on_progress`` 写进自己 `stream_action` 的签名里才会传给它。
+    """
     if not hasattr(module, "stream_action"):
         return call_run_action(module, action_id, params, data)
     try:
-        result = module.stream_action(action_id, params or {}, data or {}, on_delta)
+        kwargs = {}
+        if on_progress is not None and _accepts_keyword(module.stream_action, "on_progress"):
+            kwargs["on_progress"] = on_progress
+        result = module.stream_action(action_id, params or {}, data or {}, on_delta, **kwargs)
         return result if isinstance(result, dict) else {"ok": False, "error": "插件返回了非预期结果"}
     except Exception as e:
         _log.exception("插件 %s 的流式操作 %s 执行异常: %s",

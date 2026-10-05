@@ -672,8 +672,27 @@ def stream_credential_action(credential_id: int, action_id: str, params: Optiona
                 "delta": _redact_secrets(text, secrets),
             })
 
+        def on_progress(current, total, text: str = "") -> None:
+            """下载/打包这类长操作的进度：``total <= 0`` 表示总量未知（前端只显示已完成的量）。
+
+            进度是**尽力而为**——数值先夹到合法区间，推送本身出错也绝不能把操作搞失败。
+            """
+            try:
+                cur = max(0, int(current))
+                tot = max(0, int(total or 0))
+            except (TypeError, ValueError):
+                return
+            push_event("vault:action_stream", {
+                "stream_id": stream_id,
+                "progress": {
+                    "current": cur,
+                    "total": tot,
+                    "text": _redact_secrets(str(text or ""), secrets),
+                },
+            })
+
         result = plugin_manager.stream_plugin_action(
-            credential_type, action_id, params or {}, data, on_delta
+            credential_type, action_id, params or {}, data, on_delta, on_progress
         )
         safe_output = _redact_secrets(result.get("output", ""), secrets)
         safe_error = _redact_secrets(result.get("error", ""), secrets)

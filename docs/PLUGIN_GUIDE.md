@@ -436,6 +436,7 @@ def get_display_summary(data):
 | `empty_text` | `list` | 空列表文案 |
 | `save_to` | `form` / `list` | 下载类操作，见 §3.1.3 |
 | `confirm` | 全部 | 可选。**覆盖写操作二次确认的默认文案**。涉及不可逆副作用时应当写清楚——例如「刷新 access_token」会轮换 `refresh_token`，就会提示用户本机 Codex CLI 可能需要重新登录 |
+| `progress` | 全部 | 可选布尔。声明该操作**会上报进度**（下载 / 打包这类长操作）：前端改走流式入口并在弹窗里渲染进度条。插件侧需实现 `stream_action(..., on_progress=…)`，见 §3.1.9 |
 | `updated_data`（**返回值**） | 全部 | 可选。`run_action` 的返回里带上 `{"字段key": 新值}`，框架会把这些值**写回该凭据**（只接受插件在 manifest 里声明过的字段）。用于「用 refresh_token 换一组新令牌」这类必须原子保存的操作。写回值**不会**回传给前端（那是新明文令牌），前端只收到 `data_updated: [字段名]`，据此刷新列表并复验。见 §3.1.8 |
 
 `run_action` 的返回：
@@ -596,6 +597,37 @@ def run_action(action_id, params, data):
 - 操作必须标 `write: true`（前端会二次确认），并用 `confirm` 把不可逆后果写清楚；
 - 只读校验路径**绝不能**走这条（换令牌是写副作用）；
 - 详见 `plugins/llm/openai/plugin.py` 的 `_do_refresh`。
+
+#### 3.1.9 长操作报进度（`progress` + `on_progress`）
+
+下载 / 打包这类要跑十几秒的操作，声明 `"progress": True` 后前端会改走**流式入口**并在弹窗里
+渲染进度条：
+
+```python
+{"id": "download_prefix", "name": "打包下载", "kind": "form", "progress": True,
+ "save_to": {...}, "fields": [...]}
+
+def stream_action(action_id, params, data, on_delta, on_progress=None):
+    """progress 类操作必须实现它，并把 on_progress 一路传到下载循环里。"""
+    if action_id not in ("download_object", "download_prefix"):
+        return run_action(action_id, params, data)      # 其它操作照旧
+    return _run_download(..., progress=on_progress)
+
+def on_progress(current: int, total: int, text: str = "") -> None:
+    """total <= 0 表示总量未知（前端只显示已完成量）；text 是给用户看的一句话。"""
+```
+
+约定与注意事项：
+
+- **`on_progress` 必须是关键字参数且带默认值**（`on_progress=None`）。框架用
+  `inspect.signature` 判断插件认不认这个名字，**不认就不传**——所以只写
+  `stream_action(a, p, d, on_delta)` 的老插件照常工作，不会被新参数打断。
+- **节流**：别在 `iter_bytes` 的每个 chunk 上回调（大文件会推出几万条事件）。
+  按每 ~256KB 或每 0.2 秒报一次即可。
+- 报什么：单对象下载按**字节**报（`current=已写, total=Content-Length`）；多对象打包按
+  **对象个数**报（跨对象累加字节不直观）。
+- 进度是**尽力而为**：后端推送出错不会让操作失败；`current/total` 会被夹到合法区间。
+- 终态仍由框架的 `done` 事件给出（`output` / `error`），插件不必自己报「完成」。
 
 ---
 

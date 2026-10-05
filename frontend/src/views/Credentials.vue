@@ -133,6 +133,9 @@ function blankActionDialog() {
     values: {},
     submitLabel: '运行',
     write: false,
+    // 该操作声明了 progress: true → 走流式入口、渲染进度条（下载/打包这类长操作）
+    progressEnabled: false,
+    progress: null,
     saveTo: null,      // 声明了 save_to 的操作：执行前先弹「另存为」
     output: '',
     formRows: [],      // form 操作也可以返回 rows（例如「查用户详情」），有就渲染成表格
@@ -163,6 +166,13 @@ const actionDialog = ref(blankActionDialog())
 const actionFormFields = computed(
   () => visibleFields(actionDialog.value.fields, actionDialog.value.values),
 )
+
+/** 进度百分比；总量未知（total<=0）时返回 0，由 el-progress 的 indeterminate 走动画 */
+const progressPercent = computed(() => {
+  const p = actionDialog.value.progress
+  if (!p || !p.total) return 0
+  return Math.min(100, Math.floor((p.current / p.total) * 100))
+})
 
 /** 模型列表拉取失败的提示：不阻塞对话，只提示用户回退为手动输入模型名 */
 const MODELS_ERROR = '获取模型列表失败，请手动输入模型名'
@@ -380,6 +390,7 @@ function openAction(cred, action, seed = {}, extra = {}) {
     values,
     submitLabel: action.submit || '运行',
     write: !!action.write,
+    progressEnabled: !!action.progress,
     confirmText: action.confirm || '',
     saveTo: action.save_to || null,
   }
@@ -658,6 +669,27 @@ async function runActionForm() {
   dialog.busy = true
   dialog.error = ''
   dialog.output = ''
+  dialog.formRows = []
+  dialog.progress = null
+
+  // 声明了 progress 的操作走**流式入口**：后端在下载/打包过程中推 vault:action_stream 进度事件，
+  // 由 handleActionStream 渲染进度条，并把终态写回 output / error（并负责结束 busy）。
+  if (dialog.progressEnabled) {
+    try {
+      const res = await api.streamCredentialAction(dialog.credentialId, dialog.actionId, params)
+      if (res && res.ok === false) {
+        dialog.busy = false
+        dialog.error = res.error || '执行失败'
+        return
+      }
+      dialog.streamId = res.stream_id
+    } catch (err) {
+      dialog.busy = false
+      dialog.error = err.message || '执行失败'
+    }
+    return
+  }
+
   try {
     const res = await api.runCredentialAction(dialog.credentialId, dialog.actionId, params)
     if (res && res.ok) {
@@ -707,9 +739,27 @@ function failAssistant(dialog, message) {
 function handleActionStream(detail) {
   const dialog = actionDialog.value
   if (!detail || !dialog.streamId || detail.stream_id !== dialog.streamId) return
+
+  // 进度事件（下载/打包这类长操作）：只更新进度条，不改终态
+  if (detail.progress) {
+    dialog.progress = {
+      current: Number(detail.progress.current) || 0,
+      total: Number(detail.progress.total) || 0,
+      text: detail.progress.text || '',
+    }
+    return
+  }
+
   if (detail.done) {
     dialog.busy = false
     dialog.streamId = null
+    dialog.progress = null
+    // 表单/列表类走流式入口的（如带进度的下载）：终态写进 output / error 即可
+    if (dialog.kind !== 'chat') {
+      if (detail.error) dialog.error = detail.error
+      else dialog.output = detail.output || '（无输出）'
+      return
+    }
     if (detail.error) {
       failAssistant(dialog, detail.error)
       return
@@ -1873,6 +1923,17 @@ onMounted(async () => {
             {{ actionDialog.submitLabel }}
           </el-button>
         </div>
+        <div v-if="actionDialog.progress" class="action-progress">
+          <el-progress
+            :percentage="progressPercent"
+            :indeterminate="!actionDialog.progress.total"
+            :stroke-width="14"
+            :text-inside="true"
+          />
+          <div v-if="actionDialog.progress.text" class="progress-text">
+            {{ actionDialog.progress.text }}
+          </div>
+        </div>
         <div v-if="actionDialog.error" class="chat-error">{{ actionDialog.error }}</div>
         <pre v-if="actionDialog.output" class="action-output">{{ actionDialog.output }}</pre>
         <el-table
@@ -2487,6 +2548,20 @@ onMounted(async () => {
   margin-bottom: 10px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+/* 带进度的操作（下载/打包）：进度条 + 一行说明（如「12.3 MB / 45.0 MB」） */
+.action-progress {
+  margin-top: 12px;
+}
+
+.action-progress .progress-text {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ctx-desc {

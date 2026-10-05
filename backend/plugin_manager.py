@@ -524,17 +524,19 @@ def plugin_models(credential_type: str, data: dict) -> list:
 
 
 def stream_plugin_action(credential_type: str, action_id: str, params: dict, data: dict,
-                         on_delta) -> dict:
+                         on_delta, on_progress=None) -> dict:
     """流式执行插件操作；插件未实现时回退为普通执行。
 
     注意：调用方（``api.stream_credential_action``）是在**新线程**里跑这个函数的，
     所以代理作用域必须在这里建立——设在调用线程里子线程读不到。
+
+    ``on_progress(current, total, text)`` 为可选进度回调（见 ``plugin_base.call_stream_action``）。
     """
     module = get_module(credential_type)
     if module is None:
         return {"ok": False, "error": _module_missing_error(credential_type)}
     with proxy_store.credential_proxy_scope(data, credential_type):
-        return call_stream_action(module, action_id, params, data, on_delta)
+        return call_stream_action(module, action_id, params, data, on_delta, on_progress)
 
 
 def list_installed_plugins() -> list[dict]:

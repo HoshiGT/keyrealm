@@ -136,6 +136,12 @@ App.vue
 | `form` | 动态表单 + `<pre>` 文本输出；`write: true` 时提交前二次确认 |
 | `list` | **表格 + 行内按钮 + 下钻**：工具栏有面包屑与「返回」「刷新」，行内按钮由 `row_actions` 声明 |
 
+> **带进度的操作**（action 声明 `progress: true`，如 OSS 下载 / 前缀打包）：表单弹窗改走
+> `api.streamCredentialAction`，后端在下载过程中推 `vault:action_stream` 的
+> `{stream_id, progress:{current,total,text}}`，`handleActionStream` 把它渲染成 `el-progress`
+> （`total <= 0` 时用 `indeterminate` 走动画）。终态仍由同一条 `done` 事件收口：非 chat 的弹窗
+> 把 `output` / `error` 写进表单弹窗并结束 `busy`。
+
 - **多个操作时**先弹选择菜单（`.action-menu`，固定定位，全局一份，不给每个表格行挂下拉）；
   **只有一个操作时直接进**，保住原有的一键体验。菜单先按 `actions` 全列出，**权限探测结果回来再收敛**
   （避免「先显示后消失」的抖动）。
