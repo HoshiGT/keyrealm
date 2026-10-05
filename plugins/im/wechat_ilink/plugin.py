@@ -16,7 +16,9 @@ NAME = "微信 iLink Bot"
 REQUIRED = (("account", "账号"), ("credential", "凭据"))
 DISPLAY_FIELD = "account"
 
-# 本插件无出网校验请求，不支持 HTTP 代理——显式声明，框架据此不显示「使用代理」。
+# 本插件当前**不发任何网络请求**（只做本地格式校验），代理选项没有意义，故显式排除。
+# 注意：iLink Bot 其实有可用的只读校验端点（POST /ilink/bot/getupdates，timeout=0 立即返回）；
+# 若日后接入该探针，此处要改回 `USES_PROXY = True`（那是 HTTP 请求，走 make_client）。
 USES_PROXY = False
 
 

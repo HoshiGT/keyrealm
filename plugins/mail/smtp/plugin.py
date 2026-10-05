@@ -31,12 +31,17 @@ import socket
 import ssl
 from typing import Any, Optional
 
-from mail_common import VerifyResult, guarded, timeout
+from mail_common import (
+    TunneledIMAP4,
+    TunneledIMAP4_SSL,
+    TunneledSMTP,
+    TunneledSMTP_SSL,
+    VerifyResult,
+    guarded,
+    timeout,
+)
 
 SERVICE_NAME = "通用 SMTP 邮箱"
-
-# 本插件走标准库 smtplib/imaplib，不支持 HTTP 代理——显式声明，框架据此不显示「使用代理」。
-USES_PROXY = False
 
 # SSL 与非 SSL 的默认端口
 DEFAULT_SSL_PORT = 465
@@ -111,9 +116,9 @@ def _verify_smtp(data: dict) -> VerifyResult:
         # 建连阶段：区分 SMTP 协议错误、SSL 错误、网络/超时错误
         try:
             if use_ssl:
-                server = smtplib.SMTP_SSL(host, port, timeout=timeout())
+                server = TunneledSMTP_SSL(host, port, timeout=timeout())
             else:
-                server = smtplib.SMTP(host, port, timeout=timeout())
+                server = TunneledSMTP(host, port, timeout=timeout())
                 server.ehlo()
                 server.starttls()
                 server.ehlo()
@@ -127,6 +132,9 @@ def _verify_smtp(data: dict) -> VerifyResult:
             return VerifyResult(status="error", message=f"SSL/TLS 握手失败: {exc}")
         except socket.gaierror as exc:
             return VerifyResult(status="error", message=f"无法解析服务器地址: {exc}")
+        except RuntimeError as exc:
+            # 代理配置有问题（协议不支持 / 缺 PySocks）——原样透出中文处理办法
+            return VerifyResult(status="error", message=str(exc))
         except OSError as exc:
             return VerifyResult(status="error", message=f"网络连接失败: {exc}")
 
@@ -302,13 +310,13 @@ def _connect_imap(host: str, port: int, password: str, wait: float):
 
     if port == IMAP_DEFAULT_PORT:
         try:
-            return imaplib.IMAP4_SSL(host, port, timeout=wait), errors
+            return TunneledIMAP4_SSL(host, port, timeout=wait), errors
         except Exception as exc:  # noqa: BLE001
             note(f"SSL {port}", exc)
             return None, errors
 
     try:
-        conn = imaplib.IMAP4(host, port, timeout=wait)
+        conn = TunneledIMAP4(host, port, timeout=wait)
     except Exception as exc:  # noqa: BLE001
         note(f"明文 {port}", exc)
     else:

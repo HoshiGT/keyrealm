@@ -169,7 +169,8 @@ def proxy():
 > 缺包就打印清单并中止，提示 `pip install -r requirements.txt`（`--allow-missing-deps` 可强行继续）；
 > `CredentialVault.spec` 里也显式 `collect_all("socksio")`。
 
-注意：SMTP 插件（`mail_smtp`）走标准库 `smtplib`，不受该代理影响。
+注意：SMTP / IMAP 走的是**裸 TCP**，不吃 HTTP 代理那一套，但可以走 SOCKS / HTTP CONNECT 隧道
+（依赖 PySocks，见 §2.6），所以邮箱同样支持「使用代理」。
 
 **测试代理**：同一页有「测试代理」按钮，传当前输入框的值（可「先测再存」），调用
 `backend/proxy_test.py` 做一次对照实验——同一批探测分别在直连与走代理下各跑一遍，比对
@@ -298,16 +299,49 @@ def quota_probe(data: dict):
 「用哪个代理」是**每个凭据的通用设置**，默认所有插件都会出现该选项——判据是插件**默认走代理**
 （对应 `backend/plugin_manager.plugin_uses_proxy()`，默认 `True`）。
 
-确实不支持 HTTP 代理的插件（例如走标准库 `smtplib` 的 `mail_smtp`、无出网请求的
-`im_wechat_ilink`），在模块级显式声明即可把它从界面上隐去：
+确实**完全不走网络**的插件（例如无出网请求的 `im_wechat_ilink`），在模块级显式声明即可把它从界面上隐去：
 
 ```python
-USES_PROXY = False   # 本插件不经 httpx / 无出网请求，不支持 HTTP 代理
+USES_PROXY = False   # 本插件无出网请求，代理选项没有意义
 ```
+
+> **`smtplib` / `imaplib` 类插件不适用这条**：它们不能走 HTTP 代理，但可以走 **SOCKS / HTTP CONNECT
+> 隧道**，所以照样支持「使用代理」。做法见 §2.6。
 
 > 早期是用「模块里有没有 `make_client`」判定的——那样会**漏掉间接发请求的插件**：
 > 例如 NVIDIA NIM 自己没 `import make_client`，而是经 `llm_protocols` 的 `probe_openai_chat`
 > 发请求，于是被误判为「不走代理」而隐藏了选项。现改为「默认 True + 显式排除」。
+
+---
+
+## 2.6 非 HTTP 协议怎么走代理（TCP 隧道）
+
+`http.client` / `httpx` 那套（`make_client(proxy=…)`）只对 HTTP(S) 生效。**SMTP / IMAP 等裸 TCP 协议**
+用不了它，但可以把连接**隧道**穿出去：SOCKS5（含 `socks5h` 远端解析）或 HTTP CONNECT。
+
+框架侧能力在各类别的 `<类别>_common.py` 里（邮箱是 `mail_common`）：`open_socket()` 建一个
+「已经穿过代理」的 socket，再交给标准库——只覆写建连那一处，其余行为与标准库一致：
+
+```python
+class TunneledSMTP(smtplib.SMTP):          # 普通连接
+    def _get_socket(self, host, port, timeout):
+        return open_socket(host, port, timeout)
+
+class TunneledSMTP_SSL(smtplib.SMTP_SSL):  # SMTPS
+    def _get_socket(self, host, port, timeout):
+        return self.context.wrap_socket(open_socket(host, port, timeout), server_hostname=self._host)
+# IMAP 对应的钩子是 IMAP4._create_socket
+```
+
+要点：
+
+- `open_socket()` 自己读 `proxy()`（与其它类别同一套优先级），**没配代理就退回普通 `create_connection`**，
+  所以插件可以无脑用它，不必分两条路径。
+- 隧道依赖 **PySocks**（`import socks`，见 `requirements.txt`）。它是运行时动态加载的插件用到的，
+  PyInstaller 静态分析看不到，**spec 里显式 `collect_all("socks")`**；缺失时 `open_socket()` 抛一句
+  中文处理办法，而不是甩 `ImportError`。
+- 支持的协议：`socks5` / `socks5h` / `socks4` / `socks4a` / `http`(CONNECT)。账号密码写在 URL 里
+  （`socks5://user:pass@host:port`），百分号编码会还原。
 
 ---
 

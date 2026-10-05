@@ -108,6 +108,23 @@ else:
     hiddenimports += _h
     print("[spec] SOCKS 代理支持：已收集 socksio")
 
+# 邮箱（SMTP/IMAP）走 SOCKS/HTTP CONNECT 隧道要靠 PySocks（import 名是 socks）。
+# 插件是运行时动态加载的，PyInstaller 静态分析看不到它，必须显式收集。
+try:
+    import socks  # noqa: F401  (PySocks)
+except Exception:
+    print(
+        "[spec] 警告：构建环境未安装 PySocks → 打出的程序**无法给邮箱设置代理**。\n"
+        "[spec]       修复：pip install PySocks 后重新构建。\n"
+        "[spec]       提示：改用 python scripts/build.py 会在构建前检查全部依赖并直接中止。"
+    )
+else:
+    _d, _b, _h = collect_all("socks")
+    datas += _d
+    binaries += _b
+    hiddenimports += _h
+    print("[spec] 邮箱代理支持：已收集 PySocks")
+
 # plugins/ 下的标准库导入：**必须手工补**，否则打包后的 exe 一用到就崩。
 #
 # 原因：插件是运行时由 backend 用 importlib **动态加载**的，main.py 从不 `import plugins`，
