@@ -28,10 +28,12 @@ from typing import Any, Optional
 
 from . import database as db
 from . import logger
+from . import proxy_store
 from .paths import app_dir
 from .plugin_base import (
     VerifyResult,
     call_actions,
+    call_capabilities,
     call_display_summary,
     call_list_models,
     call_run_action,
@@ -295,6 +297,14 @@ def list_available_plugins() -> list[dict]:
             available.append({
                 "category": cat_dir.name,
                 "category_name": _category_display(cat_dir.name, cat_meta),
+                # 与「已安装」列表保持一致的展示字段：缺这两个的话，可添加卡片的类别标题
+                # 只能退到子插件 emoji、单条也没有 logo，两张卡片看起来像两套设计
+                "category_icon": cat_meta.get("icon", ""),
+                "icon_image": get_icon_image({
+                    "icon": manifest.icon,
+                    "plugin_path": str(sub),
+                    "credential_type": manifest.credential_type,
+                }),
                 "service": sub.name,
                 "credential_type": manifest.credential_type,
                 "name": manifest.name,
@@ -356,11 +366,55 @@ def get_module(credential_type: str) -> Optional[Any]:
 
 
 def verify_credential(credential_type: str, data: dict) -> VerifyResult:
-    """调用插件验证凭据"""
+    """调用插件验证凭据（含「按凭据解析代理」与「欠费探测」）"""
     module = get_module(credential_type)
     if module is None:
         return VerifyResult(status="error", message=f"插件未安装或加载失败: {credential_type}")
-    return call_verify(module, data)
+    # 代理作用域收口在这里：单条 / 批量 / MCP / 定时 四条路径都经此函数，
+    # 因此各条凭据的「用哪个代理」自动生效且线程隔离（见 proxy_store）。
+    with proxy_store.credential_proxy_scope(data, credential_type):
+        result = call_verify(module, data)
+        _apply_quota_probe(credential_type, module, data, result)
+    return result
+
+
+def plugin_uses_proxy(credential_type: str) -> bool:
+    """该插件的请求是否走代理（决定前端要不要给它显示「使用代理」）。
+
+    判据是「有没有 ``make_client``」——走 httpx 的类别才有；``mail_smtp`` 用标准库
+    ``smtplib``，本就不支持 HTTP 代理，给它显示代理选项只会误导。
+    """
+    module = get_module(credential_type)
+    return bool(module is not None and callable(getattr(module, "make_client", None)))
+
+
+def _apply_quota_probe(credential_type: str, module, data: dict, result: VerifyResult) -> None:
+    """余额拿不到时的「欠费探测」后置检查（原地修改 result）。
+
+    只在**验证通过**且**没有余额/使用率**时才给插件机会——有余额就没必要再花一发请求。
+    开关与模型都在凭据自己的字段里（``probe_chat`` / ``probe_model``），未接入探测的
+    插件没有 ``quota_probe``，直接跳过。
+    """
+    if result.status != "valid":
+        return
+    info = result.account_info or {}
+    if info.get("balance") is not None or info.get("usage_rate") is not None:
+        return
+    probe = getattr(module, "quota_probe", None)
+    if not callable(probe):
+        return
+    try:
+        extra = probe(data)
+    except Exception as e:  # noqa: BLE001 - 后置检查绝不能影响验证结果
+        _log.warning("欠费探测异常 %s: %s", credential_type, type(e).__name__)
+        return
+    if not isinstance(extra, dict):
+        return
+    extra_info = extra.get("account_info")
+    if isinstance(extra_info, dict) and extra_info:
+        result.account_info = {**info, **extra_info}
+    if extra.get("message"):
+        result.message = str(extra["message"])
 
 
 def validate_credential(credential_type: str, data: dict) -> list[str]:
@@ -391,27 +445,48 @@ def plugin_actions(credential_type: str, data: dict) -> list:
     return call_actions(module, data) if module else []
 
 
+def plugin_capabilities(credential_type: str, data: dict) -> dict:
+    """该凭据当前真正能用的操作（可选能力）。
+
+    **会联网**（插件要拿凭据去打上游接口探权限），所以包在代理作用域里，与 `plugin_models` 同理。
+    """
+    module = get_module(credential_type)
+    if module is None:
+        return {"available": None, "note": "", "error": True}
+    with proxy_store.credential_proxy_scope(data, credential_type):
+        return call_capabilities(module, data)
+
+
 def run_plugin_action(credential_type: str, action_id: str, params: dict, data: dict) -> dict:
     """执行插件的某个操作。"""
     module = get_module(credential_type)
     if module is None:
         return {"ok": False, "error": "插件未安装或加载失败"}
-    return call_run_action(module, action_id, params, data)
+    with proxy_store.credential_proxy_scope(data, credential_type):
+        return call_run_action(module, action_id, params, data)
 
 
 def plugin_models(credential_type: str, data: dict) -> list:
     """该插件对给定凭据可用的模型列表（可选能力）。"""
     module = get_module(credential_type)
-    return call_list_models(module, data) if module else []
+    if module is None:
+        return []
+    with proxy_store.credential_proxy_scope(data, credential_type):
+        return call_list_models(module, data)
 
 
 def stream_plugin_action(credential_type: str, action_id: str, params: dict, data: dict,
                          on_delta) -> dict:
-    """流式执行插件操作；插件未实现时回退为普通执行。"""
+    """流式执行插件操作；插件未实现时回退为普通执行。
+
+    注意：调用方（``api.stream_credential_action``）是在**新线程**里跑这个函数的，
+    所以代理作用域必须在这里建立——设在调用线程里子线程读不到。
+    """
     module = get_module(credential_type)
     if module is None:
         return {"ok": False, "error": "插件未安装或加载失败"}
-    return call_stream_action(module, action_id, params, data, on_delta)
+    with proxy_store.credential_proxy_scope(data, credential_type):
+        return call_stream_action(module, action_id, params, data, on_delta)
 
 
 def list_installed_plugins() -> list[dict]:

@@ -4,6 +4,7 @@ APScheduler BackgroundScheduler + ThreadPoolExecutor
 """
 from __future__ import annotations
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -16,14 +17,12 @@ from apscheduler.triggers.interval import IntervalTrigger
 from . import database as db
 from . import logger
 from . import plugin_manager
+from . import verify_options
 
 _log = logger.get_logger(__name__)
 
 _scheduler: Optional[BackgroundScheduler] = None
 _executor = ThreadPoolExecutor(max_workers=10)
-
-# 批量验证并发度（每个凭据一个任务）
-BATCH_CONCURRENCY = 8
 
 # 由 api.py 注入，用于推送事件到前端
 _event_callback: Optional[Callable] = None
@@ -51,8 +50,27 @@ def _get_key() -> Optional[bytes]:
     return None
 
 
+# 正在验证中的凭据 id。同一凭据并发验证没有意义——两次结果会互相覆盖，网络请求还翻倍；
+# 前端连点、或前一次还没回来就点了别的条目又点回来时，靠这里挡掉。
+_inflight: set = set()
+_inflight_lock = threading.Lock()
+
+
 def verify_single_credential(cred_id: int, trigger_type: str = "schedule") -> dict:
-    """验证单条凭据，返回结果 dict"""
+    """验证单条凭据，返回结果 dict。同一凭据已在验证中时直接挡回。"""
+    with _inflight_lock:
+        if cred_id in _inflight:
+            return {"status": "unknown", "message": "该凭据正在验证中，请稍候"}
+        _inflight.add(cred_id)
+    try:
+        return _verify_single_credential(cred_id, trigger_type)
+    finally:
+        with _inflight_lock:
+            _inflight.discard(cred_id)
+
+
+def _verify_single_credential(cred_id: int, trigger_type: str = "schedule") -> dict:
+    """验证单条凭据的实际实现（调用方保证同一凭据不会并发进入）。"""
     from .crypto import decrypt_dict
 
     key = _get_key()
@@ -116,12 +134,15 @@ def batch_verify(
     credential_type: Optional[str] = None,
     trigger_type: str = "manual",
     credential_ids: Optional[list] = None,
+    concurrency: Optional[int] = None,
 ):
     """批量验证，后台线程池**并发**执行。
 
     - 显式传入 `credential_ids` 时只验证这些凭据（前端手动勾选）；否则按 scope/group/type 取。
     - 禁用批量验证的插件（manifest 中 batch_verify=false）会被排除：这类插件无法
       自动化验证或有写副作用，只能手动单个验证，计入「跳过」。
+    - `concurrency` 为本次并发线程数（前端在批量验证对话框里设置）；不传则读已保存的设置。
+      定时触发的批量验证走同一份设置——见 verify_options。
     """
     if credential_ids:
         wanted = set(int(i) for i in credential_ids)
@@ -147,7 +168,7 @@ def batch_verify(
     def _run():
         valid = invalid = error = 0
         done = 0
-        workers = min(BATCH_CONCURRENCY, total)
+        workers = min(verify_options.concurrency(concurrency), total)
         # 每个凭据一个任务并发执行；结果在 as_completed 的消费线程里单线程汇总
         with ThreadPoolExecutor(max_workers=workers) as pool:
             fut_cred = {

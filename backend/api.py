@@ -4,9 +4,10 @@ pywebview JS-API 桥接层
 """
 from __future__ import annotations
 
+import ipaddress
 import json
-import os
 import threading
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Optional, Union
@@ -16,10 +17,12 @@ from . import database as db
 from . import logger
 from . import mcp_server
 from . import plugin_manager
+from . import preset_store
 from . import proxy as proxy_config
-from . import proxy_test
+from . import proxy_store
 from . import scheduler
 from . import tray
+from . import verify_options
 from .crypto import (
     check_verify_token,
     create_verify_token,
@@ -246,6 +249,9 @@ def create_credential(
     if key is None:
         return {"error": "vault_locked", "message": "保险库已锁定"}
 
+    # 类别/插件级默认设置先补进来——默认值可能正好满足必填项，所以必须在校验之前
+    data = preset_store.apply_defaults(credential_type, data)
+
     errors = plugin_manager.validate_credential(credential_type, data)
     if errors:
         return {"error": "validation_failed", "details": errors}
@@ -347,10 +353,22 @@ def batch_verify(
     group_id: Optional[int] = None,
     credential_type: Optional[str] = None,
     credential_ids: Optional[list] = None,
+    concurrency=None,
+    timeout=None,
 ) -> dict:
+    """触发批量验证（后台并发执行）。
+
+    `concurrency` / `timeout` 来自「批量验证」对话框里的两个输入框：传了就先落库再执行，
+    下次打开对话框沿用；不传则用已保存的设置。
+    """
     key = _get_key()
     if key is None:
         return {"error": "vault_locked"}
+
+    options = verify_options.save(concurrency, timeout)
+    _log.info("批量验证参数：并发 %d，超时 %gs",
+              options["concurrency"], options["timeout"])
+
     if credential_ids:
         ids = set(int(i) for i in credential_ids)
         creds = [c for c in db.list_credentials() if c.get("id") in ids]
@@ -361,8 +379,16 @@ def batch_verify(
         )
     scheduler.batch_verify(scope=scope, group_id=group_id,
                            credential_type=credential_type, trigger_type="manual",
-                           credential_ids=credential_ids)
-    return {"ok": True, "total": len(creds)}
+                           credential_ids=credential_ids,
+                           concurrency=options["concurrency"])
+    return {"ok": True, "total": len(creds),
+            "concurrency": options["concurrency"], "timeout": options["timeout"]}
+
+
+def get_batch_options() -> dict:
+    """批量验证的运行参数（并发线程数 / 请求超时）与取值范围，供对话框回填。"""
+    return {"ok": True, **verify_options.get_options()}
+
 
 
 def check_duplicate_credential(credential_type: str, data: dict) -> list:
@@ -429,6 +455,49 @@ def list_plugins() -> list:
     return plugins
 
 
+def credential_capabilities(credential_id: int) -> dict:
+    """该凭据当前**真正能用**的操作（插件可选能力 `capabilities`）。
+
+    与 `list_credential_actions` 分开是有意的：`actions()` 必须便宜且无副作用（菜单靠它渲染），
+    而权限探测要联网、可能失败。分开了才能把三种状态说清楚：
+    `actions 为空`（没有操作）/ `available 为空`（有操作但没权限）/ `探测失败`（全都展示）。
+    """
+    key = _get_key()
+    if key is None:
+        return {"available": None, "note": "", "error": True}
+    cred = db.get_credential(credential_id)
+    if not cred:
+        return {"available": None, "note": "", "error": True}
+    try:
+        data = decrypt_dict(key, cred["data_encrypted"])
+    except Exception:
+        data = {}
+    return plugin_manager.plugin_capabilities(cred["credential_type"], data)
+
+
+def pick_save_path(default_name: str = "", file_types: Optional[list] = None) -> dict:
+    """弹系统「另存为」，返回用户选的路径。
+
+    下载类操作（仓库打包、对象下载）**必须先经过这一步**：插件自己不该弹对话框
+    （流式路径上插件跑在新建线程里，跨线程弹窗会卡界面），也不能把带鉴权头的下载 URL
+    回传给前端——那等于把短期凭证交给 JS。正确顺序是：前端先拿到路径 → 路径塞进 params → 插件自己下载。
+    """
+    safe_name = _safe_filename(default_name)
+    path = _file_dialog("save", default_name=safe_name, file_types=file_types)
+    if not path:
+        return {"ok": False, "message": "已取消"}
+    return {"ok": True, "path": path}
+
+
+def _safe_filename(name: str) -> str:
+    """把用户/插件给的默认文件名洗干净：路径分隔符与控制字符不能进文件名。"""
+    text = str(name or "").strip()
+    for ch in ("/", "\\", ":", "*", "?", '"', "<", ">", "|"):
+        text = text.replace(ch, "_")
+    text = text.replace("..", "_")
+    return text[:120]
+
+
 def list_credential_actions(credential_id: int) -> list:
     """某凭据对应插件声明的「简易操作」列表（可选能力）。"""
     key = _get_key()
@@ -468,6 +537,23 @@ def _redact_secrets(text: Any, secrets: list) -> Any:
     return out
 
 
+def _redact_deep(value: Any, secrets: list) -> Any:
+    """递归净化整个结果。
+
+    **不能只扫顶层的 ``output`` / ``error``**：列表类操作把数据放在 ``rows`` / ``columns`` 里，
+    只扫顶层等于让列表里回显的密钥原样穿到前端（JS 桥那一侧没有任何净化）。
+    """
+    if not secrets:
+        return value
+    if isinstance(value, str):
+        return _redact_secrets(value, secrets)
+    if isinstance(value, dict):
+        return {k: _redact_deep(v, secrets) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_deep(v, secrets) for v in value]
+    return value
+
+
 def run_credential_action(credential_id: int, action_id: str, params: Optional[dict] = None) -> dict:
     """执行某凭据的插件操作（输出/错误统一做密钥净化）。"""
     key = _get_key()
@@ -484,9 +570,8 @@ def run_credential_action(credential_id: int, action_id: str, params: Optional[d
         cred["credential_type"], action_id, params or {}, data
     )
     secrets = _credential_secrets(cred["credential_type"], data)
-    if secrets and isinstance(result, dict):
-        for k in ("output", "error"):
-            result[k] = _redact_secrets(result.get(k), secrets)
+    # 整份结果递归净化：列表类操作的 rows/columns 也在这里面
+    result = _redact_deep(result, secrets)
     # 日志同样必须净化：插件回显的密钥不能落盘到日志文件
     ok = bool(isinstance(result, dict) and result.get("ok"))
     _log.info(
@@ -513,6 +598,17 @@ def list_credential_models(credential_id: int) -> list:
     except Exception:
         data = {}
     return plugin_manager.plugin_models(cred["credential_type"], data)
+
+
+def list_draft_models(credential_type: str, data: Optional[dict] = None) -> list:
+    """尚未保存的（新增/编辑表单里的）凭据可用的模型列表。
+
+    与 ``list_credential_models`` 的区别是数据来自表单而非库，因此新建凭据时也能
+    拿到下拉候选；失败时插件返回空数组，前端回退为自由输入。
+    """
+    if not credential_type:
+        return []
+    return plugin_manager.plugin_models(credential_type, data or {})
 
 
 def stream_credential_action(credential_id: int, action_id: str, params: Optional[dict] = None) -> dict:
@@ -597,28 +693,111 @@ def install_plugin(category: str, service: str) -> dict:
 
 # ── MCP ───────────────────────────────────────────────────
 
+MCP_DEFAULT_HOST = "127.0.0.1"
+MCP_DEFAULT_PORT = 8765
+
+
+def _mcp_host() -> str:
+    return db.get_setting("mcp_host", "").strip() or MCP_DEFAULT_HOST
+
+
+def _mcp_port() -> int:
+    try:
+        port = int(db.get_setting("mcp_port", "").strip())
+    except (TypeError, ValueError):
+        return MCP_DEFAULT_PORT
+    return port if 1 <= port <= 65535 else MCP_DEFAULT_PORT
+
+
+def _valid_mcp_host(host: str) -> bool:
+    """只接受合法 IP 或 localhost —— 别让人一不小心把凭据服务挂到公网。"""
+    if host == "localhost":
+        return True
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def _wait_mcp_stopped(timeout: float = 3.0) -> bool:
+    """等服务真正停下来（uvicorn 退出后端口才释放，紧接着启动会撞上自己）。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not mcp_server.is_running():
+            return True
+        time.sleep(0.1)
+    return not mcp_server.is_running()
+
+
 def get_mcp_status() -> dict:
     running = mcp_server.is_running()
-    port = mcp_server.get_port()
     return {
         "running": running,
-        "port": port,
+        "host": mcp_server.get_host(),
+        "port": mcp_server.get_port(),
         "active_tokens": db.count_active_tokens(),
-        "url": f"http://127.0.0.1:{port}/sse" if running else "",
+        "url": mcp_server.get_url() if running else "",
     }
 
 
+def get_mcp_options() -> dict:
+    """MCP 监听地址（供设置页回填）。"""
+    return {"ok": True, "host": _mcp_host(), "port": _mcp_port(),
+            "defaults": {"host": MCP_DEFAULT_HOST, "port": MCP_DEFAULT_PORT},
+            "running": mcp_server.is_running()}
+
+
+def set_mcp_options(host: str, port) -> dict:
+    """保存监听地址；服务在运行则按新地址重启。
+
+    端口被占用时**不改动已保存的值**，并把原地址的服务起回去——不能把用户留在「改完啥都没了」的状态。
+    """
+    host = (host or "").strip() or MCP_DEFAULT_HOST
+    if not _valid_mcp_host(host):
+        return {"ok": False, "message": f"监听地址不合法：{host}（只允许 IP 或 localhost）"}
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        return {"ok": False, "message": "端口必须是数字"}
+    if not (1 <= port <= 65535):
+        return {"ok": False, "message": "端口需在 1–65535 之间"}
+
+    old_host, old_port = _mcp_host(), _mcp_port()
+    was_running = mcp_server.is_running()
+    if was_running:
+        mcp_server.stop_server()
+        _wait_mcp_stopped()
+
+    if was_running:
+        ok, actual_port, url = mcp_server.start_server(port, host)
+        if not ok:
+            mcp_server.start_server(old_port, old_host)   # 回滚：服务照旧跑着
+            _push_mcp_status()
+            return {"ok": False, "message": f"端口 {port} 已被占用，配置未保存（服务已按原地址恢复）"}
+    else:
+        actual_port, url = port, ""
+
+    db.set_setting("mcp_host", host)
+    db.set_setting("mcp_port", str(port))
+    _push_mcp_status()
+    _log.info("MCP 监听地址已更新为 %s:%s", host, port)
+    return {"ok": True, "host": host, "port": actual_port, "restarted": was_running,
+            "url": url or f"http://{host}:{port}/sse"}
+
+
 def start_mcp() -> dict:
-    ok, port, url = mcp_server.start_server()
-    tray.update_tray()
-    push_event("vault:mcp_status", {"running": ok, "port": port, "active_tokens": db.count_active_tokens()})
-    return {"ok": ok, "port": port, "url": url}
+    host, port = _mcp_host(), _mcp_port()
+    ok, actual_port, url = mcp_server.start_server(port, host)
+    _push_mcp_status()
+    if not ok:
+        return {"ok": False, "message": f"端口 {port} 已被占用，请到设置里换一个端口"}
+    return {"ok": True, "host": host, "port": actual_port, "url": url}
 
 
 def stop_mcp() -> dict:
     mcp_server.stop_server()
-    tray.update_tray()
-    push_event("vault:mcp_status", {"running": False, "port": 0, "active_tokens": 0})
+    _push_mcp_status()
     return {"ok": True}
 
 
@@ -672,6 +851,7 @@ def _push_mcp_status():
     tray.update_tray()
     push_event("vault:mcp_status", {
         "running": mcp_server.is_running(),
+        "host": mcp_server.get_host(),
         "port": mcp_server.get_port(),
         "active_tokens": db.count_active_tokens(),
     })
@@ -791,65 +971,139 @@ def confirm_close_action(action: str, remember: bool = False) -> dict:
     return {"ok": True, "action": action}
 
 
-# ── 验证代理 ───────────────────────────────────────────────
+# ── 验证代理（注册表 + 全局默认） ───────────────────────────
+# 一律按 id 引用；取名字只用于展示。每条凭据用哪个代理由凭据自己的字段决定，见 proxy_store。
 
-def get_proxy() -> dict:
-    """返回当前验证代理配置（供"系统设置"展示）。"""
-    return {"proxy": db.get_setting("verify_proxy", "").strip()}
+def list_proxies() -> dict:
+    """全部代理 + 当前全局默认，供「系统设置」渲染。"""
+    return {
+        "ok": True,
+        "items": proxy_store.list_proxies(),
+        "global_id": proxy_store.global_proxy_id(),
+        "global_url": proxy_store.global_url() or "",
+    }
 
 
-def set_proxy(proxy: str) -> dict:
-    """持久化验证代理并立即生效（写入环境变量 VAULT_PROXY 供插件读取）。
+def _apply_global_after_change() -> None:
+    """代理表有变动后，按当前全局设置重新写一次环境变量（删掉的那个可能正被全局引用）。"""
+    proxy_config.apply_proxy(proxy_store.global_url() or "")
 
-    传空字符串表示直连。环境变量 VAULT_PROXY 若由外部设置则优先生效。
-    """
-    value = (proxy or "").strip()
-    if not proxy_config.is_valid(value):
-        return {"ok": False, "message": "代理地址需带协议前缀，如 socks5://127.0.0.1:10808"}
-    db.set_setting("verify_proxy", value)
-    effective = proxy_config.apply_proxy(value)
-    if value and effective != value:
-        _log.info("验证代理已保存为 %s，但外部环境变量 VAULT_PROXY=%s 优先", value, effective)
+
+def create_proxy(name: str, url: str) -> dict:
+    result = proxy_store.create_proxy(name, url)
+    if result.get("error"):
+        return {"ok": False, "message": result.get("message") or "新增代理失败"}
+    _log.info("已新增代理 #%s（%s）", result.get("id"), name)
+    return {"ok": True, **list_proxies()}
+
+
+def update_proxy(proxy_id: int, name=None, url=None) -> dict:
+    result = proxy_store.update_proxy(proxy_id, name, url)
+    if result.get("error"):
+        return {"ok": False, "message": result.get("message") or "修改代理失败"}
+    _apply_global_after_change()
+    _log.info("已修改代理 #%s", proxy_id)
+    return {"ok": True, **list_proxies()}
+
+
+def delete_proxy(proxy_id: int) -> dict:
+    result = proxy_store.delete_proxy(proxy_id)
+    if not result.get("ok"):
+        return {"ok": False, "message": "代理不存在"}
+    _apply_global_after_change()
+    _log.info("已删除代理 #%s", proxy_id)
+    return {"ok": True, **list_proxies()}
+
+
+def set_global_proxy(proxy_id=None) -> dict:
+    """设置全局默认代理；``None`` / ``0`` / 空串 = 直连。"""
+    if proxy_id in (None, "", 0, "0"):
+        result = proxy_store.set_global_proxy(None)
+        _log.info("全局代理已设为直连")
     else:
-        _log.info("验证代理已设置为 %s", value or "(直连)")
-    return {"ok": True, "proxy": value, "effective": effective or ""}
+        result = proxy_store.set_global_proxy(int(proxy_id))
+        if not result.get("ok"):
+            return {"ok": False, "message": result.get("message") or "设置失败"}
+        _log.info("全局代理已设为 #%s", proxy_id)
+    return {"ok": True, **list_proxies()}
 
 
-def test_proxy(proxy: str = "") -> dict:
-    """对照测试代理可用性：同一批探测分别走直连与代理，对比出口 IP 与站点可达性。
-
-    proxy 传空时使用当前生效的代理（界面设置或环境变量 VAULT_PROXY）。
-    """
-    value = (proxy or "").strip()
-    source = "传入值"
-    if not value:
-        value = proxy_config.normalize(os.environ.get(proxy_config.ENV_KEY, ""))
-        source = "环境变量 VAULT_PROXY" if value else ""
-    if not value:
-        value = db.get_setting("verify_proxy", "").strip()
-        source = "界面设置" if value else "未配置"
-    if value and not proxy_config.is_valid(value):
-        return {"ok": False, "message": "代理地址需带协议前缀，如 socks5://127.0.0.1:10808"}
-
-    _log.info("开始代理连通性测试（%s: %s）", source or "无", value or "直连")
-    result = proxy_test.test_proxy(value)
-    result["proxy_source"] = source
+def test_proxy_id(proxy_id=None) -> dict:
+    """对照测试某个代理（``None`` = 当前全局生效的那个）。"""
+    result = proxy_store.test_proxy_by_id(proxy_id)
     verdict = result.get("verdict", {})
-    _log.info("代理测试完成：%s", verdict.get("headline", ""))
+    _log.info("代理测试完成（%s）：%s", result.get("proxy_source", ""), verdict.get("headline", ""))
     return result
+
+
+# ── 类别级 / 插件级默认设置 ─────────────────────────────────
+# 框架只提供「存储 + 继承 + 注入」；哪些字段可预设由插件在 manifest 里自行声明
+# （默认全部非敏感字段可预设，加 "preset": false 可排除）。敏感字段永远不可预设。
+
+def get_credential_defaults(credential_type: str) -> dict:
+    """该插件新建凭据时应带的默认值（插件级覆盖类别级）。新增表单打开时调它。"""
+    return {
+        "ok": True,
+        "values": preset_store.defaults_for(credential_type),
+        "uses_proxy": plugin_manager.plugin_uses_proxy(credential_type),
+        # 给「使用代理」下拉里那项做括注：该插件选「跟随上层设置」时实际会走哪个出口
+        "inherited_proxy": proxy_store.describe_inherited(credential_type),
+    }
+
+
+def get_scope_options(scope: str, scope_key: str, credential_type: str = "") -> dict:
+    """某个作用域的默认设置界面所需数据（当前值 + 可预设字段列表）。"""
+    data = preset_store.scope_options(scope, scope_key, credential_type)
+    # 该作用域下有没有「走代理」的插件——没有就不给用户显示代理项，免得白设
+    if scope == preset_store.SCOPE_PLUGIN:
+        data["uses_proxy"] = plugin_manager.plugin_uses_proxy(credential_type or scope_key)
+    else:
+        data["uses_proxy"] = any(
+            plugin_manager.plugin_uses_proxy(p["credential_type"])
+            for p in db.list_plugins()
+            if (p.get("category") or "") == scope_key
+        )
+    return {"ok": True, **data}
+
+
+def set_scope_options(scope: str, scope_key: str, values: dict,
+                      credential_type: str = "") -> dict:
+    result = preset_store.set_scope_defaults(scope, scope_key, values or {}, credential_type)
+    if result.get("ok"):
+        _log.info("已保存 %s 默认设置 %s（%d 项）", scope, scope_key,
+                  len(result.get("values") or {}))
+    return result
+
+
+def clear_scope_options(scope: str, scope_key: str) -> dict:
+    _log.info("已清空 %s 默认设置 %s", scope, scope_key)
+    return preset_store.clear_scope_defaults(scope, scope_key)
 
 
 # ── 备份 / 恢复 ────────────────────────────────────────────
 
-def _file_dialog(kind: str, default_name: str = "") -> Optional[str]:
-    """打开系统文件对话框，返回所选路径（取消或无窗口时返回 None）。"""
+def _file_dialog(kind: str, default_name: str = "",
+                 file_types: Optional[list] = None) -> Optional[str]:
+    """打开系统文件对话框，返回所选路径（取消或无窗口时返回 None）。
+
+    ``file_types`` 默认只给 JSON（备份用）；通用的「另存为」（仓库打包、对象下载）要自己传，
+    否则用户面对一个写死的 `*.json` 过滤器会存错扩展名。
+    """
     if _window is None:
         return None
     try:
         import webview
 
-        dialog_type = webview.SAVE_DIALOG if kind == "save" else webview.OPEN_DIALOG
-        kwargs: dict = {"file_types": ("JSON 备份 (*.json)", "所有文件 (*.*)")}
+        # pywebview 5.x 起把 webview.SAVE_DIALOG / OPEN_DIALOG 收敛成了
+        # webview.FileDialog 枚举，旧的模块级常量仍能用但会打印弃用警告；
+        # 这里优先用新枚举，旧版本回退到常量。
+        dialog_enum = getattr(webview, "FileDialog", None)
+        if dialog_enum is not None:
+            dialog_type = dialog_enum.SAVE if kind == "save" else dialog_enum.OPEN
+        else:
+            dialog_type = webview.SAVE_DIALOG if kind == "save" else webview.OPEN_DIALOG
+
+        kwargs: dict = {"file_types": tuple(file_types or ("JSON 备份 (*.json)", "所有文件 (*.*)"))}
         if kind == "save":
             kwargs["save_filename"] = default_name
         result = _window.create_file_dialog(dialog_type, **kwargs)
@@ -861,13 +1115,55 @@ def _file_dialog(kind: str, default_name: str = "") -> Optional[str]:
         return None
 
 
-def export_backup(scope: str = "all", encrypted: bool = True) -> dict:
-    """导出备份到用户选择的文件。encrypted=True 时敏感值沿用密文（需同一主密码导入）。"""
+def build_backup_doc(scope: str = "all", encrypted: bool = True,
+                     credential_ids: Optional[list] = None) -> dict:
+    """构建备份文档（不弹对话框、不落盘）——GUI 导出与 MCP 工具共用。
+
+    返回 ``{"ok": True, "document": {...}}``，或 ``{"error": "vault_locked"}`` /
+    ``{"ok": False, "message": ...}``。
+    """
     key = _get_key()
     if key is None:
         return {"error": "vault_locked"}
     if scope not in ("all", "credentials"):
         return {"ok": False, "message": f"无效范围：{scope}"}
+    if credential_ids is not None and not credential_ids:
+        return {"ok": False, "message": "未选择任何凭据"}
+
+    doc = backup.build_backup(key, scope=scope, encrypted=encrypted,
+                              credential_ids=credential_ids)
+    return {"ok": True, "document": doc}
+
+
+def apply_backup_doc(doc: dict, dedupe: bool = True) -> dict:
+    """把备份文档并入当前库（不弹对话框）——GUI 导入与 MCP 工具共用。"""
+    key = _get_key()
+    if key is None:
+        return {"error": "vault_locked"}
+    try:
+        result = backup.import_backup(key, doc, dedupe=dedupe)
+    except ValueError as e:
+        return {"ok": False, "message": str(e)}
+
+    # 备份里的代理设置若被导入，立即生效（全局默认可能是按 id 引用的，要用解析后的地址）
+    proxy_config.apply_proxy(proxy_store.global_url() or "")
+    push_event("vault:credentials_changed")
+    push_event("vault:plugins_changed")
+    _log.info("已导入备份：导入 %d 条", result["imported"])
+    return result
+
+
+def export_backup(scope: str = "all", encrypted: bool = True,
+                  credential_ids: Optional[list] = None) -> dict:
+    """导出备份到用户选择的文件。
+
+    - ``encrypted=True``：敏感值沿用密文（需同一主密码导入）
+    - ``credential_ids``：只导出这些凭据（省略或 None = 全部）
+    """
+    built = build_backup_doc(scope, encrypted, credential_ids)
+    if built.get("error") or built.get("ok") is False:
+        return built
+    doc = built["document"]
 
     path = _file_dialog(
         "save", default_name=f"credential-vault-backup-{datetime.now():%Y%m%d-%H%M%S}.json"
@@ -875,17 +1171,19 @@ def export_backup(scope: str = "all", encrypted: bool = True) -> dict:
     if not path:
         return {"ok": False, "message": "已取消"}
 
-    doc = backup.build_backup(key, scope=scope, encrypted=encrypted)
     try:
         backup.write_backup_file(path, doc)
     except Exception as e:
         return {"ok": False, "message": f"写入失败: {e}"}
 
-    _log.info("已导出备份 %s（%d 条凭据，加密=%s）", path, doc["counts"]["credentials"], encrypted)
+    _log.info("已导出备份 %s（%d 条凭据，范围=%s，加密=%s）",
+              path, doc["counts"]["credentials"], scope, encrypted)
     return {
         "ok": True,
         "path": path,
         "count": doc["counts"]["credentials"],
+        "scope": scope,
+        "selected": credential_ids is not None,
         "encrypted": bool(encrypted),
     }
 
@@ -905,17 +1203,9 @@ def import_backup() -> dict:
     except Exception as e:
         return {"ok": False, "message": f"读取失败: {e}"}
 
-    try:
-        result = backup.import_backup(key, doc)
-    except ValueError as e:
-        return {"ok": False, "message": str(e)}
-
-    # 备份里的代理设置若被导入，立即生效
-    proxy_config.apply_proxy(db.get_setting("verify_proxy", ""))
-    push_event("vault:credentials_changed")
-    push_event("vault:plugins_changed")
-    _log.info("已导入备份 %s：导入 %d 条", path, result["imported"])
-    result["path"] = path
+    result = apply_backup_doc(doc)
+    if result.get("ok"):
+        result["path"] = path
     return result
 
 

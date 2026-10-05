@@ -60,6 +60,8 @@ class FieldSchema:
     default: Any = None
     placeholder: str = ""
     options: list[str] = field(default_factory=list)
+    hint: str = ""             # 字段下方的补充说明（可选，用于解释开关/高级项）
+    preset: Optional[bool] = None   # 是否允许作为「类别/插件默认设置」；None=允许（非敏感即可），False=排除
 
     def to_dict(self) -> dict:
         d = {
@@ -75,6 +77,10 @@ class FieldSchema:
             d["placeholder"] = self.placeholder
         if self.options:
             d["options"] = self.options
+        if self.hint:
+            d["hint"] = self.hint
+        if self.preset is not None:
+            d["preset"] = self.preset
         return d
 
 
@@ -105,6 +111,8 @@ class PluginManifest:
                 default=f.get("default"),
                 placeholder=f.get("placeholder", ""),
                 options=f.get("options", []),
+                hint=f.get("hint", ""),
+                preset=f.get("preset"),
             ))
         return cls(
             name=data["name"],
@@ -236,6 +244,38 @@ def call_actions(module: Any, data: dict) -> list:
     except Exception as e:
         _log.warning("插件 %s 的 actions 执行异常: %s", _plugin_name(module), e)
         return []
+
+
+def call_capabilities(module: Any, data: dict) -> dict:
+    """调用插件的可选 ``capabilities(data)``，归一为 ``{"available", "note", "error"}``。
+
+    约定：
+
+    - 插件的 ``capabilities`` 返回 ``{"available": [action_id, ...], "note": "缺少 XX 权限"}``；
+      ``available`` 列出**当前凭据真正能用的操作 id**，``note`` 是给用户看的一句人话。
+    - **未实现 / 抛异常 / 返回非 dict → ``{"available": None, "error": True}``**，
+      而 ``available is None`` 表示「未知 → 全部可用」——**fail-open**：
+      探测抖一下就把能用的操作全隐藏掉，比不探测还糟。
+    - ``available == []`` 才是「确实一个都没有」这个状态，前端要显示 note。
+    """
+    if not hasattr(module, "capabilities"):
+        return {"available": None, "note": "", "error": False}
+    try:
+        result = module.capabilities(data or {})
+    except Exception as e:
+        _log.warning("插件 %s 的 capabilities 执行异常: %s", _plugin_name(module), e)
+        return {"available": None, "note": "", "error": True}
+    if not isinstance(result, dict):
+        return {"available": None, "note": "", "error": True}
+    raw = result.get("available")
+    available = None
+    if isinstance(raw, (list, tuple, set)):
+        available = [str(item) for item in raw]
+    return {
+        "available": available,
+        "note": str(result.get("note") or ""),
+        "error": False,
+    }
 
 
 def call_run_action(module: Any, action_id: str, params: dict, data: dict) -> dict:

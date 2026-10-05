@@ -1,0 +1,231 @@
+"""代理注册表与「按凭据解析代理」的逻辑。
+
+背景
+----
+原先只有一个全局字符串 ``settings.verify_proxy``，所有凭据共用。现在改成：
+
+- **`proxies` 表**维护多个代理，各自可取名字；**其它地方一律按 id 引用**，不传名字、不传 URL。
+- **全局默认**存 ``settings.global_proxy_id``（空 = 直连）。
+- **每条凭据**用自己 ``data`` 里的两个保留键选择：
+  ``_proxy_mode``（``global`` / ``proxy`` / ``direct``）+ ``_proxy_id``（mode 为 proxy 时有效）。
+  放进 ``data`` 而不是新建表，是为了让四条验证路径（单条 / 批量 / MCP / 流式）**都不用改签名**
+  ——``data`` 本来就会原样传到插件手里。
+
+解析结果以 ``vault_proxy_ctx`` 的形式按调用生效（见该模块），因此批量并发时不同凭据
+用不同代理也不会互相踩。
+"""
+from __future__ import annotations
+
+import contextlib
+from typing import Optional, Union
+
+from . import database as db
+from . import proxy as proxy_config
+from . import vault_proxy_ctx as ctx
+
+# 凭据 data 里的两个保留键（约定：插件 manifest 的字段 key 不得以 "_" 开头）
+KEY_MODE = "_proxy_mode"
+KEY_ID = "_proxy_id"
+
+MODE_GLOBAL = "global"
+MODE_PROXY = "proxy"
+MODE_DIRECT = "direct"
+
+SETTING_GLOBAL_ID = "global_proxy_id"
+# 旧版单值：保留作为「没启用多代理」时的兜底，也是进程环境变量 VAULT_PROXY 的来源
+SETTING_LEGACY_URL = "verify_proxy"
+
+
+# ── 注册表 CRUD ──────────────────────────────────────────
+
+def list_proxies() -> list[dict]:
+    """列出全部代理（附解析后的 scheme，方便前端展示）。"""
+    items = db.list_proxies()
+    for item in items:
+        item["scheme"] = proxy_config.scheme(item.get("url", ""))
+    return items
+
+
+def create_proxy(name: str, url: str) -> dict:
+    name = (name or "").strip()
+    url = proxy_config.normalize(url or "")
+    if not name:
+        return {"error": "invalid_name", "message": "代理名称不能为空"}
+    if not proxy_config.is_valid(url):
+        return {"error": "invalid_url", "message": f"代理地址不合法：{url}"}
+    return db.create_proxy(name, url)
+
+
+def update_proxy(proxy_id: int, name: Optional[str] = None, url: Optional[str] = None) -> dict:
+    if url is not None:
+        url = proxy_config.normalize(url)
+        if not proxy_config.is_valid(url):
+            return {"error": "invalid_url", "message": f"代理地址不合法：{url}"}
+    if name is not None and not name.strip():
+        return {"error": "invalid_name", "message": "代理名称不能为空"}
+    updated = db.update_proxy(proxy_id, name=(name or "").strip() or None, url=url)
+    if not updated:
+        return {"error": "not_found", "message": "代理不存在"}
+    return updated
+
+
+def delete_proxy(proxy_id: int) -> dict:
+    """删除代理。引用它的凭据会在下次解析时回退到全局（不报错）。"""
+    if global_proxy_id() == proxy_id:
+        set_global_proxy(None)
+    removed = db.delete_proxy(proxy_id)
+    return {"ok": removed, "id": proxy_id}
+
+
+# ── 解析 ─────────────────────────────────────────────────
+
+def get_proxy_url(proxy_id) -> Optional[str]:
+    """id → 代理地址。这是「取用代理」的唯一入口（绝不按名字/裸值传）。"""
+    try:
+        pid = int(proxy_id)
+    except (TypeError, ValueError):
+        return None
+    record = db.get_proxy(pid)
+    return (record or {}).get("url") or None
+
+
+def global_proxy_id() -> Optional[int]:
+    raw = db.get_setting(SETTING_GLOBAL_ID, "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def global_url() -> Optional[str]:
+    """全局代理地址：优先按 id 取；没有则回落到旧版单值设置。"""
+    pid = global_proxy_id()
+    if pid is not None:
+        url = get_proxy_url(pid)
+        if url:
+            return url
+    return db.get_setting(SETTING_LEGACY_URL, "").strip() or None
+
+
+def set_global_proxy(proxy_id: Optional[int]) -> dict:
+    """设置全局默认代理（``None`` = 直连），并立即把值同步进 ``VAULT_PROXY``。
+
+    ``verify_proxy`` 一并写好：进程环境变量那条老通道（以及没走 ctx 的场景）仍然依赖它。
+    """
+    if proxy_id is None:
+        db.set_setting(SETTING_GLOBAL_ID, "")
+        db.set_setting(SETTING_LEGACY_URL, "")
+        proxy_config.apply_proxy("")
+        return {"ok": True, "proxy_id": None, "url": ""}
+
+    url = get_proxy_url(proxy_id)
+    if not url:
+        return {"ok": False, "message": "代理不存在"}
+    db.set_setting(SETTING_GLOBAL_ID, str(int(proxy_id)))
+    db.set_setting(SETTING_LEGACY_URL, url)
+    proxy_config.apply_proxy(url)
+    return {"ok": True, "proxy_id": int(proxy_id), "url": url}
+
+
+def _resolve_spec(mode, proxy_id) -> Union[object, str, None]:
+    """把一对 ``(_proxy_mode, _proxy_id)`` 解析成 ``ctx.DIRECT`` / 代理 URL / ``None``。
+
+    ``None`` 表示**这一层没给出可用的指定**（没填、或者是「跟随上层」、又或者引用的代理已被删）
+    —— 交给调用方继续往上一层找。
+    """
+    text = str(mode or "").strip().lower()
+    if text == MODE_DIRECT:
+        return ctx.DIRECT
+    if text == MODE_PROXY:
+        return get_proxy_url(proxy_id)      # 悬空 id 返回 None → 继续往上层找，而不是直接掉到全局
+    return None
+
+
+def inherited_proxy(credential_type: str):
+    """该插件继承到的代理设置（**子模块预设 > 上层模块预设**，``preset_store`` 已按此顺序合并）。
+
+    返回 ``(mode, proxy_id)``；没设过就是 ``("", None)``。
+    """
+    if not credential_type:
+        return "", None
+    # 延迟导入：preset_store 依赖本模块的两个保留键常量，模块级导入会成环
+    from . import preset_store
+
+    values = preset_store.defaults_for(credential_type) or {}
+    return values.get(KEY_MODE) or "", values.get(KEY_ID)
+
+
+def describe_inherited(credential_type: str) -> str:
+    """给界面看的一句话：该插件若选「跟随上层设置」，最终会走哪个出口。
+
+    用于「使用代理」下拉里那项的括注，免得用户对着「跟随上层」猜到底是哪个代理。
+    """
+    mode, proxy_id = inherited_proxy(credential_type)
+    text = str(mode or "").strip().lower()
+    if text == MODE_DIRECT:
+        return "直连"
+    if text == MODE_PROXY:
+        url = get_proxy_url(proxy_id)
+        if url:
+            return url
+    return global_url() or "直连"
+
+
+def resolve_credential_proxy(data: dict, credential_type: str = "") -> Union[object, str]:
+    """解析本次调用该用哪个代理，**按优先级逐层找**：
+
+    1. **条目自己**的设置（``_proxy_mode`` / ``_proxy_id``）
+    2. **子模块预设**（该 credential_type 的默认设置）
+    3. **上层模块预设**（该类别目录的默认设置）
+    4. **全局设置** —— 用 ``ctx.UNSET`` 表达，让 ``proxy()`` 回落到 ``VAULT_PROXY`` 环境变量
+       （它由全局默认代理写入，见 ``set_global_proxy``）
+
+    返回 ``ctx.DIRECT``（直连）/ 代理 URL / ``ctx.UNSET``（继续用环境变量那条路）。
+    """
+    data = data or {}
+    # 1) 条目自身
+    own = _resolve_spec(data.get(KEY_MODE), data.get(KEY_ID))
+    if own is not None:
+        return own
+    # 2) + 3) 子模块预设、上层模块预设（preset_store 已按「插件 > 类别」合并好）
+    mode, proxy_id = inherited_proxy(credential_type)
+    if mode or proxy_id:
+        inherited = _resolve_spec(mode, proxy_id)
+        if inherited is not None:
+            return inherited
+    # 4) 全局
+    return ctx.UNSET
+
+
+@contextlib.contextmanager
+def credential_proxy_scope(data: dict, credential_type: str = ""):
+    """在本次调用期间生效「该凭据的代理」，退出时按 token 还原（支持嵌套、线程安全）。
+
+    ``credential_type`` 是继承链的关键——没有它就只能看条目自己的设置，找不到子模块/类别预设。
+    """
+    token = ctx.begin(resolve_credential_proxy(data, credential_type))
+    try:
+        yield
+    finally:
+        ctx.end(token)
+
+
+# ── 连通性测试 ───────────────────────────────────────────
+
+def test_proxy_by_id(proxy_id=None) -> dict:
+    """测试指定代理（``None`` = 测全局当前生效的那个）。"""
+    from . import proxy_test
+
+    if proxy_id is None:
+        url = global_url() or ""
+        source = "global"
+    else:
+        url = get_proxy_url(proxy_id)
+        if not url:
+            return {"ok": False, "message": "代理不存在"}
+        source = f"proxy:{proxy_id}"
+    result = proxy_test.test_proxy(url)
+    result["proxy_source"] = source
+    return result

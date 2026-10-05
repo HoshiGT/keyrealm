@@ -129,6 +129,25 @@ def init_db():
             next_run_at   TIMESTAMP,
             created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+
+        -- 代理注册表：可维护多个代理、各自取名，其它地方一律按 id 引用
+        CREATE TABLE IF NOT EXISTS proxies (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            url         TEXT NOT NULL,
+            sort_order  INTEGER DEFAULT 0,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- 类别级 / 插件级默认设置：新建凭据时按「插件 > 类别」继承（payload 是 JSON）
+        -- 注意列名不能叫 values —— 那是 SQLite 的保留字，建表就会 syntax error
+        CREATE TABLE IF NOT EXISTS preset_defaults (
+            scope       TEXT NOT NULL,
+            scope_key   TEXT NOT NULL,
+            payload     TEXT NOT NULL DEFAULT '{}',
+            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (scope, scope_key)
+        );
     """)
     conn.commit()
     _seed_mcp_permissions(conn)
@@ -191,6 +210,8 @@ def _seed_mcp_permissions(conn: sqlite3.Connection):
         ("vault_create_group",      0, "创建分组"),
         ("vault_list_plugins",      1, "列出插件"),
         ("vault_get_secret",        0, "获取解密后的敏感字段（高危）"),
+        ("vault_export_backup",     0, "导出备份（触及整库数据，高危；encrypted=false 会写出明文密钥）"),
+        ("vault_import_backup",     0, "导入备份（合并入库，高危：会新增凭据、可能覆盖偏好设置）"),
     ]
     for tool, enabled, desc in defaults:
         conn.execute(
@@ -624,4 +645,100 @@ def delete_schedule(schedule_id: int):
     with _lock:
         conn = get_conn()
         conn.execute("DELETE FROM schedules WHERE id=?", (schedule_id,))
+        conn.commit()
+
+
+# ── 代理注册表 ────────────────────────────────────────────
+
+def list_proxies() -> list[dict]:
+    with _lock:
+        rows = get_conn().execute(
+            "SELECT * FROM proxies ORDER BY sort_order, id"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_proxy(proxy_id: int) -> Optional[dict]:
+    with _lock:
+        row = get_conn().execute("SELECT * FROM proxies WHERE id=?", (proxy_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def create_proxy(name: str, url: str) -> dict:
+    with _lock:
+        conn = get_conn()
+        cur = conn.execute(
+            "INSERT INTO proxies (name, url, created_at) VALUES (?,?,?)",
+            (name, url, _now()),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM proxies WHERE id=?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def update_proxy(proxy_id: int, **kwargs) -> Optional[dict]:
+    allowed = {"name", "url", "sort_order"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not fields:
+        return get_proxy(proxy_id)
+    sets = ", ".join(f"{k}=?" for k in fields)
+    vals = list(fields.values()) + [proxy_id]
+    with _lock:
+        conn = get_conn()
+        conn.execute(f"UPDATE proxies SET {sets} WHERE id=?", vals)
+        conn.commit()
+    return get_proxy(proxy_id)
+
+
+def delete_proxy(proxy_id: int) -> bool:
+    with _lock:
+        conn = get_conn()
+        cur = conn.execute("DELETE FROM proxies WHERE id=?", (proxy_id,))
+        conn.commit()
+    return cur.rowcount > 0
+
+
+# ── 类别级 / 插件级默认设置 ────────────────────────────────
+
+def get_preset_defaults(scope: str, scope_key: str) -> dict:
+    """读取某一作用域的默认设置（JSON 对象）；不存在时返回 {}。"""
+    with _lock:
+        row = get_conn().execute(
+            "SELECT payload FROM preset_defaults WHERE scope=? AND scope_key=?",
+            (scope, scope_key),
+        ).fetchone()
+    if not row:
+        return {}
+    try:
+        data = json.loads(row["payload"] or "{}")
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def list_preset_defaults() -> list[dict]:
+    """全部默认设置记录（备份导出用）。"""
+    with _lock:
+        rows = get_conn().execute("SELECT * FROM preset_defaults").fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_preset_defaults(scope: str, scope_key: str, values: dict) -> dict:
+    """覆盖写入某一作用域的默认设置。"""
+    payload = json.dumps(values or {}, ensure_ascii=False)
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "INSERT INTO preset_defaults (scope, scope_key, payload, updated_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(scope, scope_key) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at",
+            (scope, scope_key, payload, _now()),
+        )
+        conn.commit()
+    return values or {}
+
+
+def delete_preset_defaults(scope: str, scope_key: str) -> None:
+    with _lock:
+        conn = get_conn()
+        conn.execute("DELETE FROM preset_defaults WHERE scope=? AND scope_key=?", (scope, scope_key))
         conn.commit()

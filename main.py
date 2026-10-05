@@ -15,8 +15,14 @@ if str(BASE_DIR) not in sys.path:
 
 import webview  # pywebview
 
-from backend import api, database as db, logger, mcp_server, plugin_manager, proxy as proxy_config, scheduler, tray
+from backend import api, database as db, logger, mcp_server, plugin_manager, proxy as proxy_config, scheduler, single_instance, tray, verify_options
+from backend import vault_proxy_ctx
 from backend.paths import app_dir, is_frozen, resource_dir
+
+# 把「按调用生效的代理上下文」以**固定别名**注册进 sys.modules：插件侧的 proxy() 靠这个名字
+# 懒查它（插件不允许 import backend，见 docs/PLUGIN_GUIDE.md §3）。必须在任何插件调用之前完成，
+# 所以放在模块级而不是 main() 里。
+sys.modules.setdefault("vault_proxy_ctx", vault_proxy_ctx)
 
 
 class VaultApi:
@@ -66,8 +72,13 @@ class VaultApi:
     def verify_credential(self, credential_id: int):
         return api.verify_credential(credential_id)
 
-    def batch_verify(self, scope: str = "all", group_id=None, credential_type=None, credential_ids=None):
-        return api.batch_verify(scope, group_id, credential_type, credential_ids)
+    def batch_verify(self, scope: str = "all", group_id=None, credential_type=None,
+                     credential_ids=None, concurrency=None, timeout=None):
+        return api.batch_verify(scope, group_id, credential_type, credential_ids,
+                                concurrency, timeout)
+
+    def get_batch_options(self):
+        return api.get_batch_options()
 
     def check_duplicate_credential(self, credential_type: str, data: dict):
         return api.check_duplicate_credential(credential_type, data)
@@ -98,11 +109,20 @@ class VaultApi:
     def list_credential_actions(self, credential_id: int):
         return api.list_credential_actions(credential_id)
 
+    def credential_capabilities(self, credential_id: int):
+        return api.credential_capabilities(credential_id)
+
+    def pick_save_path(self, default_name: str = "", file_types=None):
+        return api.pick_save_path(default_name, file_types)
+
     def run_credential_action(self, credential_id: int, action_id: str, params=None):
         return api.run_credential_action(credential_id, action_id, params)
 
     def list_credential_models(self, credential_id: int):
         return api.list_credential_models(credential_id)
+
+    def list_draft_models(self, credential_type: str, data=None):
+        return api.list_draft_models(credential_type, data)
 
     def stream_credential_action(self, credential_id: int, action_id: str, params=None):
         return api.stream_credential_action(credential_id, action_id, params)
@@ -119,6 +139,12 @@ class VaultApi:
 
     def stop_mcp(self):
         return api.stop_mcp()
+
+    def get_mcp_options(self):
+        return api.get_mcp_options()
+
+    def set_mcp_options(self, host: str, port):
+        return api.set_mcp_options(host, port)
 
     def list_mcp_permissions(self):
         return api.list_mcp_permissions()
@@ -164,18 +190,41 @@ class VaultApi:
         return api.confirm_close_action(action, remember)
 
     # ── 验证代理 ──────────────────────────────────────────
-    def get_proxy(self):
-        return api.get_proxy()
+    # ── 验证代理（注册表） ─────────────────────────────────
+    def list_proxies(self):
+        return api.list_proxies()
 
-    def set_proxy(self, proxy: str):
-        return api.set_proxy(proxy)
+    def create_proxy(self, name: str, url: str):
+        return api.create_proxy(name, url)
 
-    def test_proxy(self, proxy: str = ""):
-        return api.test_proxy(proxy)
+    def update_proxy(self, proxy_id: int, name=None, url=None):
+        return api.update_proxy(proxy_id, name, url)
+
+    def delete_proxy(self, proxy_id: int):
+        return api.delete_proxy(proxy_id)
+
+    def set_global_proxy(self, proxy_id=None):
+        return api.set_global_proxy(proxy_id)
+
+    def test_proxy_id(self, proxy_id=None):
+        return api.test_proxy_id(proxy_id)
+
+    # ── 类别 / 插件默认设置 ────────────────────────────────
+    def get_credential_defaults(self, credential_type: str):
+        return api.get_credential_defaults(credential_type)
+
+    def get_scope_options(self, scope: str, scope_key: str, credential_type: str = ""):
+        return api.get_scope_options(scope, scope_key, credential_type)
+
+    def set_scope_options(self, scope: str, scope_key: str, values: dict, credential_type: str = ""):
+        return api.set_scope_options(scope, scope_key, values, credential_type)
+
+    def clear_scope_options(self, scope: str, scope_key: str):
+        return api.clear_scope_options(scope, scope_key)
 
     # ── 备份 / 恢复 ───────────────────────────────────────
-    def export_backup(self, scope: str = "all", encrypted: bool = True):
-        return api.export_backup(scope, encrypted)
+    def export_backup(self, scope: str = "all", encrypted: bool = True, credential_ids=None):
+        return api.export_backup(scope, encrypted, credential_ids)
 
     def import_backup(self):
         return api.import_backup()
@@ -273,6 +322,12 @@ def _quit_app():
 def main():
     global _window
 
+    # 单实例闸门：已经有实例在跑时，把它的窗口拉到前台然后自己退出，而不是再起一套。
+    # 放在最前面（日志都还没配），因为重复启动不该产生任何副作用（连日志都不写）。
+    if not single_instance.acquire():
+        single_instance.focus_existing()
+        sys.exit(0)
+
     # 尽早初始化日志（默认级别），待数据库就绪后再按用户持久化的级别调整
     logger.setup_logging()
     log = logger.get_logger("main")
@@ -287,6 +342,10 @@ def main():
 
     # 应用持久化的验证代理（写入 VAULT_PROXY 供插件读取；外部同名变量优先）
     proxy_config.apply_proxy(db.get_setting("verify_proxy", ""))
+
+    # 应用持久化的验证超时（写入 VAULT_TIMEOUT 供插件读取；外部同名变量优先）
+    verify_options.apply_timeout()
+
     log.info("应用启动（frozen=%s，日志级别=%s，数据目录=%s）",
              is_frozen(), logger.get_level(), app_dir())
 

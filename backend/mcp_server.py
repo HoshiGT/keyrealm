@@ -17,9 +17,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from . import backup
 from . import database as db
 from . import plugin_manager
-from .crypto import decrypt_dict, hash_token
+from .crypto import decrypt_dict, encrypt_dict, hash_token
 
 # 由 api.py 注入
 _get_key_cb = None
@@ -33,6 +34,7 @@ _uvicorn_server: Optional[uvicorn.Server] = None
 _mcp_app: Optional[MCPServer] = None
 _running = False
 _port = 8765
+_host = "127.0.0.1"
 
 
 def set_callbacks(get_key_cb, event_cb):
@@ -171,44 +173,15 @@ def _build_mcp_app() -> MCPServer:
         group_id: Optional[int] = None,
         auto_verify: bool = True,
     ) -> dict:
-        """创建凭据"""
+        """创建凭据（与界面共用同一份实现，因此同样会继承类别/插件默认设置）"""
         _require_perm("vault_create_credential")
-        from .crypto import encrypt_dict
-
-        key = _get_key()
-        if key is None:
-            return {"error": "vault_locked", "message": "保险库已锁定"}
-
-        errors = plugin_manager.validate_credential(credential_type, data)
-        if errors:
-            return {"error": "validation_failed", "details": errors}
-
-        # 分离敏感/非敏感字段
-        plugin_record = db.get_plugin_by_type(credential_type)
-        sensitive_keys = set()
-        if plugin_record:
-            for f in plugin_record.get("fields_schema", []):
-                if f.get("sensitive"):
-                    sensitive_keys.add(f["key"])
-
-        data_plain = {k: v for k, v in data.items() if k not in sensitive_keys}
-        encrypted = encrypt_dict(key, data)
-
-        cred = db.create_credential(
-            name=name,
-            credential_type=credential_type,
-            data_encrypted=encrypted,
-            data_plain=data_plain,
-            group_id=group_id,
-        )
-
-        if auto_verify:
-            from .scheduler import verify_single_credential
-            verify_single_credential(cred["id"], trigger_type="auto")
-            cred = db.get_credential(cred["id"]) or cred
-
-        _push_event("vault:credentials_changed", {})
-        return {"ok": True, "credential": cred}
+        # 不要在这里复制一份创建逻辑——否则「表单创建继承默认、MCP 创建不继承」这类
+        # 不一致会悄悄出现（历史上就是复制出来的两份，改一处漏一处）。
+        from . import api as _api
+        result = _api.create_credential(name, credential_type, data, group_id, auto_verify)
+        if isinstance(result, dict) and result.get("error"):
+            return result
+        return {"ok": True, "credential": result}
 
     # ── vault_update_credential ───────────────────────────
     @mcp.tool()
@@ -339,6 +312,79 @@ def _build_mcp_app() -> MCPServer:
             return {"field": field, "value": data.get(field)}
         return {"data": data}
 
+    # ── vault_export_backup ───────────────────────────────
+    @mcp.tool()
+    def vault_export_backup(
+        scope: str = "all",
+        encrypted: bool = True,
+        credential_ids: Optional[list] = None,
+        path: Optional[str] = None,
+    ) -> dict:
+        """导出备份（触及整库数据，高危）。
+
+        - `scope`：`all` = 凭据 + 分组 + 偏好设置；`credentials` = 仅凭据
+        - `encrypted`：True 时敏感字段保持密文（只能用同一主密码导入）；
+          **False 会把密钥明文写出**，仅在明确需要跨主密码迁移时使用
+        - `credential_ids`：只导出这些凭据 id（省略 = 全部）
+        - `path`：写入该文件；**省略则把备份文档放在返回值的 `document` 字段里**
+          （便于直接交给 `vault_import_backup` 或由 Agent 自行保存）
+        """
+        _require_perm("vault_export_backup")
+        from . import api as _api
+
+        built = _api.build_backup_doc(scope, bool(encrypted), credential_ids)
+        if built.get("error") or built.get("ok") is False:
+            return built
+        doc = built["document"]
+
+        result: dict = {
+            "ok": True,
+            "count": doc["counts"]["credentials"],
+            "scope": scope,
+            "encrypted": bool(encrypted),
+        }
+        if path:
+            try:
+                backup.write_backup_file(path, doc)
+            except Exception as e:
+                return {"ok": False, "message": f"写入失败: {e}"}
+            result["path"] = path
+        else:
+            result["document"] = doc
+        return result
+
+    # ── vault_import_backup ───────────────────────────────
+    @mcp.tool()
+    def vault_import_backup(
+        document: Optional[dict] = None,
+        path: Optional[str] = None,
+        dedupe: bool = True,
+    ) -> dict:
+        """导入备份（合并入库，高危：会新增凭据、可能覆盖偏好设置）。
+
+        `document`（备份 JSON 对象）与 `path`（备份文件路径）**二选一**。
+        `dedupe=True` 时「同类型 + 敏感值相同」的凭据会跳过；插件未安装的条目也会跳过。
+        加密备份需与当前主密码一致，否则报错。
+        """
+        _require_perm("vault_import_backup")
+        from . import api as _api
+
+        if document is None and not path:
+            return {"ok": False, "message": "需要提供 document 或 path"}
+        doc = document
+        if doc is None:
+            try:
+                doc = backup.read_backup_file(path)
+            except Exception as e:
+                return {"ok": False, "message": f"读取失败: {e}"}
+        if not isinstance(doc, dict):
+            return {"ok": False, "message": "备份内容必须是 JSON 对象"}
+
+        result = _api.apply_backup_doc(doc, dedupe=bool(dedupe))
+        if result.get("ok"):
+            result["source"] = path or "document"
+        return result
+
     return mcp
 
 
@@ -359,36 +405,40 @@ def _make_asgi_app(mcp: MCPServer):
     return wrapped
 
 
-def start_server(port: int = 8765) -> tuple[bool, int, str]:
-    """启动 MCP SSE 服务（后台线程）"""
-    global _server_thread, _uvicorn_server, _mcp_app, _port
+def _port_in_use(host: str, port: int) -> bool:
+    """目标端口是否已有服务在监听（能连上就算被占）。"""
+    import socket
+
+    try:
+        with socket.create_connection((host, port), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+def _url() -> str:
+    return f"http://{_host}:{_port}/sse"
+
+
+def start_server(port: int = 8765, host: str = "127.0.0.1") -> tuple[bool, int, str]:
+    """在 ``host:port`` 启动 MCP SSE 服务（后台线程）。
+
+    **端口被占用时直接失败**，不再自动退到 +1/+2 —— 端口是用户显式配的，
+    悄悄换一个会让人对着一个「配了 9000 却在 9001」的界面发懵。
+    """
+    global _server_thread, _uvicorn_server, _mcp_app, _port, _host
 
     if _running:
-        return True, _port, f"http://127.0.0.1:{_port}/sse"
+        return True, _port, _url()
+
+    if _port_in_use(host, port):
+        return False, port, ""
 
     _mcp_app = _build_mcp_app()
     app = _make_asgi_app(_mcp_app)
-
-    # 尝试端口
-    actual_port = port
-    for p in [port, port + 1, port + 2]:
-        try:
-            config = uvicorn.Config(app, host="127.0.0.1", port=p, log_level="warning")
-            _uvicorn_server = uvicorn.Server(config)
-            # 快速检测端口是否可用
-            import socket
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(0.1)
-                if s.connect_ex(("127.0.0.1", p)) == 0:
-                    continue  # 端口被占用
-            actual_port = p
-            break
-        except Exception:
-            continue
-
-    config = uvicorn.Config(app, host="127.0.0.1", port=actual_port, log_level="warning")
-    _uvicorn_server = uvicorn.Server(config)
-    _port = actual_port
+    _uvicorn_server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))
+    _port = port
+    _host = host
 
     def _run():
         global _running
@@ -405,7 +455,7 @@ def start_server(port: int = 8765) -> tuple[bool, int, str]:
         if _running:
             break
 
-    return _running, _port, f"http://127.0.0.1:{_port}/sse"
+    return _running, _port, _url()
 
 
 def stop_server():
@@ -421,3 +471,12 @@ def is_running() -> bool:
 
 def get_port() -> int:
     return _port
+
+
+def get_host() -> str:
+    return _host
+
+
+def get_url() -> str:
+    """MCP 服务地址（与界面、客户端配置里展示的保持一致）。"""
+    return _url()
