@@ -174,6 +174,10 @@ App.vue
 > 纯字符串数组（值与显示都用它）、或 `{value,label}` 对象数组（显示 label、存 value）。
 > 三处渲染（CredentialForm / Credentials 的操作弹窗表单 / ScopeDefaultsDialog）共用同一套，
 > 别再写回只认字符串的版本——否则想给用户看中文就只能把中文当值存进库。
+>
+> 字段的**条件显隐**由 `utils/format.visibleFields` 统一求值（manifest 的 `show_if`）：
+> 只渲染当前模式命中的字段，且**提交时也只带这些字段**（`buildData` 走 `visibleSchema`），
+> 免得切模式后另一组密钥还留在库里。三处渲染同样共用——见 OpenAI 插件的 `auth_mode`。
 字段可带可选 `hint`（manifest 字段），渲染为字段下方的灰字说明；`sensitive` 字段额外标注
 「加密存储」。LLM 类凭据的「余额未知时发一次对话探测」开关与「探测模型」就靠 `hint` 解释用途
 ——它是**凭据级**配置，不在系统设置里，见 [PLUGIN_GUIDE.md §2.4](PLUGIN_GUIDE.md)。

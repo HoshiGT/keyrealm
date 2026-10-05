@@ -124,6 +124,7 @@ plugins/
 | `credential_type` | **插件身份，全局唯一**。它是数据库插件表的 UNIQUE 键、模块缓存键、凭据与插件的关联键。同类插件约定前缀：`llm_<厂商>`、`api_<服务>` |
 | `fields[].type` | `text` / `url` / `password` / `textarea` / `select`（配 `options`）/ `number` / `checkbox` / `model`（**可下拉可自由输入**的模型名，候选来自 `list_models`，取不到也能手打） |
 | `fields[].options` | 仅 `select`。两种写法都行：纯字符串数组 `["openai","anthropic"]`（值与显示都用它）；或对象数组 `[{"value":"chatgpt","label":"ChatGPT 登录态"}]`（**显示 label、存 value**）。前端统一归一（`utils/format.normalizeOptions`），需要给用户看中文时用对象写法，别把中文当值存库 |
+| `fields[].show_if` | 可选。**条件显隐**：`{"另一个字段key": 值 或 [值,…]}`，只有那个字段的当前值命中时才渲染本字段。用于「同厂商不同模式」——例如 `openai` 的 `auth_mode` 选 `api_key` 时只显示 API Key 那组、选 `chatgpt` 时只显示登录态那组。前端按当前表单值实时求值（`utils/format.visibleFields`），**保存时未命中字段的值不提交**（免得切模式后另一组的密钥还留在库里）。 |
 | `fields[].preset` | 可选，是否允许作为「类别/插件默认设置」被预设。**默认允许**（只要非敏感）；填 `false` 可排除该字段。**敏感字段永远不可预设**（默认值表是明文列） |
 | `fields[].hint` | 可选，字段下方的一行灰字说明。用于解释开关或高级项（如 LLM 的「余额未知时发一次对话探测」），前端 `CredentialForm.vue` 渲染为 `.field-hint` |
 | `fields[].sensitive` | `true` 的字段加密存储（AES-256-GCM），列表页只显示掩码（`crypto.mask_secret`，形如 `sk-123…cdef`），也参与重复凭据检测 |
@@ -398,6 +399,8 @@ def get_display_summary(data):
 | `row_actions` | `list` | 每行的按钮，见 §3.1.2 |
 | `empty_text` | `list` | 空列表文案 |
 | `save_to` | `form` / `list` | 下载类操作，见 §3.1.3 |
+| `confirm` | 全部 | 可选。**覆盖写操作二次确认的默认文案**。涉及不可逆副作用时应当写清楚——例如「刷新 access_token」会轮换 `refresh_token`，就会提示用户本机 Codex CLI 可能需要重新登录 |
+| `updated_data`（**返回值**） | 全部 | 可选。`run_action` 的返回里带上 `{"字段key": 新值}`，框架会把这些值**写回该凭据**（只接受插件在 manifest 里声明过的字段）。用于「用 refresh_token 换一组新令牌」这类必须原子保存的操作。写回值**不会**回传给前端（那是新明文令牌），前端只收到 `data_updated: [字段名]`，据此刷新列表并复验。见 §3.1.8 |
 
 `run_action` 的返回：
 
@@ -536,6 +539,28 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
 （长度 ≥ 6）替换成 `***` —— 覆盖 `output` / `error` / 流式 `delta`，**以及 `rows` 等任意嵌套结构**。
 插件侧仍应尽量不自造含密钥的错误串。
 
+#### 3.1.8 把结果写回凭据（`updated_data`）
+
+```python
+def run_action(action_id, params, data):
+    ...
+    return {"ok": True,
+            "output": "已刷新 access_token；refresh_token 已轮换并写回本凭据",
+            "updated_data": {"access_token": 新值, "refresh_token": 新值}}
+```
+
+`backend/api.py` 拿到 `updated_data` 后：按该插件 manifest 里**声明过的字段**过滤（其它键丢弃）→
+合并进凭据明文 → 重加密落库 → 回给前端一个 `data_updated: [字段名]`（**新值本身不回传**，那是明文令牌）
+→ 前端刷新列表并自动复验一次。
+
+**这是「写凭据」的能力，只在必要时用**。典型场景是**刷新令牌**：用 refresh_token 换新 access_token 时
+上游会**轮换** refresh_token，若不把新值原子写回，库里与本机 CLI 的登录态就永久错位了。
+注意配套要求：
+
+- 操作必须标 `write: true`（前端会二次确认），并用 `confirm` 把不可逆后果写清楚；
+- 只读校验路径**绝不能**走这条（换令牌是写副作用）；
+- 详见 `plugins/llm/openai/plugin.py` 的 `_do_refresh`。
+
 ---
 
 ## 4. 编写一个新插件（以新增 OpenAI 兼容服务为例）
@@ -628,11 +653,13 @@ qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）。
 - **llm**：18 个厂商 —— 简单对话（`chat`，流式）；其中 **openai** 另有「认证方式」下拉，
   选「ChatGPT 登录态（Codex）」时改为「登录态详情」（`token_info`，只读解析本地 JWT，**不回显任何令牌**）；
   `codebuddy` 是纯登录态类凭据，同样只有 `token_info`。
-  > 登录态**按字段分开填**（`access_token` 必需，`account_id` / `id_token` 可选），
+  > 登录态**按字段分开填**（`access_token` 必需；`account_id` / `id_token` / `refresh_token` 可选），
   > 不要求粘贴整份 `~/.codex/auth.json`——既不便于维护，也会把不必要的字段一起存下来。
-  > **`refresh_token` 不收集也不使用**：插件只发 `GET /v1/models` 与 `GET /backend-api/me`
-  > 两个只读请求，全仓没有任何换令牌的 POST；代刷会轮换掉用户的刷新令牌，属写副作用，明确不做。
-  > access_token 过期就让用户回 Codex 重新登录后更新该字段。
+  > 字段按模式显隐（`show_if`）：选 API Key 时只看到 API Key 那组，选 ChatGPT 登录态时只看到登录态那组。
+  > **只读校验绝不换令牌**（只有 `GET /v1/models` 与 `GET /backend-api/me` 两个只读请求）。
+  > 填了 `refresh_token` 时会多出「刷新 access_token」这个**手动**操作：它 `write: true`、
+  > 带自定义确认文案，成功后新值经 `updated_data` **自动写回本凭据**——因为上游换令牌会**轮换**
+  > refresh_token，不写回就会让本机 CLI 与库里的登录态永久错位。
 - **dns**：
   - dnspod / godaddy / cloudflare —— **域名（站点）列表 → 行内「解析」下钻到解析记录 → 行内「修改」**，
     以及行内「新增」；前两者是 `write`，Cloudflare 用同一个表单（留空 `record_id` 即新增）

@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { api } from '@/api'
-import { normalizeOptions } from '@/utils/format'
+import { normalizeOptions, visibleFields } from '@/utils/format'
 import ProxySelect from '@/components/ProxySelect.vue'
 
 /**
@@ -30,6 +30,9 @@ const proxyMode = ref('global')
 const proxyId = ref(null)
 // 该作用域下有没有走代理的插件（没有就不显示代理项——SMTP 这类插件本就不走 HTTP 代理）
 const usesProxy = ref(true)
+
+// 条件显隐：预设表单里也按 show_if 只显示当前模式需要的字段
+const visibleFieldList = computed(() => visibleFields(fields.value, values.value))
 
 const visible = computed({
   get: () => props.modelValue,
@@ -139,7 +142,7 @@ async function clearAll() {
           </div>
         </el-form-item>
 
-        <el-form-item v-for="field in fields" :key="field.key" :label="field.label">
+        <el-form-item v-for="field in visibleFieldList" :key="field.key" :label="field.label">
           <el-switch v-if="field.type === 'checkbox'" v-model="values[field.key]" />
           <el-input
             v-else-if="field.type === 'textarea'"

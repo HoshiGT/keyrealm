@@ -109,3 +109,26 @@ export function normalizeOptions(options) {
     return { value: option, label: String(option) }
   })
 }
+
+/**
+ * 单个字段此刻该不该显示（manifest 的 show_if 条件显隐）。
+ *
+ * `show_if` 形如 `{"auth_mode": "chatgpt"}` 或 `{"auth_mode": ["api_key","chatgpt"]}`：
+ * 只有当那个字段的**当前值**命中时才显示本字段；没有 `show_if` 的一律显示。
+ * 用于「同厂商不同模式」——例如 OpenAI 选 API Key 时不必看到登录态那组字段。
+ */
+export function fieldVisible(field, values) {
+  const cond = field && field.show_if
+  if (!cond || typeof cond !== 'object' || Array.isArray(cond)) return true
+  const vals = values || {}
+  return Object.entries(cond).every(([key, want]) => {
+    const allowed = Array.isArray(want) ? want : [want]
+    return allowed.some((v) => String(vals[key] ?? '') === String(v))
+  })
+}
+
+/** 按 show_if 过滤出当前该显示的字段（渲染与提交都用它，保证「看到什么就提交什么」） */
+export function visibleFields(fields, values) {
+  const list = Array.isArray(fields) ? fields : []
+  return list.filter((f) => fieldVisible(f, values))
+}

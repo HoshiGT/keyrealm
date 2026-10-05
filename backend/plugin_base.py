@@ -59,9 +59,14 @@ class FieldSchema:
     sensitive: bool = False
     default: Any = None
     placeholder: str = ""
-    options: list[str] = field(default_factory=list)
+    options: list = field(default_factory=list)   # 字符串数组，或 {value,label} 对象数组
     hint: str = ""             # 字段下方的补充说明（可选，用于解释开关/高级项）
     preset: Optional[bool] = None   # 是否允许作为「类别/插件默认设置」；None=允许（非敏感即可），False=排除
+    # 条件显隐：{"另一个字段key": 值 或 [值, ...]}，仅当那个字段当前值命中时才渲染本字段。
+    # 用于「同厂商不同模式」——例如 openai 的 auth_mode 选 api_key 时只显示 API Key 相关字段、
+    # 选 chatgpt 时只显示登录态那组。前端负责隐藏；保存时**被隐藏字段的值不再提交**
+    # （免得切模式后另一组的密钥还留在库里）。
+    show_if: Optional[dict] = None
 
     def to_dict(self) -> dict:
         d = {
@@ -81,6 +86,8 @@ class FieldSchema:
             d["hint"] = self.hint
         if self.preset is not None:
             d["preset"] = self.preset
+        if self.show_if:
+            d["show_if"] = self.show_if
         return d
 
 
@@ -113,6 +120,7 @@ class PluginManifest:
                 options=f.get("options", []),
                 hint=f.get("hint", ""),
                 preset=f.get("preset"),
+                show_if=f.get("show_if"),
             ))
         return cls(
             name=data["name"],
@@ -279,7 +287,13 @@ def call_capabilities(module: Any, data: dict) -> dict:
 
 
 def call_run_action(module: Any, action_id: str, params: dict, data: dict) -> dict:
-    """调用插件的可选 run_action(...)；保证返回 dict 且不抛异常。"""
+    """调用插件的可选 run_action(...)；保证返回 dict 且不抛异常。
+
+    结果里可出现一个特殊键 ``updated_data``（``{字段key: 新值}``）：框架会把这些值**写回
+    该凭据**（只接受插件在自己 manifest 里声明过的字段），用于「用 refresh_token 换一组新令牌」
+    这类必须原子保存的操作——换令牌会轮换 refresh_token，不写回就等于把用户的登录态搞坏。
+    写回值**不会**回传给前端（那是新明文令牌），前端只会收到 ``data_updated: [字段名]``。
+    """
     if not hasattr(module, "run_action"):
         return {"ok": False, "error": "该插件不支持操作"}
     try:

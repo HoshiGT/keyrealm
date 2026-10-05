@@ -8,7 +8,7 @@ import CredentialForm from '@/components/CredentialForm.vue'
 import ScopeDefaultsDialog from '@/components/ScopeDefaultsDialog.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { useVaultStore } from '@/stores/vault'
-import { STATUS_OPTIONS, formatDateTimeFull, normalizeOptions } from '@/utils/format'
+import { STATUS_OPTIONS, formatDateTimeFull, normalizeOptions, visibleFields } from '@/utils/format'
 import api from '@/api'
 import { inlineIcon } from '@/utils/pluginIcon'
 
@@ -152,10 +152,17 @@ function blankActionDialog() {
     // ── 公共 ──
     busy: false,
     error: '',
+    // 写操作的自定义确认文案（插件用 action.confirm 声明）；空则用默认那句
+    confirmText: '',
   }
 }
 
 const actionDialog = ref(blankActionDialog())
+
+// 操作弹窗表单字段：按 show_if 过滤（与凭据表单同一套规则）
+const actionFormFields = computed(
+  () => visibleFields(actionDialog.value.fields, actionDialog.value.values),
+)
 
 /** 模型列表拉取失败的提示：不阻塞对话，只提示用户回退为手动输入模型名 */
 const MODELS_ERROR = '获取模型列表失败，请手动输入模型名'
@@ -373,6 +380,7 @@ function openAction(cred, action, seed = {}, extra = {}) {
     values,
     submitLabel: action.submit || '运行',
     write: !!action.write,
+    confirmText: action.confirm || '',
     saveTo: action.save_to || null,
   }
   // 模型列表要联网拉取，这里刻意不 await：先让弹窗渲染出来，加载过程由 modelsLoading 表达，
@@ -444,6 +452,7 @@ function openList(cred, action, params = {}, actionsOverride = []) {
     fields: action.fields || [],
     values: buildInitialValues(action, params),
     submitLabel: action.submit || '刷新',
+    confirmText: action.confirm || '',
   }
   // 注意：上面 actionDialog.value 已被换成**新对象**，局部变量 dialog 还指向旧对象，
   // 用 dialog.listParams 会取到上一次的参数（首次为空）→ 下钻/预览第一次必然缺参数、要手动刷新。
@@ -589,7 +598,9 @@ async function confirmWrite() {
   const actionName = String(dialog.title || '').split(' · ')[0]
   try {
     await ElMessageBox.confirm(
-      `此操作会改动远端数据${summary ? `（${summary}）` : ''}。确认执行「${actionName}」？`,
+      // 插件可用 action.confirm 覆盖默认文案（涉及轮换令牌这类不可逆副作用时更需要说清楚）
+      dialog.confirmText
+        || `此操作会改动远端数据${summary ? `（${summary}）` : ''}。确认执行「${actionName}」？`,
       '确认写操作',
       {
         type: 'warning',
@@ -660,6 +671,15 @@ async function runActionForm() {
       }
     } else {
       dialog.error = (res && res.error) || '执行失败'
+    }
+    // 操作把新值写回了凭据（如用 refresh_token 换了一组新令牌）：刷新列表并立刻复验一次，
+    // 让状态与附加信息跟着更新。写回值本身不会回传（那是新明文令牌），这里只有字段名。
+    if (Array.isArray(res?.data_updated) && res.data_updated.length) {
+      const id = dialog.credentialId
+      ElMessage.success(`已更新凭据字段：${res.data_updated.join('、')}`)
+      await vaultStore.fetchCredentials()
+      const row = (vaultStore.credentials || []).find((c) => c.id === id)
+      if (row) verifyRow(row)
     }
   } catch (err) {
     dialog.error = err.message || '执行失败'
@@ -1819,7 +1839,7 @@ onMounted(async () => {
       </template>
       <template v-else-if="actionDialog.kind === 'form'">
         <el-form label-width="90px" @submit.prevent>
-          <el-form-item v-for="field in actionDialog.fields" :key="field.key" :label="field.label">
+          <el-form-item v-for="field in actionFormFields" :key="field.key" :label="field.label">
             <el-select
               v-if="field.type === 'select'"
               v-model="actionDialog.values[field.key]"
@@ -1898,14 +1918,14 @@ onMounted(async () => {
 
         <!-- 列表参数：例如「收件箱」要选拉取封数/文件夹 -->
         <el-form
-          v-if="actionDialog.fields.length"
+          v-if="actionFormFields.length"
           class="list-fields"
           size="small"
           :inline="true"
           @submit.prevent
         >
           <el-form-item
-            v-for="field in actionDialog.fields"
+            v-for="field in actionFormFields"
             :key="field.key"
             :label="field.label"
           >

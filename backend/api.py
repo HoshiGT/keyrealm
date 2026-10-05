@@ -554,8 +554,23 @@ def _redact_deep(value: Any, secrets: list) -> Any:
     return value
 
 
+def _declared_fields(credential_type: str) -> set[str]:
+    """该插件在 manifest 里声明过的字段 key（用于限定「操作写回」能改哪些字段）。"""
+    record = db.get_plugin_by_type(credential_type) or {}
+    schema = record.get("fields_schema") or []
+    return {str(f.get("key")) for f in schema if isinstance(f, dict) and f.get("key")}
+
+
 def run_credential_action(credential_id: int, action_id: str, params: Optional[dict] = None) -> dict:
-    """执行某凭据的插件操作（输出/错误统一做密钥净化）。"""
+    """执行某凭据的插件操作（输出/错误统一做密钥净化）。
+
+    插件可在结果里回传 ``updated_data``（``{字段key: 新值}``）把新值**写回本凭据**——
+    用于「用 refresh_token 换一组新令牌」这类必须原子保存的操作（换令牌会轮换 refresh_token，
+    不写回就等于把用户本机的登录态搞坏）。约束：
+      - 只接受**该插件声明过**的字段，其它键一律丢弃（免得插件往库里塞野字段）；
+      - ``updated_data`` 本身**绝不回给前端**（里面是新明文令牌），只回一个 ``data_updated``
+        字段名列表，让界面刷新即可。
+    """
     key = _get_key()
     if key is None:
         return {"error": "vault_locked"}
@@ -569,6 +584,23 @@ def run_credential_action(credential_id: int, action_id: str, params: Optional[d
     result = plugin_manager.run_plugin_action(
         cred["credential_type"], action_id, params or {}, data
     )
+    # 写回：先摘掉 updated_data，再按声明字段过滤合并，最后重加密落库。
+    updated = result.pop("updated_data", None) if isinstance(result, dict) else None
+    if isinstance(updated, dict) and updated:
+        declared = _declared_fields(cred["credential_type"])
+        patch = {k: v for k, v in updated.items() if k in declared}
+        if patch:
+            merged = {**data, **patch}
+            try:
+                db.update_credential(credential_id, data_encrypted=encrypt_dict(key, merged))
+                data = merged
+                result["data_updated"] = sorted(patch)
+                _log.info("操作 %s/%s 写回凭据 %s 字段：%s",
+                          cred["credential_type"], action_id, credential_id, sorted(patch))
+            except Exception as e:  # noqa: BLE001 - 写回失败不能吞掉操作本身的结论
+                _log.exception("操作写回凭据失败 %s", credential_id)
+                result["data_updated"] = []
+                result["data_update_error"] = type(e).__name__
     secrets = _credential_secrets(cred["credential_type"], data)
     # 整份结果递归净化：列表类操作的 rows/columns 也在这里面
     result = _redact_deep(result, secrets)

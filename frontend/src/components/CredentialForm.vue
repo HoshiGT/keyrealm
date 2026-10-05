@@ -4,7 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { useVaultStore } from '@/stores/vault'
 import { api } from '@/api'
-import { normalizeOptions } from '@/utils/format'
+import { normalizeOptions, visibleFields } from '@/utils/format'
 import ProxySelect from '@/components/ProxySelect.vue'
 
 const props = defineProps({
@@ -43,6 +43,10 @@ const currentPlugin = computed(
 )
 
 const schema = computed(() => (currentPlugin.value && currentPlugin.value.fields_schema) || [])
+
+// 条件显隐（manifest 的 show_if）：渲染与提交都用这份，保证「看到什么就提交什么」。
+// 被隐藏字段的值不再提交——否则切模式后另一组的密钥会一直留在库里。
+const visibleSchema = computed(() => visibleFields(schema.value, form.data))
 
 const rules = computed(() => {
   const result = {
@@ -234,7 +238,9 @@ watch(
 
 function buildData() {
   const data = {}
-  schema.value.forEach((field) => {
+  // 只提交当前可见的字段：show_if 未命中的字段（另一种模式的字段）不带上，
+  // 免得切换模式后旧密钥仍留在库里。后端插件的 validate() 也是按模式校验的。
+  visibleSchema.value.forEach((field) => {
     data[field.key] = coerce(field, form.data[field.key])
   })
   // 保留键不在 manifest 字段里，得单独带上：后端按这两个键决定该凭据走哪个代理
@@ -361,7 +367,7 @@ async function submit() {
         <span class="divider-text">以下字段由插件 {{ currentPlugin?.name }} 定义</span>
       </el-divider>
 
-      <template v-for="field in schema" :key="field.key">
+      <template v-for="field in visibleSchema" :key="field.key">
         <el-form-item :label="field.label" :prop="`data.${field.key}`">
           <el-input
             v-if="field.type === 'text' || field.type === 'url'"
