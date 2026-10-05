@@ -68,6 +68,12 @@ python scripts/build.py --frontend
 #   --allow-missing-deps  依赖缺失时仍继续构建（默认中止）
 ```
 
+> **务必用「装好依赖的那个解释器」跑打包**——构建脚本会用它来调 PyInstaller 与做依赖检查，
+> 跑错解释器会出现「刚 pip install 过却仍报缺包」。Windows 上尤其容易踩：PowerShell 里激活
+> `.venv` 后，`python` 走 venv，而 **`py` / `py3.14` 这类启动器不用 venv**（固定选系统 Python）。
+> 拿不准时看构建输出里的 `解释器     : …` 那一行，或直接点名
+> `.venv\Scripts\python.exe scripts/build.py --frontend`。
+
 > **exe 图标**：由 `assets/icon.ico` 提供（`scripts/make_icon.py` 生成，已入库）。构建日志会打印
 > `[spec] 应用图标：…`；若打印的是警告，则图标缺失，exe 会回退 PyInstaller 默认图标。
 > 构建已关闭 UPX（UPX 会破坏 exe 内嵌图标资源）。若替换 exe 后资源管理器仍显示旧图标，

@@ -4,7 +4,10 @@ Pillow>=10.0
 APScheduler>=3.10
 cryptography>=42.0
 httpx[socks]>=0.27
-PySocks>=1.7          # 邮箱（SMTP/IMAP）走 SOCKS/HTTP CONNECT 隧道
+# PySocks：邮箱（SMTP/IMAP）走 SOCKS / HTTP CONNECT 隧道用。注释单独一行——
+# 写在包名后面容易被「按行取值」的解析器当成版本约束（构建脚本自己会先剥掉注释，
+# 但别的工具不一定）。
+PySocks>=1.7
 mcp>=2.0
 uvicorn>=0.29
 pydantic>=2.7

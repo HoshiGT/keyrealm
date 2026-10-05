@@ -139,6 +139,14 @@ def fail_missing_deps(missing: list[str], allow_missing: bool) -> None:
     print("  这些包装不上，打出的程序就会缺功能或在运行时报错，请先安装：")
     print("      pip install -r requirements.txt")
     print('  （socks5 代理等 extras 依赖也在其中，如 httpx[socks] → socksio）')
+    print()
+    # 这条提示是为了省掉一类真实踩过的坑：装了包却仍报缺。
+    # 多半是「pip 装进 A、构建跑在 B」——Windows 上 `py`/`py3.14` 启动器**不会**用已激活的 venv，
+    # 它固定选系统 Python；而 PowerShell 里 `python` 才会用 venv。把解释器路径打出来一眼可辨。
+    print(f"  当前解释器：{sys.executable}")
+    print("  若你刚 pip install 过却仍缺包，多半是装到了别的解释器：")
+    print("    · 激活 venv 后用 `python scripts/build.py`（`py` / `py3.14` 启动器不用 venv）")
+    print("    · 或直接点名：`.venv\\Scripts\\python.exe scripts/build.py`")
     if allow_missing:
         print()
         print("  --allow-missing-deps 已指定：忽略缺失，继续构建（产物可能不完整）。")
@@ -351,6 +359,7 @@ def main() -> None:
     print("=" * 60)
     print(f"目标平台   : {platform.system()} {platform.machine()}")
     print(f"Python     : {sys.version.split()[0]}")
+    print(f"解释器     : {sys.executable}")
     print(f"产物名     : {EXE_NAME}")
     print(f"控制台模式 : {console}")
     print("=" * 60)
