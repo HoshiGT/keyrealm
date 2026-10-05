@@ -677,7 +677,9 @@ def delete_schedule(schedule_id: int):
 def list_proxies() -> list[dict]:
     with _lock:
         rows = get_conn().execute(
-            "SELECT * FROM proxies ORDER BY sort_order, id"
+            # 按**创建时间**排，不能按 id：id 是 UUID，字典序等于随机序，
+            # 用它当 tie-break 会让界面上的代理列表每次刷新都换位置。
+            "SELECT * FROM proxies ORDER BY sort_order, created_at, id"
         ).fetchall()
     return [dict(r) for r in rows]
 
