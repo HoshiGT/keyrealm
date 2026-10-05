@@ -1273,7 +1273,8 @@ def _run_download_prefix(
     """把某个前缀下的所有对象并发拉取后打包成 zip（本地临时文件 → 原子落盘）。
 
     给了 ``progress`` 时按**对象个数**上报（跨对象累加字节数对用户不直观）；
-    给了 ``should_cancel`` 时在**每个对象开始前**查一次，取消即停止后续下载并清干净临时文件。
+    给了 ``should_cancel`` 时在**每个对象开始前**和**对象内的每个 chunk** 各查一次
+    （正在下的那个大对象也立刻断流），取消即停止后续下载并清干净临时文件。
     """
     target, error = _cos_target(params)
     if error:
@@ -1339,7 +1340,12 @@ def _run_download_prefix(
                         return key, "", f"{key} (HTTP {resp.status_code})"
                     with open(local, "wb") as handle:
                         for chunk in resp.iter_bytes(65536):
+                            # 正在下的这个对象也要能随时断流：500 MB 的对象不能等它下完
+                            if should_cancel is not None and should_cancel():
+                                raise _Cancelled
                             handle.write(chunk)
+        except _Cancelled:
+            raise          # 取消要往外传，不能被「单个对象失败」当成一个失败项吞掉
         except Exception as exc:  # noqa: BLE001 - 单个对象失败不该毁掉整包
             return key, "", f"{key} ({type(exc).__name__})"
         return key, local, ""
