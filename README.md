@@ -66,7 +66,9 @@ python scripts/build.py --frontend
 > 构建已关闭 UPX（UPX 会破坏 exe 内嵌图标资源）。若替换 exe 后资源管理器仍显示旧图标，
 > 属 Windows 图标缓存，可执行 `ie4uinit.exe -show`，或把 exe 复制到新目录后再查看。
 > 分不清是「图标没进 exe」还是「图标缓存」时，先跑 `python scripts/check_exe_icon.py`
-> ——它按字节在 exe 里搜各图标条目，直接给出结论和对应修法。
+> ——它解析 exe 的 PE 资源目录（RT_GROUP_ICON / RT_ICON），逐帧比对 `assets/icon.ico`，
+> 直接给出结论和对应修法。**不能用「在 exe 里搜图标字节」来代替**：spec 把整个 `assets/`
+> 当数据文件打进了包，所以 ico 的字节本来就存在于 exe 中，按字节搜必然命中，会得出错误结论。
 >
 > `icon.ico` 为**混合格式**：16–128 存 BMP(DIB)、256 存 PNG。Windows 仅对 256×256 保证支持
 > PNG 压缩条目，小尺寸用 PNG 时任务栏/资源管理器可能解码失败而回退默认图标——故
@@ -93,7 +95,10 @@ release/
 │   │   └── coze/
 │   └── dns/ dev/ im/ cloud/ exchange/ mail/   # 域名解析 / 开发者平台 / 即时通讯 / 云服务商 / 交易所 / 邮箱
 ├── plugins_builtin/           # 内置插件纯净源（只读）：插件管理里「添加」时从这里恢复
-└── data/                      # 首次运行时自动创建（数据库、主密码校验）
+└── data/                      # 首次运行时自动创建（数据库、主密码校验、日志；升级时保留）
+    ├── credentials.db         # 加密凭据库（-wal / -shm 运行时生成）
+    ├── logs/                  # 轮转日志（1MB × 5）
+    └── webview/               # pywebview/WebView2 用户数据目录：界面偏好（列宽、树展开、可见列）
 ```
 
 > 约定：插件只以 `plugins/` 为准。一个服务就是一个独立子插件，放入 `plugins/` 目录
@@ -109,6 +114,10 @@ release/
 
 `release/` 是自包含、可便携分发的目录，且**不被 git 追踪**（`CredentialVault.spec` 与
 `scripts/*.py` 作为构建配置保留在版本库中）。
+
+> **升级时 `data/` 原样保留**：`scripts/build.py` 只替换 exe、`plugins/`、`plugins_builtin/`，
+> 在 `data/` 下仅清理旧版遗留的 `data/installed_plugins/`（zip 安装时代的运行期缓存）。
+> 其余内容一律不碰——`data/webview/` 是界面偏好、`data/logs/` 是日志，升级前后都不用手工维护。
 
 > Windows 运行前提：需已安装 WebView2 Runtime（Windows 10/11 通常已内置）。
 
