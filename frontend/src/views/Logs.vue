@@ -12,9 +12,10 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Refresh, Search } from '@element-plus/icons-vue'
+import { CopyDocument, Delete, Refresh, Search } from '@element-plus/icons-vue'
 
 import { api } from '@/api'
+import { copyText } from '@/utils/clipboard'
 
 const LOG_LIMITS = [
   { label: '最近 100 条', value: 100 },
@@ -124,6 +125,17 @@ async function clearLogs() {
   }
 }
 
+/** 复制当前列表里的日志（按行拼接），方便贴出去反馈；复制的是可见的这批筛选结果 */
+async function copyLogs() {
+  if (!logs.value.length) {
+    ElMessage.info('没有可复制的日志')
+    return
+  }
+  const ok = await copyText(logs.value.join('\n'))
+  if (ok) ElMessage.success(`已复制 ${logs.value.length} 条日志`)
+  else ElMessage.error('复制失败，请手动选中后复制')
+}
+
 onMounted(async () => {
   await Promise.all([loadLogConfig(), loadLogs()])
 })
@@ -214,6 +226,7 @@ onMounted(async () => {
         </el-select>
 
         <div class="spacer" />
+        <el-button :icon="CopyDocument" :disabled="!logs.length" @click="copyLogs">复制</el-button>
         <span class="log-count">共 {{ logCount }} 条</span>
       </div>
 

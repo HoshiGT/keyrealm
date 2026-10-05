@@ -90,3 +90,22 @@ export const STATUS_OPTIONS = [
   { label: '错误', value: 'error' },
   { label: '未验证', value: 'unknown' },
 ]
+
+/**
+ * 归一化 manifest 里 `select` 字段的 options。
+ *
+ * 插件的 options 允许两种写法：
+ *   - 纯字符串数组：`["api_key", "chatgpt"]` → 值与显示都是它自己；
+ *   - 对象数组：`[{ value: "chatgpt", label: "ChatGPT 登录态" }]` → 显示 label、存 value。
+ * 早期只支持字符串，导致「值必须可读」——想让用户看懂就只能把中文当值存库（既难看又难匹配）。
+ * 统一在这里归一，渲染处一律用 value/label。
+ */
+export function normalizeOptions(options) {
+  if (!Array.isArray(options)) return []
+  return options.map((option) => {
+    if (option && typeof option === 'object') {
+      return { value: option.value, label: option.label ?? String(option.value ?? '') }
+    }
+    return { value: option, label: String(option) }
+  })
+}

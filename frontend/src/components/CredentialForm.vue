@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { useVaultStore } from '@/stores/vault'
 import { api } from '@/api'
+import { normalizeOptions } from '@/utils/format'
 import ProxySelect from '@/components/ProxySelect.vue'
 
 const props = defineProps({
@@ -392,7 +393,12 @@ async function submit() {
             filterable
             class="full-width"
           >
-            <el-option v-for="option in field.options || []" :key="option" :label="option" :value="option" />
+            <el-option
+              v-for="option in normalizeOptions(field.options)"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
           </el-select>
 
           <el-input-number

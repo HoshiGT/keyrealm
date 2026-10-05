@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { api } from '@/api'
+import { normalizeOptions } from '@/utils/format'
 import ProxySelect from '@/components/ProxySelect.vue'
 
 /**
@@ -154,7 +155,12 @@ async function clearAll() {
             clearable
             class="full-width"
           >
-            <el-option v-for="option in field.options || []" :key="option" :label="option" :value="option" />
+            <el-option
+              v-for="option in normalizeOptions(field.options)"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
           </el-select>
           <el-input
             v-else

@@ -8,7 +8,7 @@ import CredentialForm from '@/components/CredentialForm.vue'
 import ScopeDefaultsDialog from '@/components/ScopeDefaultsDialog.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { useVaultStore } from '@/stores/vault'
-import { STATUS_OPTIONS, formatDateTimeFull } from '@/utils/format'
+import { STATUS_OPTIONS, formatDateTimeFull, normalizeOptions } from '@/utils/format'
 import api from '@/api'
 import { inlineIcon } from '@/utils/pluginIcon'
 
@@ -245,6 +245,33 @@ function closeActionMenu() {
   actionMenu.value.visible = false
 }
 
+const actionMenuRef = ref(null)
+const ACTION_MENU_MARGIN = 8
+
+/**
+ * 摆好操作菜单，别被视口裁掉：默认贴锚点左下方，右侧放不下就左移，下方放不下就翻到锚点上方。
+ * 菜单高度要等渲染后才能量到，所以放在 nextTick 之后。
+ */
+async function placeActionMenu(anchorRect) {
+  await nextTick()
+  const el = actionMenuRef.value
+  if (!el || !actionMenu.value.visible) return
+  const m = ACTION_MENU_MARGIN
+  const w = el.offsetWidth
+  const h = el.offsetHeight
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  let x = anchorRect ? anchorRect.left : actionMenu.value.x
+  let y = anchorRect ? anchorRect.bottom + 4 : actionMenu.value.y
+  if (x + w + m > vw) x = Math.max(m, vw - w - m)
+  if (y + h + m > vh) {
+    const above = anchorRect ? anchorRect.top - h - 4 : y - h - 4
+    y = above >= m ? above : Math.max(m, vh - h - m)
+  }
+  actionMenu.value.x = x
+  actionMenu.value.y = y
+}
+
 /** 点「操作」：0 个 → 提示；1 个 → 直接进；≥2 个 → 弹选择菜单 */
 async function openActions(row, event) {
   closeActionMenu()
@@ -291,6 +318,7 @@ async function openActions(row, event) {
     note: '',
     pending: true,
   }
+  placeActionMenu(rect)
   // 菜单先按声明全列出，权限探测回来再收敛（避免「先显示后消失」的抖动）
   loadCapabilities(row.id).then((caps) => {
     if (!actionMenu.value.visible) return
@@ -298,6 +326,8 @@ async function openActions(row, event) {
     actionMenu.value.items = available
     actionMenu.value.note = caps.note
     actionMenu.value.pending = false
+    // 条目变了、高度也跟着变，重新贴一次边（否则收敛后被裁）
+    placeActionMenu(rect)
     if (!available.length) {
       closeActionMenu()
       ElMessageBox.alert(caps.note || '当前凭据没有任何可用操作权限', '无可用操作', {
@@ -415,7 +445,10 @@ function openList(cred, action, params = {}, actionsOverride = []) {
     values: buildInitialValues(action, params),
     submitLabel: action.submit || '刷新',
   }
-  fetchList(action.id, dialog.listParams)
+  // 注意：上面 actionDialog.value 已被换成**新对象**，局部变量 dialog 还指向旧对象，
+  // 用 dialog.listParams 会取到上一次的参数（首次为空）→ 下钻/预览第一次必然缺参数、要手动刷新。
+  // 必须用本次传入的 params。
+  fetchList(action.id, params || {})
 }
 
 /** 表单初始值：field.default 打底，行参数（下钻/行内动作带来的）覆盖 */
@@ -1531,15 +1564,21 @@ onMounted(async () => {
             </template>
 
             <template v-else-if="col.key === 'notes'" #default="{ row }">
-              <span class="text-muted">{{ notesOf(row) || '—' }}</span>
+              <span class="text-muted cell-ellipsis" :title="notesOf(row) || ''">{{ notesOf(row) || '—' }}</span>
             </template>
 
             <template v-else-if="col.key === 'extra'" #default="{ row }">
-              <span class="text-muted">{{ extraInfo(row) || '—' }}</span>
+              <span class="text-muted cell-ellipsis" :title="extraInfo(row) || ''">{{ extraInfo(row) || '—' }}</span>
             </template>
 
             <template v-else-if="col.key === 'group'" #default="{ row }">
-              <el-tag v-if="row.group_name" size="small" effect="plain">{{ row.group_name }}</el-tag>
+              <el-tag
+                v-if="row.group_name"
+                size="small"
+                effect="plain"
+                class="cell-tag"
+                :title="row.group_name"
+              >{{ row.group_name }}</el-tag>
               <span v-else class="text-muted">未分组</span>
             </template>
 
@@ -1677,6 +1716,7 @@ onMounted(async () => {
     <!-- 多个操作时的选择菜单（单个操作会直接进，不经过这里） -->
     <div
       v-if="actionMenu.visible"
+      ref="actionMenuRef"
       class="ctx-menu action-menu"
       :style="{ left: `${actionMenu.x}px`, top: `${actionMenu.y}px` }"
       @click.stop
@@ -1785,7 +1825,12 @@ onMounted(async () => {
               v-model="actionDialog.values[field.key]"
               style="width: 100%"
             >
-              <el-option v-for="opt in field.options || []" :key="opt" :label="opt" :value="opt" />
+              <el-option
+                v-for="opt in normalizeOptions(field.options)"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
             </el-select>
             <el-input
               v-else-if="field.type === 'textarea'"
@@ -1871,10 +1916,10 @@ onMounted(async () => {
               clearable
             >
               <el-option
-                v-for="option in field.options || []"
-                :key="option"
-                :label="option"
-                :value="option"
+                v-for="option in normalizeOptions(field.options)"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
               />
             </el-select>
             <el-input
@@ -2120,6 +2165,38 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   margin-top: 2px;
+}
+
+/* 单元格一律单行省略：长备注/长分组名不再把行高撑大（内容再长行高也固定），
+   鼠标悬停时由元素自带的 title 属性显示全文。 */
+.credential-cell,
+.credential-text {
+  min-width: 0;
+}
+
+.credential-name,
+.credential-sub,
+.cell-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-ellipsis {
+  display: block;
+  max-width: 100%;
+}
+
+/* el-tag 的文字在 .el-tag__content 里，得单独压；否则分组名长了照样撑开 */
+.cell-tag {
+  max-width: 100%;
+}
+
+.cell-tag :deep(.el-tag__content) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mono {
@@ -2403,6 +2480,8 @@ onMounted(async () => {
 
 .action-menu {
   min-width: 160px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
 }
 
 .ctx-hint {
