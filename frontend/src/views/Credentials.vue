@@ -518,7 +518,7 @@ const COLUMN_DEFS = [
   { key: 'created_at', label: '添加时间', width: 170 },
   { key: 'last_verified', label: '最后验证', width: 170 },
   { key: 'last_valid', label: '最后有效', width: 170 },
-  { key: 'actions', label: '操作', width: 190, locked: true },
+  { key: 'actions', label: '操作', width: 260, locked: true },
 ]
 
 const COLUMN_ORDER_KEY = 'vault.credentials.columnOrder'
