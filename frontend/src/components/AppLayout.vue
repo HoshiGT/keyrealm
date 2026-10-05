@@ -12,6 +12,8 @@ import {
   Grid,
   InfoFilled,
   Key,
+  Rank,
+  RefreshLeft,
   Setting,
   Lock,
   Minus,
@@ -32,7 +34,8 @@ watch(collapsed, (value) => {
   localStorage.setItem('vault.layout.asideCollapsed', value ? '1' : '0')
 })
 
-const navItems = [
+// 导航项默认顺序。用户可在侧栏直接拖拽调整，顺序存 localStorage（纯界面偏好，不进后端）。
+const NAV_ITEMS = [
   { path: '/credentials', title: '凭据管理', icon: Key },
   { path: '/plugins', title: '插件管理', icon: Grid },
   { path: '/groups', title: '分组管理', icon: FolderOpened },
@@ -42,6 +45,96 @@ const navItems = [
   { path: '/backup', title: '备份', icon: Download },
   { path: '/about', title: '关于', icon: InfoFilled },
 ]
+
+const NAV_ORDER_KEY = 'vault.layout.navOrder'
+
+function readSavedOrder() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(NAV_ORDER_KEY) || 'null')
+    return Array.isArray(raw) ? raw.filter((p) => typeof p === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+/** 按已保存的顺序排列；保存顺序里没有的项（如新增页面）追加到末尾，已移除的项直接忽略。 */
+function applyOrder(saved) {
+  if (!saved.length) return NAV_ITEMS.slice()
+  const pending = new Map(NAV_ITEMS.map((item) => [item.path, item]))
+  const ordered = []
+  for (const path of saved) {
+    const item = pending.get(path)
+    if (item) {
+      ordered.push(item)
+      pending.delete(path)
+    }
+  }
+  for (const item of NAV_ITEMS) {
+    if (pending.has(item.path)) ordered.push(item)
+  }
+  return ordered
+}
+
+const navItems = ref(applyOrder(readSavedOrder()))
+
+const isCustomOrder = computed(
+  () => navItems.value.some((item, i) => item.path !== NAV_ITEMS[i].path),
+)
+
+const dragPath = ref('')
+const dropPath = ref('')
+const dropAfter = ref(false)
+
+function resetDrag() {
+  dragPath.value = ''
+  dropPath.value = ''
+  dropAfter.value = false
+}
+
+function onDragStart(item, event) {
+  if (collapsed.value) return
+  dragPath.value = item.path
+  event.dataTransfer.effectAllowed = 'move'
+  // Firefox 必须有 setData 才会真正开始拖拽
+  event.dataTransfer.setData('text/plain', item.path)
+}
+
+function onDragOver(item, event) {
+  if (!dragPath.value || item.path === dragPath.value) return
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+  const rect = event.currentTarget.getBoundingClientRect()
+  dropPath.value = item.path
+  dropAfter.value = event.clientY > rect.top + rect.height / 2
+}
+
+function onDrop(item, event) {
+  event.preventDefault()
+  const from = dragPath.value
+  const to = item.path
+  const after = dropAfter.value
+  resetDrag()
+  if (!from || from === to) return
+
+  const list = navItems.value.slice()
+  const fromIndex = list.findIndex((i) => i.path === from)
+  if (fromIndex < 0) return
+  const [moved] = list.splice(fromIndex, 1)
+  let toIndex = list.findIndex((i) => i.path === to)
+  if (toIndex < 0) return
+  if (after) toIndex += 1
+  list.splice(toIndex, 0, moved)
+
+  navItems.value = list
+  localStorage.setItem(NAV_ORDER_KEY, JSON.stringify(list.map((i) => i.path)))
+}
+
+function resetNavOrder() {
+  localStorage.removeItem(NAV_ORDER_KEY)
+  navItems.value = NAV_ITEMS.slice()
+  resetDrag()
+  ElMessage.success('已恢复默认顺序')
+}
 
 const activePath = computed(() => route.path)
 
@@ -92,23 +185,55 @@ async function handleMinimize() {
 
 <template>
   <el-container class="layout">
-    <el-aside :width="collapsed ? '64px' : '152px'" class="layout-aside">
+    <el-aside
+      :width="collapsed ? '64px' : '152px'"
+      class="layout-aside"
+      :class="{ 'is-collapsed': collapsed }"
+    >
       <div class="brand" :class="{ 'is-collapsed': collapsed }">
         <img src="/favicon.svg" class="brand-logo" alt="Credential Vault" />
         <span v-show="!collapsed" class="brand-text">Credential Vault</span>
       </div>
 
       <el-menu :default-active="activePath" :collapse="collapsed" :collapse-transition="false" router class="layout-menu">
-        <el-menu-item v-for="item in navItems" :key="item.path" :index="item.path">
+        <el-menu-item
+          v-for="item in navItems"
+          :key="item.path"
+          :index="item.path"
+          :draggable="!collapsed"
+          :class="{
+            'is-dragging': dragPath === item.path,
+            'is-drop-before': dropPath === item.path && !dropAfter,
+            'is-drop-after': dropPath === item.path && dropAfter,
+          }"
+          @dragstart="onDragStart(item, $event)"
+          @dragover="onDragOver(item, $event)"
+          @drop="onDrop(item, $event)"
+          @dragend="resetDrag"
+        >
           <el-icon><component :is="item.icon" /></el-icon>
           <template #title>{{ item.title }}</template>
         </el-menu-item>
       </el-menu>
 
+      <div v-show="!collapsed" class="nav-hint">
+        <el-icon><Rank /></el-icon>
+        <span>拖拽菜单项可调整顺序</span>
+      </div>
+
       <div class="aside-footer">
         <el-button text class="collapse-btn" @click="collapsed = !collapsed">
           <el-icon><component :is="collapsed ? Expand : Fold" /></el-icon>
           <span v-show="!collapsed">收起侧栏</span>
+        </el-button>
+        <el-button
+          v-if="isCustomOrder && !collapsed"
+          text
+          class="collapse-btn"
+          :icon="RefreshLeft"
+          @click="resetNavOrder"
+        >
+          恢复默认顺序
         </el-button>
       </div>
     </el-aside>
@@ -215,6 +340,7 @@ async function handleMinimize() {
 }
 
 .layout-menu :deep(.el-menu-item) {
+  position: relative;
   justify-content: center;
   padding: 0 !important;
 }
@@ -225,6 +351,54 @@ async function handleMinimize() {
 
 .layout-menu :deep(.el-menu-item.is-active) {
   padding-left: 0 !important;
+}
+
+/* 拖拽排序：展开态显示抓手、可拖、悬停高亮插入位 */
+.layout-aside:not(.is-collapsed) .layout-menu :deep(.el-menu-item) {
+  cursor: grab;
+}
+
+.layout-aside:not(.is-collapsed) .layout-menu :deep(.el-menu-item)::after {
+  content: '';
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  width: 10px;
+  height: 12px;
+  margin-top: -6px;
+  background-image: radial-gradient(circle, currentColor 1px, transparent 1.2px);
+  background-size: 5px 5px;
+  background-position: 2px 1px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+
+.layout-aside:not(.is-collapsed) .layout-menu :deep(.el-menu-item:hover)::after {
+  opacity: 0.35;
+}
+
+.layout-menu :deep(.el-menu-item.is-dragging) {
+  opacity: 0.4;
+}
+
+.layout-menu :deep(.el-menu-item.is-drop-before)::before,
+.layout-menu :deep(.el-menu-item.is-drop-after)::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--el-color-primary);
+}
+
+.layout-menu :deep(.el-menu-item.is-drop-before)::before {
+  top: -1px;
+}
+
+.layout-menu :deep(.el-menu-item.is-drop-after)::before {
+  bottom: -1px;
 }
 
 .brand.is-collapsed {
@@ -245,9 +419,22 @@ async function handleMinimize() {
   overflow-y: auto;
 }
 
+.nav-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--el-text-color-secondary);
+}
+
 .aside-footer {
   border-top: 1px solid var(--el-border-color);
   padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .collapse-btn {

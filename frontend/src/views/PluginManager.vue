@@ -1,13 +1,14 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Plus, Refresh } from '@element-plus/icons-vue'
+import { Delete, Plus, Refresh, Search } from '@element-plus/icons-vue'
 
 import { useVaultStore } from '@/stores/vault'
 
 const vaultStore = useVaultStore()
 const loading = ref(false)
 const available = ref([])
+const pluginSearch = ref('')
 
 const installedGroups = computed(() => {
   const groups = {}
@@ -18,6 +19,38 @@ const installedGroups = computed(() => {
   })
   return Object.values(groups)
 })
+
+// 搜索词按空格拆分为多个关键词，需全部命中（AND）
+const searchTerms = computed(() =>
+  pluginSearch.value.trim().toLowerCase().split(/\s+/).filter(Boolean),
+)
+
+function matchesSearch(item) {
+  if (!searchTerms.value.length) return true
+  const haystack = [item.name, item.credential_type, item.description, item.category_name]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+  return searchTerms.value.every((term) => haystack.includes(term))
+}
+
+// 过滤只影响展示：组内无匹配项时整组丢弃，不触碰任何选中集合（本页无选择状态）
+const filteredInstalledGroups = computed(() =>
+  installedGroups.value
+    .map((group) => ({ ...group, items: group.items.filter(matchesSearch) }))
+    .filter((group) => group.items.length),
+)
+
+const filteredAvailable = computed(() => available.value.filter(matchesSearch))
+
+// 两个卡片各自判断「有内容但全被过滤掉」，分别给空状态提示（避免出现只有标题的空卡片）
+const noInstalledMatch = computed(
+  () => searchTerms.value.length > 0 && vaultStore.plugins.length > 0 && !filteredInstalledGroups.value.length,
+)
+
+const noAvailableMatch = computed(
+  () => searchTerms.value.length > 0 && available.value.length > 0 && !filteredAvailable.value.length,
+)
 
 async function load() {
   loading.value = true
@@ -76,13 +109,20 @@ onMounted(load)
       <h2 class="section-title">插件管理</h2>
       <span class="text-muted">已安装 {{ vaultStore.plugins.length }} 个</span>
       <div class="spacer" />
+      <el-input
+        v-model="pluginSearch"
+        class="plugin-search"
+        placeholder="搜索插件名 / 标识 / 描述"
+        clearable
+        :prefix-icon="Search"
+      />
       <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
     </div>
 
     <el-card v-loading="loading" shadow="never">
       <template #header><span>已安装插件</span></template>
 
-      <div v-for="group in installedGroups" :key="group.key" class="pm-group">
+      <div v-for="group in filteredInstalledGroups" :key="group.key" class="pm-group">
         <div class="pm-cat">{{ group.name }}</div>
         <div v-for="plugin in group.items" :key="plugin.credential_type" class="pm-row">
           <img v-if="plugin.icon_image" class="pm-icon" :src="plugin.icon_image" alt="" />
@@ -100,11 +140,21 @@ onMounted(load)
       </div>
 
       <el-empty v-if="!vaultStore.plugins.length" description="暂无已安装插件" :image-size="60" />
+      <el-empty
+        v-else-if="noInstalledMatch"
+        description="没有匹配的已安装插件"
+        :image-size="60"
+      />
     </el-card>
 
-    <el-card v-if="available.length" shadow="never">
+    <el-card v-if="filteredAvailable.length || noAvailableMatch" shadow="never">
       <template #header><span>可添加（内置源）</span></template>
-      <div v-for="item in available" :key="item.credential_type" class="pm-row">
+      <el-empty
+        v-if="noAvailableMatch"
+        description="内置源里没有匹配的插件"
+        :image-size="60"
+      />
+      <div v-for="item in filteredAvailable" :key="item.credential_type" class="pm-row">
         <img v-if="item.icon_image" class="pm-icon" :src="item.icon_image" alt="" />
         <span v-else class="pm-icon-emoji">{{ item.icon }}</span>
         <div class="pm-main">
@@ -170,5 +220,9 @@ onMounted(load)
 .pm-sub {
   font-size: 12px;
   margin-top: 2px;
+}
+
+.plugin-search {
+  width: 240px;
 }
 </style>
