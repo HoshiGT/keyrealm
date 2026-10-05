@@ -51,14 +51,6 @@
       "hint": "可选。登录态文件里 auth.domain 的值；中国站填 www.codebuddy.cn（默认），国际站填 www.codebuddy.ai。留空按中国站处理。"
     },
     {
-      "key": "expires_at",
-      "label": "过期时间戳",
-      "type": "text",
-      "required": false,
-      "placeholder": "留空即可（可选）",
-      "hint": "可选。登录态文件里 auth.expiresAt 的值（unix 时间戳，秒或毫秒均可）。仅在 accessToken 解不出 exp 时用于判断是否过期。"
-    },
-    {
       "key": "notes",
       "label": "备注",
       "type": "textarea",

@@ -661,9 +661,9 @@ qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）。
   > 带自定义确认文案，成功后新值经 `updated_data` **自动写回本凭据**——因为上游换令牌会**轮换**
   > refresh_token，不写回就会让本机 CLI 与库里的登录态永久错位。
   >
-  > `codebuddy`（纯登录态类）同样是分字段填写，字段为 `access_token`（必需）、`uid`（必需，
-  > 探针请求头 `X-User-Id`），以及可选的 `refresh_token`（只存不用）、`enterprise_id`、`domain`
-  > （默认 `www.codebuddy.cn`）、`expires_at`。它**没有**刷新操作——刷新端点未实测确认，
+  > `codebuddy`（纯登录态类）同样是分字段填写：**必需** `access_token`、`uid`（探针请求头
+  > `X-User-Id`）；**可选** `refresh_token`（只存不用）、`enterprise_id`、`domain`
+  > （默认 `www.codebuddy.cn`）。它**没有**刷新操作——刷新端点未实测确认，
   > 拿猜的接口去轮换用户的令牌风险太大。
 - **dns**：
   - dnspod / godaddy / cloudflare —— **域名（站点）列表 → 行内「解析」下钻到解析记录 → 行内「修改」**，

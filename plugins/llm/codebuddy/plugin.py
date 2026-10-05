@@ -11,8 +11,7 @@ CodeBuddy 是腾讯的 AI 编程助手（中国站 www.codebuddy.cn / 国际站 
 - ``uid``（必需）：``account.uid``，联网校验请求头 ``X-User-Id`` 的值；
 - ``refresh_token``（可选）：``auth.refreshToken``，**只保存、从不使用**；
 - ``enterprise_id``（可选）：``account.enterpriseId``，个人账号为空；
-- ``domain``（可选）：``auth.domain``，默认 ``www.codebuddy.cn``；
-- ``expires_at``（可选）：``auth.expiresAt``（unix 时间戳，秒/毫秒均可）。
+- ``domain``（可选）：``auth.domain``，默认 ``www.codebuddy.cn``。
 
 **``refresh_token`` 只存不用**：CodeBuddy 的刷新会**轮换**刷新令牌，属写副作用，
 本插件整条验证路径绝不调用任何刷新/轮换接口，全程只发一次只读的额度查询。
@@ -171,7 +170,9 @@ def _read(data: dict) -> dict:
     - ``refresh_token``：可选（= ``auth.refreshToken``）——**只存不用**（见模块说明）
     - ``enterprise_id``：可选（= ``account.enterpriseId``，个人账号为空）
     - ``domain``：可选（= ``auth.domain``），留空取 ``DEFAULT_DOMAIN``
-    - ``expires_at``：可选（= ``auth.expiresAt``），accessToken 解不出 ``exp`` 时兜底
+
+    过期判断只看 access_token 自己的 JWT ``exp``——不再收登录态里的 ``expiresAt``
+    （两者同源，多存一个字段没有意义）。
     """
     data = data or {}
 
@@ -185,7 +186,6 @@ def _read(data: dict) -> dict:
         "uid": _text("uid"),
         "enterprise_id": _text("enterprise_id"),
         "domain": _text("domain") or DEFAULT_DOMAIN,
-        "expires_at": _text("expires_at"),
     }
 
 
@@ -386,7 +386,7 @@ def _verify(data: dict) -> VerifyResult:
 
     phone = str(claims.get("preferred_username") or "").strip()
     now = time.time()
-    access_exp = _normalize_epoch(claims.get("exp")) or _normalize_epoch(auth["expires_at"])
+    access_exp = _normalize_epoch(claims.get("exp"))
     refresh_exp = _normalize_epoch(refresh_claims.get("exp"))
 
     endpoint = _endpoint_for(domain)
@@ -535,7 +535,7 @@ def _token_info_rows(data: dict) -> list[dict]:
     add("认证时间 (auth_time)", _fmt_time(_normalize_epoch(claims.get("auth_time"))))
 
     now = time.time()
-    access_exp = _normalize_epoch(claims.get("exp")) or _normalize_epoch(auth["expires_at"])
+    access_exp = _normalize_epoch(claims.get("exp"))
     if access_exp:
         tail = "（已过期）" if access_exp <= now else f"（剩余 {_human_delta(access_exp - now)}）"
         add("访问令牌过期 (exp)", f"{_fmt_time(access_exp)} {tail}")
