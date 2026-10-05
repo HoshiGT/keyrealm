@@ -660,6 +660,11 @@ qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）。
   > 填了 `refresh_token` 时会多出「刷新 access_token」这个**手动**操作：它 `write: true`、
   > 带自定义确认文案，成功后新值经 `updated_data` **自动写回本凭据**——因为上游换令牌会**轮换**
   > refresh_token，不写回就会让本机 CLI 与库里的登录态永久错位。
+  >
+  > `codebuddy`（纯登录态类）同样是分字段填写，字段为 `access_token`（必需）、`uid`（必需，
+  > 探针请求头 `X-User-Id`），以及可选的 `refresh_token`（只存不用）、`enterprise_id`、`domain`
+  > （默认 `www.codebuddy.cn`）、`expires_at`。它**没有**刷新操作——刷新端点未实测确认，
+  > 拿猜的接口去轮换用户的令牌风险太大。
 - **dns**：
   - dnspod / godaddy / cloudflare —— **域名（站点）列表 → 行内「解析」下钻到解析记录 → 行内「修改」**，
     以及行内「新增」；前两者是 `write`，Cloudflare 用同一个表单（留空 `record_id` 即新增）

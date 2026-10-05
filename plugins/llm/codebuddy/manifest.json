@@ -11,7 +11,7 @@
       "key": "access_token",
       "label": "access_token",
       "type": "password",
-      "required": false,
+      "required": true,
       "sensitive": true,
       "placeholder": "eyJhbGciOiJSUzI1NiIsImtpZCI6...",
       "hint": "必需。打开 CodeBuddy 客户端登录态文件，取 auth.accessToken 的值填到这里（是那串 eyJ 开头的 JWT，不是整份 JSON）。它等于长期登录凭据，将加密存储；验证过程只做只读查询、不会刷新或轮换。"
