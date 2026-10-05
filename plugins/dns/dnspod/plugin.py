@@ -291,7 +291,9 @@ def _execute(action_id: str, params: dict, data: dict) -> dict:
             code, message = _status(payload)
             if code != "1":
                 return _fail(f"查询域名失败（code {code}）：{message}")
-            domains = payload.get("info")
+            # DNSPod 的 Domain.List 把域名数组放在 "domains"，"info" 是统计信息（dict，不是列表）。
+            # 曾误读 info 导致域名列表永远为空——这里必须取 domains。
+            domains = payload.get("domains")
             domains = domains if isinstance(domains, list) else []
             rows = []
             for item in domains:

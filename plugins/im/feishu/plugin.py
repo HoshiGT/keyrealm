@@ -31,6 +31,7 @@ from im_common import (
     first_list,
     guarded,
     log,
+    log_debug,
     make_client,
     safe_json,
 )
@@ -299,10 +300,12 @@ def capabilities(data) -> dict:
     if not passed and failures and all(code in _AUTH_FAIL_CODES for _, code, _ in failures):
         raise RuntimeError("权限探测异常：tenant_access_token 被拒绝")
 
+    # 缺哪些权限只记 DEBUG 日志，不往界面上抛：用户要的是「能用什么」，不是一张权限清单。
+    if failures:
+        log_debug(f"飞书权限探测：不可用 {len(failures)} 项 → {_failure_note(failures)}")
     if not passed:
-        return {"available": [], "note": f"未探测到任何可用权限：{_failure_note(failures)}"}
-    note = f"缺少以下权限：{_failure_note(failures)}" if failures else ""
-    return {"available": passed, "note": note}
+        return {"available": [], "note": "当前应用未授权任何可用操作"}
+    return {"available": passed, "note": ""}
 
 
 # ── 操作声明 ─────────────────────────────────────────────
@@ -406,7 +409,7 @@ def actions(data: dict) -> list[dict]:
             "order": 40,
             "description": "应用所在的群组",
             "columns": _CHAT_COLUMNS,
-            "empty_text": "未查询到群组（可能缺少 im:chat:readonly 权限）",
+            "empty_text": "未查询到群组",
         },
         {
             "id": "list_wikis",
@@ -416,7 +419,7 @@ def actions(data: dict) -> list[dict]:
             "order": 50,
             "description": "知识库空间列表",
             "columns": _WIKI_COLUMNS,
-            "empty_text": "未查询到知识库（可能缺少 wiki:wiki:readonly 权限）",
+            "empty_text": "未查询到知识库",
         },
         {
             "id": "list_docs",
@@ -426,7 +429,7 @@ def actions(data: dict) -> list[dict]:
             "order": 60,
             "description": "云空间文档列表",
             "columns": _DOC_COLUMNS,
-            "empty_text": "未查询到云文档（可能缺少 drive:drive:readonly 权限）",
+            "empty_text": "未查询到云文档",
         },
     ]
 
@@ -600,7 +603,7 @@ def _action_list_chats(client, token, params, data) -> dict:
         "ok": True,
         "rows": rows,
         "columns": _CHAT_COLUMNS,
-        "empty_text": "未查询到群组（可能缺少 im:chat:readonly 权限）",
+        "empty_text": "未查询到群组",
         "total": len(rows),
     }
 
@@ -626,7 +629,7 @@ def _action_list_wikis(client, token, params, data) -> dict:
         "ok": True,
         "rows": rows,
         "columns": _WIKI_COLUMNS,
-        "empty_text": "未查询到知识库（可能缺少 wiki:wiki:readonly 权限）",
+        "empty_text": "未查询到知识库",
         "total": len(rows),
     }
 
@@ -652,7 +655,7 @@ def _action_list_docs(client, token, params, data) -> dict:
         "ok": True,
         "rows": rows,
         "columns": _DOC_COLUMNS,
-        "empty_text": "未查询到云文档（可能缺少 drive:drive:readonly 权限）",
+        "empty_text": "未查询到云文档",
         "total": len(rows),
     }
 

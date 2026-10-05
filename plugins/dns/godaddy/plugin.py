@@ -157,7 +157,6 @@ def actions(data: dict) -> list[dict]:
             "kind": "form",
             "submit": "新增",
             "write": True,
-            "description": "PATCH 追加一条记录，不影响同主机名下的其它记录。",
             "fields": _record_fields(),
         },
         {
@@ -166,7 +165,6 @@ def actions(data: dict) -> list[dict]:
             "kind": "form",
             "submit": "覆盖保存",
             "write": True,
-            "description": "按「记录类型 + 主机记录」定位，覆盖其下的全部记录；无法只改其中一条。",
             "fields": _record_fields(),
         },
     ]

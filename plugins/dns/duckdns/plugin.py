@@ -154,10 +154,40 @@ def verify(data):
     return _verify_duckdns(data)
 
 
-# ── 可选操作：查看当前解析（只读）────────────────────
+# ── 可选操作：解析查看 / 更新 / 清除 TXT ───────────────
+
+def _doh_resolve_txt(fqdn: str) -> str | None:
+    """用 Cloudflare DoH 查询 TXT 记录，返回首个值（已去掉两侧引号）；无记录返回 None。"""
+    try:
+        with make_client() as client:
+            resp = client.get(
+                _DOH_URL,
+                params={"name": fqdn, "type": "TXT"},
+                headers={"Accept": "application/dns-json"},
+            )
+        payload = safe_json(resp)
+    except Exception:  # noqa: BLE001 - 解析失败按无记录处理
+        return None
+    for ans in (payload or {}).get("Answer") or []:
+        if ans.get("type") == 16 and ans.get("data"):
+            return str(ans["data"]).strip().strip('"')
+    return None
+
+
+def _duckdns_clear(domain: str, token: str) -> tuple[bool, str]:
+    """清除该子域名的 TXT 记录（DuckDNS 的 clear 语义）；返回 (是否 OK, 状态行)。"""
+    with make_client() as client:
+        resp = client.get(
+            "https://www.duckdns.org/update",
+            params={"domains": domain, "token": token, "clear": "true"},
+        )
+    text = (resp.text or "").strip()
+    status_line = text.splitlines()[0].strip().upper() if text else ""
+    return status_line == "OK", status_line
+
 
 def actions(data: dict) -> list[dict]:
-    """声明可用操作（凭据含 token 与域名时提供解析查看）。"""
+    """声明可用操作（凭据含 token 与域名时提供解析查看 / 更新 / 清除）。"""
     data = data or {}
     if not ((data.get("token") or "").strip() and _normalize_duckdns_domain(data.get("domain") or "")):
         return []
@@ -165,14 +195,54 @@ def actions(data: dict) -> list[dict]:
     return [
         {
             "id": "view_records",
-            "name": "查看当前解析",
+            "name": "当前解析",
+            "kind": "list",
+            "columns": [
+                {"key": "type", "label": "类型", "type": "tag", "width": 90},
+                {"key": "name", "label": "域名", "mono": True},
+                {"key": "value", "label": "记录值", "mono": True},
+            ],
+            "row_actions": [
+                # 行内「修改」把该行域名预填进 update_record（domain 不在列里，仅供模板取值）
+                {"id": "update_record", "label": "修改", "params": {"domain": "$row.domain"}},
+            ],
+            "empty_text": "未查询到解析记录",
+        },
+        {
+            "id": "update_record",
+            "name": "更新解析",
             "kind": "form",
-            "submit": "查询",
+            "submit": "更新",
+            "write": True,
             "fields": [
                 {
                     "key": "domain",
                     "label": "域名",
                     "type": "text",
+                    "required": True,
+                    "default": domain,
+                    "placeholder": "子域名，如 myhome（无需 .duckdns.org）",
+                },
+                {
+                    "key": "ip",
+                    "label": "IP 地址",
+                    "type": "text",
+                    "placeholder": "留空 = 使用当前公网 IP",
+                },
+            ],
+        },
+        {
+            "id": "clear_txt",
+            "name": "清除 TXT",
+            "kind": "form",
+            "submit": "清除",
+            "write": True,
+            "fields": [
+                {
+                    "key": "domain",
+                    "label": "域名",
+                    "type": "text",
+                    "required": True,
                     "default": domain,
                     "placeholder": "子域名，如 myhome（无需 .duckdns.org）",
                 },
@@ -182,7 +252,7 @@ def actions(data: dict) -> list[dict]:
 
 
 def run_action(action_id: str, params: dict, data: dict) -> dict:
-    """执行操作：经 DoH 查看 DuckDNS 当前 A 记录（只读，绝不触发 update 写入）。"""
+    """执行操作：查看当前解析（DoH 只读）/ 更新解析 / 清除 TXT。"""
     data = data or {}
     params = params or {}
     try:
@@ -192,12 +262,32 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
                 return {"ok": False, "error": "请填写域名"}
             fqdn = f"{domain}{_DUCKDNS_FQDN_SUFFIX}"
             ip = _doh_resolve_a(fqdn)
-            if not ip:
-                return {
-                    "ok": True,
-                    "output": f"{fqdn} 未查询到 A 记录（可能未设置或解析尚未生效）",
-                }
-            return {"ok": True, "output": f"{fqdn} 当前解析：\n  A    {ip}"}
+            txt = _doh_resolve_txt(fqdn)
+            rows = [
+                {"type": "A", "name": fqdn, "value": ip or "—", "domain": domain},
+                {"type": "TXT", "name": fqdn, "value": txt or "—", "domain": domain},
+            ]
+            return {"ok": True, "rows": rows, "total": len(rows)}
+
+        if action_id == "update_record":
+            domain = _normalize_duckdns_domain(params.get("domain") or data.get("domain") or "")
+            if not domain:
+                return {"ok": False, "error": "请填写域名"}
+            ip = (params.get("ip") or "").strip()
+            ok, status_line = _duckdns_update(domain, (data.get("token") or "").strip(), ip or None)
+            if not ok:
+                return {"ok": False, "error": f"DuckDNS 返回 {status_line or '空响应'}（更新未生效）"}
+            target = ip or "当前公网 IP"
+            return {"ok": True, "output": f"已更新 {domain}{_DUCKDNS_FQDN_SUFFIX} → {target}"}
+
+        if action_id == "clear_txt":
+            domain = _normalize_duckdns_domain(params.get("domain") or data.get("domain") or "")
+            if not domain:
+                return {"ok": False, "error": "请填写域名"}
+            ok, status_line = _duckdns_clear(domain, (data.get("token") or "").strip())
+            if not ok:
+                return {"ok": False, "error": f"DuckDNS 返回 {status_line or '空响应'}（清除未生效）"}
+            return {"ok": True, "output": f"已清除 {domain}{_DUCKDNS_FQDN_SUFFIX} 的 TXT 记录"}
 
         return {"ok": False, "error": "未知操作"}
     except Exception as exc:  # noqa: BLE001 - 操作边界兜底

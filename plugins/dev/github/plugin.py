@@ -378,8 +378,11 @@ def _run_list(action_id: str, params: dict, token: str) -> dict:
         repo = (params.get("repo") or "").strip()
         if not owner or not repo:
             return {"ok": False, "error": "缺少 owner 或 repo"}
+        # _repo_path 返回的是路径（/repos/<owner>/<repo>），必须补上 api.github.com，
+        # 否则 httpx 会因为「没有协议」抛 UnsupportedProtocol。
         with make_client() as client:
-            resp = client.get(f"{_repo_path(owner, repo)}", headers=_headers(token))
+            resp = client.get(f"https://api.github.com{_repo_path(owner, repo)}",
+                              headers=_headers(token))
         if resp.status_code != 200:
             return {"ok": False, "error": _http_error(resp, f"{owner}/{repo}")}
         payload = safe_json(resp)

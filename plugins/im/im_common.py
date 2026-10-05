@@ -80,6 +80,15 @@ def log(message: str) -> None:
     _logger.info("%s", message)
 
 
+def log_debug(message: str) -> None:
+    """DEBUG 级日志：只在日志级别调到 DEBUG 时才落盘。
+
+    用于「对排查有用、但不该展示给用户」的细节（例如权限探测逐项失败的原始码），
+    避免把这些说明塞进前端提示里。
+    """
+    _logger.debug("%s", message)
+
+
 # ── 请求封装 ─────────────────────────────────────────────
 
 def proxy() -> Optional[str]:
