@@ -129,6 +129,7 @@ def actions(data) -> list[dict]:
             "name": "发送消息（写操作）",
             "kind": "form",
             "submit": "发送",
+            "write": True,
             "fields": [
                 {
                     "key": "chat_id",

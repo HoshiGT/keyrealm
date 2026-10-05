@@ -95,6 +95,7 @@ const actionDialog = ref({
   fields: [],
   values: {},
   submitLabel: '运行',
+  write: false,
   output: '',
   messages: [],
   input: '',
@@ -145,6 +146,7 @@ async function openActions(row) {
     fields,
     values,
     submitLabel: action.submit || '运行',
+    write: !!action.write,
     output: '',
     messages: [],
     input: '',
@@ -154,9 +156,40 @@ async function openActions(row) {
   if (actionDialog.value.kind === 'chat') loadModels()
 }
 
+/** 写操作确认文案：仅列出非密码字段的取值 */
+function actionSummary() {
+  const dialog = actionDialog.value
+  const parts = dialog.fields
+    .filter((field) => field.type !== 'password')
+    .map((field) => {
+      const value = dialog.values[field.key]
+      return value === undefined || value === null || value === '' ? '' : `${field.label}=${value}`
+    })
+    .filter(Boolean)
+  return parts.join('，')
+}
+
 async function runActionForm() {
   const dialog = actionDialog.value
   if (dialog.busy) return
+  if (dialog.write) {
+    const summary = actionSummary()
+    const actionName = dialog.title.split(' · ')[0]
+    try {
+      await ElMessageBox.confirm(
+        `此操作会改动远端数据${summary ? `（${summary}）` : ''}。确认执行「${actionName}」？`,
+        '确认写操作',
+        {
+          type: 'warning',
+          confirmButtonText: '确认执行',
+          cancelButtonText: '取消',
+          confirmButtonClass: 'el-button--danger',
+        },
+      )
+    } catch {
+      return
+    }
+  }
   dialog.busy = true
   dialog.error = ''
   dialog.output = ''
@@ -180,7 +213,9 @@ function handleActionStream(detail) {
     dialog.streamId = null
     if (detail.error) dialog.error = detail.error
     const last = dialog.messages[dialog.messages.length - 1]
-    if (last && last.role === 'assistant' && !last.content && detail.output) last.content = detail.output
+    // 终态用后端净化后的完整 output 覆盖已显示的流式内容：
+    // 逐块 delta 净化无法处理被切断的密钥，覆盖可兜底。
+    if (last && last.role === 'assistant' && detail.output) last.content = detail.output
     return
   }
   if (detail.delta) {

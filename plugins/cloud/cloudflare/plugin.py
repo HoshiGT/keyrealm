@@ -241,6 +241,7 @@ def actions(data: dict) -> list[dict]:
             "name": "新增 / 修改 DNS 记录",
             "kind": "form",
             "submit": "提交",
+            "write": True,
             "fields": [
                 {
                     "key": "zone",

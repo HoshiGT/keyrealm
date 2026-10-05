@@ -115,6 +115,7 @@ def actions(data: dict) -> list[dict]:
             "name": "新增 / 修改解析记录",
             "kind": "form",
             "submit": "提交",
+            "write": True,
             "fields": [
                 {"key": "domain", "label": "域名", "type": "text", "placeholder": "example.com"},
                 {"key": "record_id", "label": "记录 ID", "type": "text", "placeholder": "留空=新增；填写=修改该记录"},

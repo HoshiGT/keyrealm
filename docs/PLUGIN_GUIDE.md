@@ -238,10 +238,15 @@ DNS 插件提供「查看/修改解析记录」、SMTP 插件提供「查看收�
 | `fields` | `kind=form` 时的输入项：`[{key,label,type(text/password/select/textarea),default,placeholder,options,required}]` |
 | `submit` | 提交按钮文案（默认「运行」） |
 | `model` | `kind=chat` 时的默认模型（可编辑） |
+| `write` | 可选布尔，**声明为会改动远端数据的写操作**（如新增/修改解析记录、发送消息）。前端在执行前弹二次确认框（列出非密码字段的取值），确认后才提交。只读操作不填。 |
 
 `run_action(action_id, params, data)` 中 `params` 即用户在表单里填的值（或对话的 `{model, messages}`），
 返回 `{"ok": True, "output": "多行文本"}` 或 `{"ok": False, "error": "..."}`。
 **必须在整体 try/except 内，绝不抛异常；输出里不得回显密钥/密码/token。**
+
+> **输出净化（后端统一兜底）**：即使插件未自行脱敏，`backend/api.py` 也会在返回前把该凭据
+> 所有 `sensitive` 字段的明文（长度 ≥ 6）在 `output`/`error`/流式 `delta` 中替换成 `***`。
+> 因此密钥在异常文本、URL 回显等处的泄露会被全局拦截；插件侧仍应尽量不自造含密钥的错误串。
 
 可选再实现 `list_models(data) -> list`：返回该凭据可用的模型名列表。
 LLM「简单对话」会据此把模型输入框变成**可搜索下拉**（失败/无权限时回退为手动输入）。

@@ -442,8 +442,32 @@ def list_credential_actions(credential_id: int) -> list:
     return plugin_manager.plugin_actions(cred["credential_type"], data)
 
 
+def _credential_secrets(credential_type: str, data: dict) -> list:
+    """返回该凭据所有敏感字段的明文值（用于输出净化）。"""
+    record = db.get_plugin_by_type(credential_type)
+    if not record:
+        return []
+    values = []
+    for field in record.get("fields_schema", []):
+        key = field.get("key")
+        if field.get("sensitive") and data.get(key):
+            values.append(str(data[key]))
+    return values
+
+
+def _redact_secrets(text: Any, secrets: list) -> Any:
+    """把文本里出现的敏感值替换成 ***（长度 ≥ 6 才替换，避免误伤短串）。"""
+    if not isinstance(text, str) or not text:
+        return text
+    out = text
+    for secret in secrets:
+        if secret and len(secret) >= 6:
+            out = out.replace(secret, "***")
+    return out
+
+
 def run_credential_action(credential_id: int, action_id: str, params: Optional[dict] = None) -> dict:
-    """执行某凭据的插件操作。"""
+    """执行某凭据的插件操作（输出/错误统一做密钥净化）。"""
     key = _get_key()
     if key is None:
         return {"error": "vault_locked"}
@@ -454,9 +478,14 @@ def run_credential_action(credential_id: int, action_id: str, params: Optional[d
         data = decrypt_dict(key, cred["data_encrypted"])
     except Exception:
         data = {}
-    return plugin_manager.run_plugin_action(
+    result = plugin_manager.run_plugin_action(
         cred["credential_type"], action_id, params or {}, data
     )
+    secrets = _credential_secrets(cred["credential_type"], data)
+    if secrets and isinstance(result, dict):
+        for k in ("output", "error"):
+            result[k] = _redact_secrets(result.get(k), secrets)
+    return result
 
 
 def list_credential_models(credential_id: int) -> list:
@@ -494,10 +523,14 @@ def stream_credential_action(credential_id: int, action_id: str, params: Optiona
 
     stream_id = str(uuid.uuid4())
     credential_type = cred["credential_type"]
+    secrets = _credential_secrets(credential_type, data)
 
     def _run():
         def on_delta(text: str) -> None:
-            push_event("vault:action_stream", {"stream_id": stream_id, "delta": text})
+            push_event("vault:action_stream", {
+                "stream_id": stream_id,
+                "delta": _redact_secrets(text, secrets),
+            })
 
         result = plugin_manager.stream_plugin_action(
             credential_type, action_id, params or {}, data, on_delta
@@ -506,8 +539,8 @@ def stream_credential_action(credential_id: int, action_id: str, params: Optiona
             "stream_id": stream_id,
             "done": True,
             "ok": bool(result.get("ok")),
-            "output": result.get("output", ""),
-            "error": result.get("error", ""),
+            "output": _redact_secrets(result.get("output", ""), secrets),
+            "error": _redact_secrets(result.get("error", ""), secrets),
         })
 
     threading.Thread(target=_run, daemon=True).start()
