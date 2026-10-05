@@ -491,6 +491,12 @@ async function handleMinimize() {
   transform: none;
 }
 
+/* 角标与右侧的拖拽抓手 ::after 位置重合（都是 right:8px）。带角标的那一项隐掉抓手，
+   免得 hover 时两者叠在一起发花。:has() 不被支持时这条规则被忽略，只是回到原来的轻微重叠。 */
+.layout-aside:not(.is-collapsed) .layout-menu :deep(.el-menu-item:has(.nav-badge))::after {
+  display: none;
+}
+
 .brand.is-collapsed {
   justify-content: center;
   padding: 0;
