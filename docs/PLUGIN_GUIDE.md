@@ -20,12 +20,13 @@ plugins/
 │   ├── deepseek/
 │   │   ├── manifest.json
 │   │   └── plugin.py
-│   └── …（共 20 个子插件）
+│   └── …（共 19 个子插件）
 ├── api/                        # 类别目录（API 服务）
 │   ├── category.json
 │   ├── api_common.py
 │   ├── firecrawl/
 │   ├── tavily/
+│   ├── metaso/
 │   └── coze/
 ├── dns/                        # 类别目录（域名解析）
 │   ├── category.json
@@ -129,7 +130,7 @@ plugins/
 | `fields[].hint` | 可选，字段下方的一行灰字说明。用于解释开关或高级项（如 LLM 的「余额未知时发一次对话探测」），前端 `CredentialForm.vue` 渲染为 `.field-hint` |
 | `fields[].sensitive` | `true` 的字段加密存储（AES-256-GCM），列表页只显示掩码（`crypto.mask_secret`，形如 `sk-123…cdef`），也参与重复凭据检测 |
 | `icon` | 服务显示图标。填 emoji（如 `🐋`）直接使用；也可填插件目录内的图片文件名（如 `"logo.png"`，支持 png/jpg/svg/webp/ico/gif），后端读取为 data URL 返回（`icon_image` 字段），前端优先展示图片，缺省回退 emoji `🔑` |
-| `batch_verify` | 是否参与批量验证，默认 `true`。**无法自动化验证或有写副作用**的插件应设为 `false`（如 `duckdns`、`wechat_ilink`）：前端在选中该类型时禁用「批量验证」按钮，只能逐条手动验证；后端批量时也会跳过这些类型并在结果里统计「跳过 N」 |
+| `batch_verify` | 是否参与批量验证，默认 `true`。**有写副作用**的插件应设为 `false`（如 `duckdns`——它的校验本身就是一次写解析）：前端在选中该类型时禁用「批量验证」按钮，只能逐条手动验证；后端批量时也会跳过这些类型并在结果里统计「跳过 N」 |
 
 ---
 
@@ -299,7 +300,8 @@ def quota_probe(data: dict):
 「用哪个代理」是**每个凭据的通用设置**，默认所有插件都会出现该选项——判据是插件**默认走代理**
 （对应 `backend/plugin_manager.plugin_uses_proxy()`，默认 `True`）。
 
-确实**完全不走网络**的插件（例如无出网请求的 `im_wechat_ilink`），在模块级显式声明即可把它从界面上隐去：
+确实**完全不走网络**的插件在模块级显式声明即可把它从界面上隐去（目前仓库里已没有这类插件——
+`im_wechat_ilink` 早先不发请求时标过 `False`，接入只读探测后已恢复默认）：
 
 ```python
 USES_PROXY = False   # 本插件无出网请求，代理选项没有意义
@@ -676,8 +678,8 @@ qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）。
 
 **mail/ 类别（1 个）**：smtp（通用 SMTP，覆盖 Gmail / QQ / 163 / 126 等）。
 
-> 说明：`duckdns` 的校验本身是写操作（先写入 `1.1.1.1` 确认生效再还原原值），
-> `wechat_ilink` 无公开校验接口——它与 `duckdns` 均标记 `batch_verify: false`，只能手动单个验证。
+> 说明：`duckdns` 的校验本身是写操作（先写入 `1.1.1.1` 确认生效再还原原值），标记
+> `batch_verify: false`，只能手动单个验证。
 
 ### 内置「简易操作」一览
 
@@ -714,7 +716,9 @@ qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）。
 - **dev**：github —— 账号信息（含 `X-OAuth-Scopes` 权限）· **仓库列表 → 行内「打包下载」（`save_to`，弹另存为）**
   与行内「详情」下钻；huggingface / wandb —— 查看账号信息
 - **im**：feishu —— 应用信息与权限 · 机器人信息 · 用户详情（按 `open_id` 或邮箱）· 群组 · 知识库 · 云文档；
-  telegram（机器人信息、发送消息（写））· discord（Webhook 信息）
+  telegram（机器人信息、发送消息（写））· discord（Webhook 信息）·
+  wechat_ilink —— 拉取消息（`list`，短轮询）→ 行内「下载」下钻到附件下载（图片 / 语音 / 文件 / 视频，
+  CDN 密文本地 AES 解密后经 `save_to` 写盘）
 - **exchange**：okx（账户余额）· binance（账户信息、交易所时间）
 - **api**：coze（工作区列表）· tavily（执行搜索）· firecrawl（抓取网页）·
   metaso（搜索（`list`，行内「阅读」下钻）· 网页解析）
