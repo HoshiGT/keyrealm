@@ -436,7 +436,7 @@ def get_display_summary(data):
 | `empty_text` | `list` | 空列表文案 |
 | `save_to` | `form` / `list` | 下载类操作，见 §3.1.3 |
 | `confirm` | 全部 | 可选。**覆盖写操作二次确认的默认文案**。涉及不可逆副作用时应当写清楚——例如「刷新 access_token」会轮换 `refresh_token`，就会提示用户本机 Codex CLI 可能需要重新登录 |
-| `progress` | 全部 | 可选布尔。声明该操作**会上报进度**（下载 / 打包这类长操作）：前端改走流式入口并在弹窗里渲染进度条。插件侧需实现 `stream_action(..., on_progress=…)`，见 §3.1.9 |
+| `progress` | 全部 | 可选布尔。声明该操作**会上报进度**（下载 / 打包这类长操作）：前端改走流式入口并在弹窗里渲染进度条，同时它会被登记成一条**后台任务**（关掉弹窗照样跑，可在「任务」页取消）。插件侧需实现 `stream_action(..., on_progress=…, should_cancel=…)`，见 §3.1.9 |
 | `updated_data`（**返回值**） | 全部 | 可选。`run_action` 的返回里带上 `{"字段key": 新值}`，框架会把这些值**写回该凭据**（只接受插件在 manifest 里声明过的字段）。用于「用 refresh_token 换一组新令牌」这类必须原子保存的操作。写回值**不会**回传给前端（那是新明文令牌），前端只收到 `data_updated: [字段名]`，据此刷新列表并复验。见 §3.1.8 |
 
 `run_action` 的返回：
@@ -628,6 +628,23 @@ def on_progress(current: int, total: int, text: str = "") -> None:
   **对象个数**报（跨对象累加字节不直观）。
 - 进度是**尽力而为**：后端推送出错不会让操作失败；`current/total` 会被夹到合法区间。
 - 终态仍由框架的 `done` 事件给出（`output` / `error`），插件不必自己报「完成」。
+
+**协作式取消**：同一条通道上还有第二个可选关键字 `should_cancel`——
+
+```python
+def stream_action(action_id, params, data, on_delta, on_progress=None, should_cancel=None):
+    ...
+    for chunk in resp.iter_bytes(65536):
+        if should_cancel and should_cancel():        # True = 用户点了取消
+            os.remove(tmp)                           # 半成品要删干净
+            return {"ok": False, "error": "下载已取消"}
+```
+
+- 取消是**协作式**的：框架只置一个标志位（`backend/tasks.py`），真正停下靠插件在循环里查。
+  做不到立刻杀线程，但会在下一个检查点（每个 chunk / 每个对象）停下。
+- **插件只负责干净地停下并返回 ok=False**，不要去猜「取消还是失败」——框架持有取消标志，
+  会据实把任务标成「已取消」（刚好在取消前跑完的仍算成功）。
+- 一定要**清掉 `.part` 之类的临时文件**，别留下半成品。
 
 ---
 
