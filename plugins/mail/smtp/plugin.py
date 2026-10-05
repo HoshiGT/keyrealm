@@ -35,6 +35,9 @@ from mail_common import VerifyResult, guarded, timeout
 
 SERVICE_NAME = "通用 SMTP 邮箱"
 
+# 本插件走标准库 smtplib/imaplib，不支持 HTTP 代理——显式声明，框架据此不显示「使用代理」。
+USES_PROXY = False
+
 # SSL 与非 SSL 的默认端口
 DEFAULT_SSL_PORT = 465
 DEFAULT_STARTTLS_PORT = 587

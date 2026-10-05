@@ -16,6 +16,9 @@ NAME = "微信 iLink Bot"
 REQUIRED = (("account", "账号"), ("credential", "凭据"))
 DISPLAY_FIELD = "account"
 
+# 本插件无出网校验请求，不支持 HTTP 代理——显式声明，框架据此不显示「使用代理」。
+USES_PROXY = False
+
 
 def validate(data) -> list[str]:
     if not data:

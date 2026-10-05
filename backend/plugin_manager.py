@@ -56,6 +56,10 @@ BUILTIN_SOURCE_DIR = BASE_DIR / "plugins_builtin"
 # 内存中的插件模块缓存  credential_type -> module
 _loaded_modules: dict[str, Any] = {}
 
+# 每个凭据类型最近一次加载失败的原因（成功则清除），用于把笼统的
+# 「插件未安装或加载失败」补成带真实缘由的提示（见 verify_credential / run_credential_action）。
+_load_errors: dict[str, str] = {}
+
 # manifest icon 字段支持图片文件名（相对于插件目录），解析为 data URL 后的缓存
 _ICON_IMAGE_MIME = {
     ".png": "image/png",
@@ -337,18 +341,53 @@ def install_plugin(category: str, service: str) -> dict:
     return {"ok": True}
 
 
+def _module_missing_error(credential_type: str) -> str:
+    """插件模块不可用时的用户可见提示；带上最近一次加载失败的真实缘由。"""
+    reason = _load_errors.get(credential_type)
+    base = f"插件未安装或加载失败: {credential_type}"
+    return f"{base}（{reason}）" if reason else base
+
+
+def _resolve_plugin_path(record: dict) -> Path:
+    """取插件目录，记录里的绝对路径失效时就地重算。
+
+    记录里的 ``plugin_path`` 是**安装时写死的绝对路径**；一旦用户把整个程序目录搬到别处
+    （例如为绕开 Windows 图标缓存而换目录），旧路径就指向不存在的文件夹，加载会失败并报
+    「插件未安装或加载失败」。启动时的 sync_plugins 通常会纠正它，但懒加载/热重载路径
+    不该依赖「必须先跑过一次扫描」——这里兜底：路径不存在时，按
+    ``plugins/<类别>/<服务目录名>`` 重新定位（服务目录名从旧路径末段取，类别取记录字段）。
+    """
+    path = Path(record.get("plugin_path") or "")
+    if (path / "plugin.py").exists():
+        return path
+    service = path.name
+    category = record.get("category") or ""
+    if service and category:
+        candidate = PLUGINS_DIR / category / service
+        if (candidate / "plugin.py").exists():
+            _log.warning("插件路径已失效，按类别/服务重定位 %s: %s → %s",
+                         record.get("credential_type"), path, candidate)
+            return candidate
+    return path
+
+
 def load_plugin(credential_type: str) -> Optional[Any]:
     """加载插件模块到内存"""
     record = db.get_plugin_by_type(credential_type)
     if not record:
+        _load_errors[credential_type] = "数据库中没有该插件的记录"
         return None
-    plugin_path = Path(record["plugin_path"])
+    plugin_path = _resolve_plugin_path(record)
     try:
         module = load_plugin_module(plugin_path, credential_type)
         _loaded_modules[credential_type] = module
+        _load_errors.pop(credential_type, None)
         return module
     except Exception as e:
-        _log.error("加载插件失败 %s: %s", credential_type, e)
+        # 记下具体原因，好让「插件未安装或加载失败」这条前端提示能带上真实缘由，
+        # 否则用户只看到一句无从下手的笼统报错。
+        _load_errors[credential_type] = f"{type(e).__name__}: {e}"
+        _log.error("加载插件失败 %s (%s): %s", credential_type, plugin_path, e)
         return None
 
 
@@ -369,7 +408,7 @@ def verify_credential(credential_type: str, data: dict) -> VerifyResult:
     """调用插件验证凭据（含「按凭据解析代理」与「欠费探测」）"""
     module = get_module(credential_type)
     if module is None:
-        return VerifyResult(status="error", message=f"插件未安装或加载失败: {credential_type}")
+        return VerifyResult(status="error", message=_module_missing_error(credential_type))
     # 代理作用域收口在这里：单条 / 批量 / MCP / 定时 四条路径都经此函数，
     # 因此各条凭据的「用哪个代理」自动生效且线程隔离（见 proxy_store）。
     with proxy_store.credential_proxy_scope(data, credential_type):
@@ -381,11 +420,20 @@ def verify_credential(credential_type: str, data: dict) -> VerifyResult:
 def plugin_uses_proxy(credential_type: str) -> bool:
     """该插件的请求是否走代理（决定前端要不要给它显示「使用代理」）。
 
-    判据是「有没有 ``make_client``」——走 httpx 的类别才有；``mail_smtp`` 用标准库
-    ``smtplib``，本就不支持 HTTP 代理，给它显示代理选项只会误导。
+    **默认 True**：绝大多数插件经 httpx 发请求（`make_client` 读 `VAULT_PROXY` /
+    `vault_proxy_ctx` 注入的出口），「用哪个代理」是每个凭据的通用设置，理应都有。
+
+    不再用「模块里有没有 `make_client`」判定——那会漏掉**间接**发请求的插件：
+    例如 NVIDIA NIM 自己没 import `make_client`，而是经 `llm_protocols` 的
+    `probe_openai_chat` / `chat_completion` 发请求，于是被误判为「不走代理」而隐藏了选项。
+
+    真正不支持 HTTP 代理的插件（走标准库 `smtplib` / 无出网请求的）在**模块级显式**声明
+    `USES_PROXY = False` 即可排除，例如 `mail_smtp`、`im_wechat_ilink`。
     """
     module = get_module(credential_type)
-    return bool(module is not None and callable(getattr(module, "make_client", None)))
+    if module is None:
+        return False
+    return bool(getattr(module, "USES_PROXY", True))
 
 
 def _apply_quota_probe(credential_type: str, module, data: dict, result: VerifyResult) -> None:
@@ -461,7 +509,7 @@ def run_plugin_action(credential_type: str, action_id: str, params: dict, data: 
     """执行插件的某个操作。"""
     module = get_module(credential_type)
     if module is None:
-        return {"ok": False, "error": "插件未安装或加载失败"}
+        return {"ok": False, "error": _module_missing_error(credential_type)}
     with proxy_store.credential_proxy_scope(data, credential_type):
         return call_run_action(module, action_id, params, data)
 
@@ -484,7 +532,7 @@ def stream_plugin_action(credential_type: str, action_id: str, params: dict, dat
     """
     module = get_module(credential_type)
     if module is None:
-        return {"ok": False, "error": "插件未安装或加载失败"}
+        return {"ok": False, "error": _module_missing_error(credential_type)}
     with proxy_store.credential_proxy_scope(data, credential_type):
         return call_stream_action(module, action_id, params, data, on_delta)
 
