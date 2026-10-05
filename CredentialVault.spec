@@ -15,6 +15,8 @@ console 开关
 便于运行 `CredentialVault --print-paths` 校验冻结后的路径解析。
 """
 import os
+import re
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
@@ -105,6 +107,41 @@ else:
     binaries += _b
     hiddenimports += _h
     print("[spec] SOCKS 代理支持：已收集 socksio")
+
+# plugins/ 下的标准库导入：**必须手工补**，否则打包后的 exe 一用到就崩。
+#
+# 原因：插件是运行时由 backend 用 importlib **动态加载**的，main.py 从不 `import plugins`，
+# PyInstaller 的静态分析因此完全看不到插件用到的模块。第三方库（httpx 等）恰好后端也在用、
+# 已被收集，但那些**只有插件用**的标准库（imaplib / smtplib / email / zipfile / xml / html …）
+# 不会被带进去。症状是 exe 里一执行对应操作就 `ModuleNotFoundError: No module named 'imaplib'`
+# ——构建期毫无警告、开发机也复现不出（开发机是完整解释器，什么都有）。
+# 这里扫一遍 plugins/**/*.py 的顶层 import，把其中属于标准库的名字补进 hiddenimports，
+# 新增插件用到新的标准库时自动生效，无需再回来手工维护这张清单。
+def _plugin_stdlib_imports() -> list[str]:
+    root = ROOT / "plugins"
+    if not root.exists():
+        return []
+    pat = re.compile(
+        r"^\s*(?:import\s+([A-Za-z_][\w.]*)|from\s+([A-Za-z_][\w.]*)\s+import)\b", re.M
+    )
+    names: set[str] = set()
+    for py in root.rglob("*.py"):
+        try:
+            text = py.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        for m in pat.finditer(text):
+            mod = (m.group(1) or m.group(2) or "").split(".")[0]
+            # 跳过 __future__ 这类伪模块；它进了 hiddenimports 只会让 PyInstaller 报警告
+            if mod and not mod.startswith("_") and mod in sys.stdlib_module_names:
+                names.add(mod)
+    return sorted(names)
+
+
+_plugin_mods = _plugin_stdlib_imports()
+if _plugin_mods:
+    hiddenimports += _plugin_mods
+    print(f"[spec] 插件标准库依赖：已收集 {', '.join(_plugin_mods)}")
 
 # 本地 backend 包的全部子模块（api/crypto/database/mcp_server/... ）
 try:
