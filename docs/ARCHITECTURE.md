@@ -120,7 +120,7 @@ plugins/
 │   │   ├── manifest.json
 │   │   └── plugin.py
 │   ├── deepseek/
-│   └── …                     # 共 20 个 LLM 子插件
+│   └── …                     # 共 19 个 LLM 子插件
 ├── api/                      # API 服务类别（firecrawl / tavily / metaso / coze，共 4 个）
 ├── dns/                      # 域名解析：dnspod / duckdns / godaddy / cloudflare
 ├── dev/                      # 开发者平台：github / huggingface / wandb

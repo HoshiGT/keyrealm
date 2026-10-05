@@ -123,6 +123,7 @@ plugins/
 |------|------|
 | `credential_type` | **插件身份，全局唯一**。它是数据库插件表的 UNIQUE 键、模块缓存键、凭据与插件的关联键。同类插件约定前缀：`llm_<厂商>`、`api_<服务>` |
 | `fields[].type` | `text` / `url` / `password` / `textarea` / `select`（配 `options`）/ `number` / `checkbox` / `model`（**可下拉可自由输入**的模型名，候选来自 `list_models`，取不到也能手打） |
+| `fields[].options` | 仅 `select`。两种写法都行：纯字符串数组 `["openai","anthropic"]`（值与显示都用它）；或对象数组 `[{"value":"chatgpt","label":"ChatGPT 登录态"}]`（**显示 label、存 value**）。前端统一归一（`utils/format.normalizeOptions`），需要给用户看中文时用对象写法，别把中文当值存库 |
 | `fields[].preset` | 可选，是否允许作为「类别/插件默认设置」被预设。**默认允许**（只要非敏感）；填 `false` 可排除该字段。**敏感字段永远不可预设**（默认值表是明文列） |
 | `fields[].hint` | 可选，字段下方的一行灰字说明。用于解释开关或高级项（如 LLM 的「余额未知时发一次对话探测」），前端 `CredentialForm.vue` 渲染为 `.field-hint` |
 | `fields[].sensitive` | `true` 的字段加密存储（AES-256-GCM），列表页只显示掩码（`crypto.mask_secret`，形如 `sk-123…cdef`），也参与重复凭据检测 |
@@ -497,7 +498,8 @@ def actions(data: dict) -> list[dict]:
         {"id": "add_thing", "name": "新增资源", "kind": "form", "group": "管理", "order": 20,
          "write": True, "submit": "创建",
          "fields": [{"key": "name", "label": "名称", "required": True},
-                    {"key": "type", "label": "类型", "type": "select", "options": ["A", "B"]}]},
+                    {"key": "type", "label": "类型", "type": "select",
+                     "options": [{"value": "A", "label": "A 记录"}, {"value": "CNAME", "label": "CNAME"}]}]},
     ]
 
 
@@ -580,12 +582,11 @@ def get_display_summary(data):
 
 ## 5. 插件清单
 
-**llm/ 类别（20 个）**：openai、anthropic、deepseek、openrouter、gemini、minimax、
-nvidia、moonshot、siliconflow（硅基流动）、dashscope（阿里百炼）、huawei_maas、
+**llm/ 类别（19 个）**：openai（含 Codex/ChatGPT 登录态模式）、anthropic、deepseek、openrouter、
+gemini、minimax、nvidia、moonshot、siliconflow（硅基流动）、dashscope（阿里百炼）、huawei_maas、
 glm（智谱）、doubao（豆包）、tongyi（通义）、wenxin（文心）、
 openai_compatible（第三方中转）、newapi（New API 中转站）、
-sensenova（商汤日日新，OpenAI 兼容）、codex（Codex / ChatGPT 登录态）、
-codebuddy（腾讯 CodeBuddy 客户端登录态）。
+sensenova（商汤日日新，OpenAI 兼容）、codebuddy（腾讯 CodeBuddy 客户端登录态）。
 
 > **同一厂商的多种接口格式不拆分插件**，而是合成一个。用不用「格式」字段取决于**key 是否按协议分权**：
 >
@@ -624,8 +625,9 @@ qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）。
 凭据齐全时，凭据行会出现「操作」按钮（见 §3.1）。一个凭据有多个操作时先弹选择菜单，
 **只有一个就直接进**；带「（写）」的是 `write: true`，提交前会二次确认。
 
-- **llm**：18 个厂商 —— 简单对话（`chat`，流式）；另有 `codex` / `codebuddy` 两个**登录态类**凭据，
-  操作为「登录态详情 / 登录态信息」（`token_info`，只读解析本地 JWT，**不回显任何令牌**）。
+- **llm**：18 个厂商 —— 简单对话（`chat`，流式）；其中 **openai** 另有「认证方式」下拉，
+  选「ChatGPT 登录态（Codex）」时改为「登录态详情」（`token_info`，只读解析本地 JWT，**不回显任何令牌**）；
+  `codebuddy` 是纯登录态类凭据，同样只有 `token_info`。
 - **dns**：
   - dnspod / godaddy / cloudflare —— **域名（站点）列表 → 行内「解析」下钻到解析记录 → 行内「修改」**，
     以及行内「新增」；前两者是 `write`，Cloudflare 用同一个表单（留空 `record_id` 即新增）

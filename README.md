@@ -95,7 +95,7 @@ release/
 │   ├── llm/                   # LLM 类别目录（category.json + llm_common.py 共享模块）
 │   │   ├── openai/            # 每个服务一个独立子插件（manifest.json + plugin.py）
 │   │   ├── deepseek/
-│   │   └── …                  # 共 20 个 LLM 子插件
+│   │   └── …                  # 共 19 个 LLM 子插件
 │   ├── api/                   # API 服务类别（category.json + api_common.py）
 │   │   ├── firecrawl/
 │   │   ├── tavily/
@@ -138,6 +138,13 @@ release/
 > `import socksio` 的，构建机没装时 PyInstaller 既不报错也不打包，问题直到 exe 里用 socks5
 > 代理才暴露（`the 'socksio' package is not installed`）。`CredentialVault.spec` 里也显式
 > `collect_all("socksio")`，直接用 `pyinstaller CredentialVault.spec` 打包时同样会警告。
+>
+> **插件用到的标准库也会自动收进来**：插件由 `importlib` 运行时动态加载，`main.py` 从不
+> `import plugins`，PyInstaller 的静态分析看不到它们用到的模块。第三方库（httpx 等）后端也在用、
+> 已被收集，但**只有插件用**的标准库（`imaplib` / `smtplib` / `email` / `zipfile` / `xml` / `html`）
+> 不会进包——症状是 exe 里一执行对应操作就 `ModuleNotFoundError: No module named 'imaplib'`，
+> 构建期无警告、开发机也复现不出（开发机是完整解释器）。`CredentialVault.spec` 会扫一遍
+> `plugins/**/*.py` 的顶层 import，把其中的标准库名补进 `hiddenimports`，新增插件自动生效。
 >
 > Windows 运行前提：需已安装 WebView2 Runtime（Windows 10/11 通常已内置）。
 
@@ -188,7 +195,7 @@ API-Key-Checker/
 │   ├── make_icon.py         # 生成应用图标（ICO/PNG/favicon）
 │   └── pack_source.py       # 源码归档脚本（生成 release/credential-vault-src.zip）
 ├── plugins/                 # 插件源码（打包时作为外部目录，不进 exe）
-│   ├── llm/                 # LLM 类别：20 个厂商子插件 + llm_common.py 共享模块
+│   ├── llm/                 # LLM 类别：19 个厂商子插件 + llm_common.py 共享模块
 │   ├── api/                 # API 服务类别：firecrawl / tavily / metaso / coze + api_common.py
 │   └── dns/ dev/ im/ cloud/ exchange/ mail/   # 另 6 个类别共 18 个子插件
 ├── frontend/                # Vue 3 前端

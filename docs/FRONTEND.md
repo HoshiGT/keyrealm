@@ -110,6 +110,10 @@ App.vue
 表格列：凭据（图标 + 名称 + 掩码敏感值副标题，如 `sk-123…cdef`）、类型、备注、
 附加信息（余额等 account_info）、分组、状态、添加时间、最后验证、最后有效、操作。
 
+> **单元格一律单行省略**（`.cell-ellipsis` / `.cell-tag`）：备注、附加信息、分组名再长也不会把
+> 行高撑大——一律 `text-overflow: ellipsis`，鼠标悬停由元素自带的 `title` 显示全文。
+> el-tag 的文字在 `.el-tag__content` 里，需单独压一层，否则分组名长了照样撑开。
+
 **排序**：工具栏上是**两个下拉**——「排序依据」（添加时间 / 名称 / 状态 / 最后验证 / 最后有效 / 分组）
 与「升序 / 降序」，默认 `created_at` + 降序（= 最新添加的在前）。
 分别存 `localStorage['vault.credentials.sortField']` / `['vault.credentials.sortDir']`，
@@ -137,6 +141,9 @@ App.vue
   （避免「先显示后消失」的抖动）。
   - 菜单项**只显示功能名**，不渲染 `description`（避免列表被解释文字撑长）。
   - 菜单外**点一下就关**（菜单自带的点击遮罩 `closeActionMenu`）；不选也得能关掉。
+  - 菜单**贴到视口右/下边缘会自动回退**（`placeActionMenu()`：渲染后量实际尺寸，右侧放不下就
+    左移、下方放不下就翻到锚点上方，权限探测把条目收敛后高度变化会再贴一次），并带
+    `max-height` + 滚动兜底——列表底部的条目点「操作」不会再被裁掉。
   - **纯下钻操作不进菜单**：某个 action 只被别的 action 当 `row_action` 目标、自身又没有 `fields`
     时，从顶层菜单隐去（否则点进去只会得到「缺少 xxx」）；它仍照常被行内按钮调用。
     判定见 `rowOnlyActionIds()`。
@@ -147,6 +154,10 @@ App.vue
   出错时 `el-alert` + 「重试」且**不关弹窗**。
 - **行内动作**：`$row.<列key>` 模板解析不到的行**按钮置灰**（绝不把 `undefined` 发出去）；
   目标是 `form` 就打开表单预填、是 `list` 就下钻（下钻用**栈**保存上一帧，返回时零请求还原）。
+  > 下钻/预览的**首次**请求必须直接用本次传入的 `params`。`openList` 里 `actionDialog.value`
+  > 被整体换成**新对象**，而 `const dialog = actionDialog.value` 取的仍是**旧对象**——
+  > 若末尾用 `dialog.listParams` 会拿到上一次（首次为空）的参数，表现为「第一次提示缺少参数、
+  > 点一下刷新才好」（GitHub「详情」、OSS「预览」、进入目录要连点两次都是这个原因）。
 - **下载类操作**（`save_to`）：顺序是**先确认（若 write）→ 弹「另存为」→ 把路径塞进 `params` → 调插件**。
   路径不是秘密，而不是把带鉴权头的下载 URL 交给前端——那等于把短期凭证递给 JS。
 
@@ -158,6 +169,11 @@ App.vue
 `checkbox` → `el-switch`、`select` → `el-select`、`number` → `el-input-number`、
 `model` → **可下拉可自由输入**的 `el-select`（`filterable` + `allow-create`，候选来自
 `list_draft_models`，取不到也照样能手打模型名）、其余 → `el-input`（`password` 带 `show-password`）。
+
+> `select` 的 `options` 由 `utils/format.normalizeOptions` 归一，**两种写法都支持**：
+> 纯字符串数组（值与显示都用它）、或 `{value,label}` 对象数组（显示 label、存 value）。
+> 三处渲染（CredentialForm / Credentials 的操作弹窗表单 / ScopeDefaultsDialog）共用同一套，
+> 别再写回只认字符串的版本——否则想给用户看中文就只能把中文当值存进库。
 字段可带可选 `hint`（manifest 字段），渲染为字段下方的灰字说明；`sensitive` 字段额外标注
 「加密存储」。LLM 类凭据的「余额未知时发一次对话探测」开关与「探测模型」就靠 `hint` 解释用途
 ——它是**凭据级**配置，不在系统设置里，见 [PLUGIN_GUIDE.md §2.4](PLUGIN_GUIDE.md)。
@@ -445,7 +461,7 @@ App.vue
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │ 日志内容                        [ 清空日志 ]        │   │
 │  │ [搜索日志（空格分隔多个关键词，需全部命中）] [搜索] │   │
-│  │ [全部级别 ▾] [最近 200 条 ▾]          共 128 条     │   │
+│  │ [全部级别 ▾] [最近 200 条 ▾]     [ 复制 ] 共 128 条 │   │
 │  │ ┌─────────────────────────────────────────────────┐ │   │
 │  │ │ 2026-10-05 02:00:01 [INFO] …                    │ │   │
 │  │ │ 2026-10-05 02:00:03 [ERROR] …（ERROR 红色高亮） │ │   │
@@ -458,6 +474,8 @@ App.vue
 搜索走后端 `logger.read_logs`，按整条记录（含 traceback 续行）大小写不敏感匹配，
 多个空白分隔关键词需**全部命中**（AND）。搜索**由用户手动触发**（回车或点「搜索」），
 不随输入实时请求。日志行按 `[LEVEL]` 着色（WARNING 橙 / ERROR·CRITICAL 红）。
+工具条右侧的**「复制」**把所有当前显示的日志按行拼接写进剪贴板（走 `utils/clipboard` 的
+降级实现，pywebview 下 `navigator.clipboard` 不可用时回退 `execCommand`），方便整段贴出去反馈。
 
 ### 8. 插件管理（PluginManager）
 
