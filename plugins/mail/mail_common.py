@@ -4,6 +4,7 @@
 
 - 结果类型 `VerifyResult`
 - 异常兜底 `guarded`、日志 `log`
+- 超时 `TIMEOUT`（默认值）/ `timeout()`（实际生效值，读 `VAULT_TIMEOUT`）
 
 具体服务（如 SMTP）的连接、登录与结果判定全部下沉到各自
 plugins/mail/<服务>/plugin.py（服务之间允许重复，刻意为之）；
@@ -15,6 +16,7 @@ plugins/mail/<服务>/plugin.py（服务之间允许重复，刻意为之）；
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -46,6 +48,28 @@ def log(message: str) -> None:
     结果就是插件的告警与异常在系统日志里完全不可见。
     """
     _logger.info("%s", message)
+
+
+# 请求超时（秒）—— 本类别默认值；实际生效值走 timeout()
+TIMEOUT = 15.0
+
+
+def timeout() -> float:
+    """实际使用的超时秒数：``VAULT_TIMEOUT``（应用设置写入）> 模块默认 ``TIMEOUT``。
+
+    后端「批量验证」对话框里的超时设置经环境变量下发（插件是独立模块，不允许
+    import backend），每次连接时读取——改完即时生效，无需重启。变量缺失或非法时
+    回退到模块默认值。
+    """
+    raw = os.environ.get("VAULT_TIMEOUT")
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            value = 0.0
+        if value > 0:
+            return value
+    return TIMEOUT
 
 
 def guarded(fn):

@@ -1,4 +1,13 @@
-"""DNSPod API Token 验证插件（plugins/dns/ 类别下的独立子插件）。"""
+"""DNSPod API Token 验证插件（plugins/dns/ 类别下的独立子插件）。
+
+操作（凭据含 dp_id / dp_key 时提供）：
+- ``list_domains``（列表）域名列表，行内可下钻 ``list_records``（解析记录）
+  或打开 ``add_record``（新增解析）并自动带域名；
+- ``list_records``（列表）指定域名的解析记录，行内 ``edit_record``（修改解析）；
+- ``add_record`` / ``edit_record``（表单，写操作）新增 / 修改解析记录。
+
+刻意不提供删除解析：破坏性且不属于本插件的验证目标。
+"""
 from dns_common import VerifyResult, body_snippet, guarded, make_client, safe_json
 
 # DNSPod 明确的鉴权/账号类失败状态码：
@@ -86,45 +95,111 @@ def verify(data):
     return _verify_dnspod(data)
 
 
-# ── 可选操作：查看 / 设置解析记录 ───────────────────────
+# ── 可选操作：域名 / 解析记录管理 ───────────────────────
 
 _DNSPOD_API = "https://dnsapi.cn"
+
+# 记录类型与线路的可选值（线路用 DNSPod 的中文名，接口直接接受）
+_RECORD_TYPES = ["A", "AAAA", "CNAME", "TXT", "MX", "NS", "SRV"]
+_RECORD_LINES = ["默认", "电信", "联通", "移动", "境外", "教育网"]
+
+# 域名状态码 → 中文，未知状态原样显示
+_DOMAIN_STATUS = {"enable": "正常", "pause": "暂停", "spam": "封禁", "lock": "锁定"}
 
 
 def _login_token(data: dict) -> str:
     return f"{(data.get('dp_id') or '').strip()},{(data.get('dp_key') or '').strip()}"
 
 
+def _record_fields(with_id: bool) -> list[dict]:
+    """新增 / 修改解析记录的表单字段（with_id=True 时带记录 ID，供修改用）。"""
+    fields: list[dict] = [
+        {"key": "domain", "label": "域名", "type": "text", "required": True, "placeholder": "example.com"},
+    ]
+    if with_id:
+        fields.append({
+            "key": "record_id",
+            "label": "记录 ID",
+            "type": "text",
+            "required": True,
+            "placeholder": "要修改的记录 ID",
+        })
+    fields += [
+        {"key": "sub_domain", "label": "主机记录", "type": "text", "default": "@", "placeholder": "@ / www / *"},
+        {"key": "record_type", "label": "记录类型", "type": "select", "options": _RECORD_TYPES, "default": "A"},
+        {"key": "record_line", "label": "线路", "type": "select", "options": _RECORD_LINES, "default": "默认"},
+        {"key": "value", "label": "记录值", "type": "text", "required": True, "placeholder": "如 1.2.3.4"},
+        {"key": "ttl", "label": "TTL", "type": "text", "default": "600"},
+    ]
+    return fields
+
+
 def actions(data: dict) -> list[dict]:
-    """声明可用操作（凭据含 dp_id / dp_key 时提供解析管理）。"""
+    """声明可用操作（凭据含 dp_id / dp_key 时提供域名与解析管理）。"""
     data = data or {}
     if not (data.get("dp_id") and data.get("dp_key")):
         return []
     return [
         {
-            "id": "list_records",
-            "name": "查看解析记录",
-            "kind": "form",
-            "submit": "查询",
-            "fields": [
-                {"key": "domain", "label": "域名", "type": "text", "placeholder": "example.com"},
+            "id": "list_domains",
+            "name": "域名列表",
+            "kind": "list",
+            "columns": [
+                {"key": "name", "label": "域名", "mono": True},
+                {"key": "records", "label": "记录数", "width": 90},
+                {"key": "grade", "label": "套餐", "width": 130},
+                {"key": "status_text", "label": "状态", "width": 90},
             ],
+            "row_actions": [
+                {"id": "list_records", "label": "解析", "params": {"domain": "$row.name"}},
+                {"id": "add_record", "label": "新增", "params": {"domain": "$row.name"}},
+            ],
+            "empty_text": "该账号下没有域名",
         },
         {
-            "id": "set_record",
-            "name": "新增 / 修改解析记录",
-            "kind": "form",
-            "submit": "提交",
-            "write": True,
-            "fields": [
-                {"key": "domain", "label": "域名", "type": "text", "placeholder": "example.com"},
-                {"key": "record_id", "label": "记录 ID", "type": "text", "placeholder": "留空=新增；填写=修改该记录"},
-                {"key": "sub_domain", "label": "主机记录", "type": "text", "default": "@", "placeholder": "@ / www / *"},
-                {"key": "record_type", "label": "记录类型", "type": "select", "options": ["A", "AAAA", "CNAME", "TXT", "MX", "NS"]},
-                {"key": "record_line", "label": "线路", "type": "select", "options": ["默认", "电信", "联通", "移动", "境外"]},
-                {"key": "value", "label": "记录值", "type": "text", "placeholder": "如 1.2.3.4"},
-                {"key": "ttl", "label": "TTL", "type": "text", "default": "600"},
+            "id": "list_records",
+            "name": "解析记录",
+            "kind": "list",
+            "columns": [
+                {"key": "name", "label": "主机记录", "mono": True},
+                {"key": "type", "label": "记录类型", "type": "tag", "width": 100},
+                {"key": "value", "label": "记录值", "mono": True},
+                {"key": "line", "label": "线路", "width": 90},
+                {"key": "ttl", "label": "TTL", "width": 90},
             ],
+            # 行内「修改」把整条记录预填进 edit_record 表单（id / domain 不在列里，仅供模板取值）
+            "row_actions": [
+                {
+                    "id": "edit_record",
+                    "label": "修改",
+                    "params": {
+                        "domain": "$row.domain",
+                        "record_id": "$row.id",
+                        "sub_domain": "$row.name",
+                        "record_type": "$row.type",
+                        "record_line": "$row.line",
+                        "value": "$row.value",
+                        "ttl": "$row.ttl",
+                    },
+                },
+            ],
+            "empty_text": "该域名下没有解析记录",
+        },
+        {
+            "id": "add_record",
+            "name": "新增解析",
+            "kind": "form",
+            "submit": "新增",
+            "write": True,
+            "fields": _record_fields(with_id=False),
+        },
+        {
+            "id": "edit_record",
+            "name": "修改解析",
+            "kind": "form",
+            "submit": "保存",
+            "write": True,
+            "fields": _record_fields(with_id=True),
         },
     ]
 
@@ -141,59 +216,136 @@ def _status(payload: dict) -> tuple[str, str]:
     return str(info.get("code", "")), str(info.get("message", ""))
 
 
-def run_action(action_id: str, params: dict, data: dict) -> dict:
-    """执行操作：查看 / 新增 / 修改 DNSPod 解析记录。"""
+def _fail(message: str) -> dict:
+    """统一失败结构（错误文本会原样展示给用户，出口处还会过一遍密钥净化）。"""
+    return {"ok": False, "error": message}
+
+
+def _secrets(data: dict) -> tuple[str, ...]:
+    """本凭据的秘密字段，用于错误文本净化。"""
+    return ((data.get("dp_key") or "").strip(),)
+
+
+def _redact(text: str, *secrets: str) -> str:
+    """把可能出现在上游返回里的密钥替换掉，任何路径都不回显凭据。
+
+    只替换长度 ≥ 6 的密钥：与 backend/api.py 的净化口径一致，否则短密钥
+    会把域名、记录值里的常见字符整片打码成 ``***``。
+    """
+    for secret in secrets:
+        if secret and len(secret) >= 6:
+            text = text.replace(secret, "***")
+    return text
+
+
+def _redact_result(result: dict, secrets: tuple[str, ...]) -> dict:
+    """净化出口结果：上游把 token 回显进 status.message 时也不外泄。"""
+    for key in ("output", "error"):
+        value = result.get(key)
+        if isinstance(value, str):
+            result[key] = _redact(value, *secrets)
+    return result
+
+
+def _write_record(action_id: str, params: dict, data: dict) -> dict:
+    """新增（``Record.Create``）或修改（``Record.Modify``）一条解析记录。"""
+    common = {
+        "domain": (params.get("domain") or "").strip(),
+        "sub_domain": (params.get("sub_domain") or "@").strip(),
+        "record_type": (params.get("record_type") or "A").strip().upper(),
+        "record_line": (params.get("record_line") or "默认").strip(),
+        "value": (params.get("value") or "").strip(),
+        "ttl": (params.get("ttl") or "600").strip(),
+    }
+    if not common["domain"] or not common["value"]:
+        return _fail("域名与记录值不能为空")
+
+    record_id = (params.get("record_id") or "").strip()
+    if action_id == "edit_record":
+        if not record_id:
+            return _fail("缺少记录 ID，无法修改（请从解析记录列表行内的「修改」进入）")
+        payload = _dnspod_post("Record.Modify", data, record_id=record_id, **common)
+        verb = "修改"
+    else:
+        payload = _dnspod_post("Record.Create", data, **common)
+        verb = "新增"
+
+    code, message = _status(payload)
+    if code != "1":
+        return _fail(f"{verb}解析记录失败（code {code}）：{message}")
+    record = payload.get("record") if isinstance(payload.get("record"), dict) else {}
+    return {
+        "ok": True,
+        "output": f"{verb}解析记录成功：{common['sub_domain']} {common['record_type']} → "
+                  f"{common['value']}（id={record.get('id', '')}）",
+    }
+
+
+def _execute(action_id: str, params: dict, data: dict) -> dict:
+    """执行操作：域名 / 解析记录列表（读），新增 / 修改解析（写）。"""
     data = data or {}
     params = params or {}
-    domain = (params.get("domain") or "").strip()
     try:
+        if action_id == "list_domains":
+            payload = _dnspod_post("Domain.List", data)
+            code, message = _status(payload)
+            if code != "1":
+                return _fail(f"查询域名失败（code {code}）：{message}")
+            domains = payload.get("info")
+            domains = domains if isinstance(domains, list) else []
+            rows = []
+            for item in domains:
+                if not isinstance(item, dict):
+                    continue
+                raw_status = str(item.get("status") or "")
+                rows.append({
+                    "name": str(item.get("name") or ""),
+                    "records": str(item.get("records") or item.get("record_count") or ""),
+                    "grade": str(item.get("grade_title") or item.get("grade") or ""),
+                    "status_text": _DOMAIN_STATUS.get(raw_status, raw_status),
+                    # id 不进列，留作后续行内动作取用
+                    "id": str(item.get("id") or ""),
+                })
+            return {"ok": True, "rows": rows, "total": len(rows)}
+
         if action_id == "list_records":
+            domain = (params.get("domain") or "").strip()
             if not domain:
-                return {"ok": False, "error": "请填写域名"}
+                return _fail("请先选择域名（从「域名列表」行内的「解析」进入）")
             payload = _dnspod_post("Record.List", data, domain=domain)
             code, message = _status(payload)
             if code != "1":
-                return {"ok": False, "error": f"查询失败（code {code}）：{message}"}
-            records = payload.get("records") or []
-            lines = [f"{domain} 共 {len(records)} 条解析：", ""]
-            for r in records:
-                lines.append(
-                    f"[{r.get('id')}] {str(r.get('name', '')):<10} {str(r.get('type', '')):<6} "
-                    f"{r.get('value', '')}  TTL={r.get('ttl', '')} 线路={r.get('line', '')}"
-                )
-            return {"ok": True, "output": "\n".join(lines)}
+                return _fail(f"查询解析失败（code {code}）：{message}")
+            records = payload.get("records")
+            records = records if isinstance(records, list) else []
+            rows = []
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                rows.append({
+                    "name": str(record.get("name") or ""),
+                    "type": str(record.get("type") or "").upper(),
+                    "value": str(record.get("value") or ""),
+                    "line": str(record.get("line") or ""),
+                    "ttl": str(record.get("ttl") or ""),
+                    # id / domain 不进列，供行内「修改」回填
+                    "id": str(record.get("id") or ""),
+                    "domain": domain,
+                })
+            return {"ok": True, "rows": rows, "total": len(rows)}
 
-        if action_id == "set_record":
-            common = {
-                "domain": domain,
-                "sub_domain": (params.get("sub_domain") or "@").strip(),
-                "record_type": (params.get("record_type") or "A").strip(),
-                "record_line": (params.get("record_line") or "默认").strip(),
-                "value": (params.get("value") or "").strip(),
-                "ttl": (params.get("ttl") or "600").strip(),
-            }
-            if not common["domain"] or not common["value"]:
-                return {"ok": False, "error": "域名与记录值不能为空"}
-            record_id = (params.get("record_id") or "").strip()
-            if record_id:
-                payload = _dnspod_post("Record.Modify", data, record_id=record_id, **common)
-                verb = f"修改记录 {record_id}"
-            else:
-                payload = _dnspod_post("Record.Create", data, **common)
-                verb = "新增记录"
-            code, message = _status(payload)
-            if code != "1":
-                return {"ok": False, "error": f"{verb}失败（code {code}）：{message}"}
-            rid = (payload.get("record") or {}).get("id", "")
-            return {
-                "ok": True,
-                "output": f"{verb}成功：{common['sub_domain']} {common['record_type']} → "
-                          f"{common['value']}（id={rid}）",
-            }
+        if action_id in ("add_record", "edit_record"):
+            return _write_record(action_id, params, data)
 
-        return {"ok": False, "error": "未知操作"}
+        return _fail("未知操作")
     except Exception as exc:  # noqa: BLE001 - 操作边界兜底
-        return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
+        return _fail(f"执行异常：{type(exc).__name__}")
+
+
+def run_action(action_id: str, params: dict, data: dict) -> dict:
+    """执行操作；出口统一做密钥净化，绝不回显 dp_key。"""
+    data = data or {}
+    return _redact_result(_execute(action_id, params or {}, data), _secrets(data))
 
 
 def get_display_summary(data):

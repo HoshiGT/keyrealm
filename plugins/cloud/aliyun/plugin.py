@@ -1,22 +1,57 @@
 """阿里云 AccessKey 验证插件（plugins/cloud/ 类别下的独立子插件）。
 
-自带全部实现：RPC 签名 v1（HMAC-SHA1），调用只读的 STS GetCallerIdentity，
-不产生任何资源变更。仅从 cloud_common 复用通用工具。
+自带全部实现：**两套签名**都在本文件内维护，不依赖 cloud_common：
+
+- RPC 签名 v1（HMAC-SHA1）——STS / ECS 等云 API 走这套；
+- OSS 签名 v1（``Authorization: OSS <AK>:<Signature>``）——对象存储走这套，
+  规则与云 API 完全不同，故单独实现。
+
+全部调用均为只读，不产生任何资源变更。仅从 cloud_common 复用通用工具。
+
+本插件提供的操作（``actions``）：
+
+- ``whoami``          查看调用者身份（STS GetCallerIdentity + 权限探测）
+- ``list_instances``  云主机实例列表（ECS DescribeInstances，表单可改地域）
+- ``list_buckets``    对象存储桶列表（OSS ListBuckets）
+- ``list_objects``    对象预览（OSS ListObjects，填桶名直查或从桶列表行内「预览」进入）
 """
 from __future__ import annotations
 
 import base64
 import hashlib
 import hmac
+import re
 import uuid
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from email.utils import formatdate
 from typing import Any
 from urllib.parse import quote
 
-from cloud_common import VerifyResult, body_snippet, guarded, make_client, safe_json
+from cloud_common import (
+    VerifyResult,
+    body_snippet,
+    first_list,
+    guarded,
+    make_client,
+    safe_json,
+)
 
 # 阿里云 STS RPC 接口地址（公共参数走查询串，GET 请求）
 STS_ENDPOINT = "https://sts.aliyuncs.com"
+
+# ECS（云主机）RPC 接口，与 STS 共用同一套 RPC 签名 v1
+ECS_ENDPOINT = "https://ecs.aliyuncs.com"
+ECS_VERSION = "2014-05-26"
+
+# OSS（对象存储）全局端点：ListBuckets 走这里
+OSS_GLOBAL_ENDPOINT = "https://oss.aliyuncs.com"
+
+# 默认地域（ECS / OSS 均先按此探测）
+DEFAULT_REGION = "cn-hangzhou"
+
+# 权限探测的单请求超时（秒）——探测要「整体十几秒内」结束，不能用默认的 20 秒 ×3
+_PROBE_TIMEOUT = 6.0
 
 # 认证失败错误码（其余一律按「无法确认」处理）
 _INVALID_CODES = {
@@ -25,6 +60,29 @@ _INVALID_CODES = {
     "SignatureDoesNotMatch",
     "InvalidAccessKeyId",
 }
+
+# 权限探测结论：ok / denied（明确无权限）/ bad_cred（凭据被拒）/ unknown（拿不准 → fail-open）
+_PROBE_OK = "ok"
+_PROBE_DENIED = "denied"
+_PROBE_BAD_CRED = "bad_cred"
+_PROBE_UNKNOWN = "unknown"
+
+# RPC 错误码 → 结论
+_RPC_DENIED_CODES = {
+    "Forbidden",
+    "Forbidden.RAM",
+    "Forbidden.UserNotAuthorized",
+    "Forbidden.AccountAccess",
+    "NoPermission",
+    "NoPermission.User",
+}
+
+# OSS 错误码 → 结论
+_OSS_BAD_CRED_CODES = {"InvalidAccessKeyId", "SignatureDoesNotMatch", "InvalidAccessKeyId.NotFound"}
+
+# 桶名 / 端点白名单式校验：避免把用户/接口返回的字符串直接拼进 URL
+_BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9\-]{1,61}[a-z0-9]$")
+_HOST_RE = re.compile(r"^[a-z0-9.\-]+$")
 
 
 def _field(data: dict, key: str) -> str:
@@ -67,6 +125,200 @@ def _aliyun_signature(params: dict, access_key_secret: str, method: str = "GET")
     return base64.b64encode(digest).decode("utf-8")
 
 
+# ── OSS 签名 v1（与云 API 的 RPC 签名无关，独立实现）─────────
+
+def _oss_signature(
+    method: str,
+    content_md5: str,
+    content_type: str,
+    date: str,
+    canonicalized_oss_headers: str,
+    canonicalized_resource: str,
+    secret: str,
+) -> str:
+    """OSS 签名 v1：base64(HMAC-SHA1(Secret, StringToSign))。
+
+    StringToSign = VERB\\nContent-MD5\\nContent-Type\\nDate\\n
+                   CanonicalizedOSSHeaders + CanonicalizedResource
+    """
+    string_to_sign = (
+        f"{method}\n{content_md5}\n{content_type}\n{date}\n"
+        f"{canonicalized_oss_headers}{canonicalized_resource}"
+    )
+    digest = hmac.new(
+        secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1
+    ).digest()
+    return base64.b64encode(digest).decode("utf-8")
+
+
+def _oss_get(
+    client,
+    url: str,
+    access_key_id: str,
+    access_key_secret: str,
+    canonicalized_resource: str,
+    params: dict | None = None,
+    timeout: float | None = None,
+):
+    """发起一次 OSS V1 签名的只读 GET（无 x-oss-* 头，故 CanonicalizedOSSHeaders 为空）。"""
+    date = formatdate(usegmt=True)
+    signature = _oss_signature(
+        "GET", "", "", date, "", canonicalized_resource, access_key_secret
+    )
+    headers = {"Date": date, "Authorization": f"OSS {access_key_id}:{signature}"}
+    kwargs: dict[str, Any] = {"params": params, "headers": headers}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    return client.get(url, **kwargs)
+
+
+# ── XML 解析（OSS 返回 XML；用本地名匹配，绕开 namespace 差异）──
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _xml_root(text: str):
+    try:
+        return ET.fromstring(text)
+    except Exception:
+        return None
+
+
+def _xml_findall(text_or_elem, local_name: str) -> list:
+    """返回所有本地名匹配的后代元素（namespace 无关）。"""
+    root = text_or_elem
+    if isinstance(root, str):
+        root = _xml_root(root)
+    if root is None:
+        return []
+    return [elem for elem in root.iter() if _local_name(elem.tag) == local_name]
+
+
+def _xml_text(elem, local_name: str) -> str:
+    """取某个后代元素的文本（第一个）。"""
+    if elem is None:
+        return ""
+    for child in elem.iter():
+        if _local_name(child.tag) == local_name:
+            return (child.text or "").strip()
+    return ""
+
+
+def _xml_error(text: str) -> tuple[str, str]:
+    """OSS 错误响应 <Error><Code/><Message/></Error> → (code, message)。"""
+    root = _xml_root(text)
+    if root is None:
+        return "", ""
+    return _xml_text(root, "Code"), _xml_text(root, "Message")
+
+
+# ── 权限探测（只读；拿不准 → fail-open）─────────────────
+
+def _rpc_probe(client, endpoint, action, version, extra, ak, sk) -> str:
+    """探测一次 RPC 接口，返回结论字符串；异常一律 unknown（不抛出）。"""
+    try:
+        resp = _rpc_get(client, endpoint, action, version, extra, ak, sk, _PROBE_TIMEOUT)
+    except Exception:  # noqa: BLE001 - 探测失败不能让整个 capabilities 崩
+        return _PROBE_UNKNOWN
+    payload = safe_json(resp) or {}
+    code = str(payload.get("Code") or "").strip()
+    if resp.status_code == 200 and not code:
+        return _PROBE_OK
+    if code in _INVALID_CODES:
+        return _PROBE_BAD_CRED
+    if code in _RPC_DENIED_CODES or code.startswith("Forbidden") or code.startswith("NoPermission"):
+        return _PROBE_DENIED
+    if resp.status_code == 403 and not code:
+        return _PROBE_DENIED
+    return _PROBE_UNKNOWN
+
+
+def _oss_probe_buckets(client, ak, sk) -> str:
+    """探测 OSS ListBuckets（只读），返回结论字符串。"""
+    try:
+        resp = _oss_get(
+            client, f"{OSS_GLOBAL_ENDPOINT}/", ak, sk, "/", timeout=_PROBE_TIMEOUT
+        )
+    except Exception:  # noqa: BLE001
+        return _PROBE_UNKNOWN
+    if resp.status_code == 200:
+        return _PROBE_OK
+    code, _ = _xml_error(resp.text)
+    if code in _OSS_BAD_CRED_CODES:
+        return _PROBE_BAD_CRED
+    if code in ("AccessDenied", "UserDisable", "Forbidden"):
+        return _PROBE_DENIED
+    return _PROBE_UNKNOWN
+
+
+def _probe_all(ak: str, sk: str) -> dict:
+    """依次只读探测 STS / ECS / OSS，返回 {action_id: 结论}（彼此独立）。"""
+    status: dict[str, str] = {}
+    with make_client() as client:
+        status["whoami"] = _rpc_probe(
+            client, STS_ENDPOINT, "GetCallerIdentity", "2015-04-01", {}, ak, sk
+        )
+        status["list_instances"] = _rpc_probe(
+            client,
+            ECS_ENDPOINT,
+            "DescribeInstances",
+            ECS_VERSION,
+            {"RegionId": DEFAULT_REGION, "PageSize": "1"},
+            ak,
+            sk,
+        )
+        status["list_buckets"] = _oss_probe_buckets(client, ak, sk)
+    # 对象预览与桶列表是同一个 OSS 权限位
+    status["list_objects"] = status["list_buckets"]
+    return status
+
+
+def capabilities(data: dict) -> dict:
+    """返回当前凭据**真正能用**的操作 id（只读探测，拿不准时抛异常 → fail-open）。
+
+    探测 STS / ECS / OSS 三个只读接口，各自独立 try：
+
+    - 明确成功 → 该操作可用；
+    - 明确「无权限 / 凭据被拒」→ 隐藏该操作；
+    - 网络异常或返回看不懂 → **unknown**，按可用处理（fail-open）。
+
+    若三个接口全都拿不准，则直接抛异常，交给框架按「未知 → 全部可用」兜底。
+    """
+    data = data or {}
+    ak = _field(data, "access_key_id")
+    sk = _field(data, "access_key_secret")
+    if not ak or not sk:
+        return {"available": [], "note": "缺少 AccessKey ID 或 AccessKey Secret"}
+
+    status = _probe_all(ak, sk)
+    if all(value == _PROBE_UNKNOWN for value in status.values()):
+        # 全都不确定 —— 让框架按「未知」处理，绝不返回空列表把操作全隐藏
+        raise RuntimeError("阿里云权限探测全部失败（网络异常或响应无法识别）")
+
+    if status.get("whoami") == _PROBE_BAD_CRED:
+        # 基础身份接口都明确拒了这个 AK —— 同一对密钥在 ECS/OSS 上必然也被拒，
+        # 此时剩下几个探针的 unknown 不是「拿不准」而是「密钥已废」，没必要假装可用。
+        return {"available": [], "note": "AccessKey 无效或已禁用，任何操作都会失败"}
+
+    available = [
+        action_id
+        for action_id, value in status.items()
+        if value not in (_PROBE_DENIED, _PROBE_BAD_CRED)
+    ]
+
+    if any(value == _PROBE_BAD_CRED for value in status.values()):
+        note = "凭证被拒绝，相关操作已隐藏"
+    else:
+        rights = []
+        if status.get("list_instances") not in (_PROBE_DENIED, _PROBE_BAD_CRED):
+            rights.append("云主机管理权限")
+        if status.get("list_buckets") not in (_PROBE_DENIED, _PROBE_BAD_CRED):
+            rights.append("对象存储权限")
+        note = f"具备{'、'.join(rights)}" if rights else "未探测到额外资源权限"
+    return {"available": available, "note": note}
+
+
 def validate(data):
     """校验配置，返回错误列表（空列表表示通过）。"""
     if not data:
@@ -86,21 +338,10 @@ def verify(data):
     if not access_key_id or not access_key_secret:
         return VerifyResult(status="invalid", message="AccessKey ID 或 AccessKey Secret 为空")
 
-    # 公共参数（Signature 最后附加）
-    params: dict[str, Any] = {
-        "Format": "JSON",
-        "Version": "2015-04-01",
-        "AccessKeyId": access_key_id,
-        "SignatureMethod": "HMAC-SHA1",
-        "SignatureVersion": "1.0",
-        "SignatureNonce": str(uuid.uuid4()),
-        "Timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "Action": "GetCallerIdentity",
-    }
-    params["Signature"] = _aliyun_signature(params, access_key_secret)
-
     with make_client() as client:
-        resp = client.get(STS_ENDPOINT, params=params)
+        resp = _rpc_get(
+            client, STS_ENDPOINT, "GetCallerIdentity", "2015-04-01", {}, access_key_id, access_key_secret
+        )
 
     status = resp.status_code
     payload = safe_json(resp) or {}
@@ -128,7 +369,41 @@ def verify(data):
     return _unconfirmed(status, body_snippet(resp))
 
 
-# ── 可选操作：查看调用者身份（只读）─────────────────────
+# ── 通用请求封装 ─────────────────────────────────────────
+
+def _rpc_get(client, endpoint, action, version, extra, ak, sk, timeout: float | None = None):
+    """发起一次 RPC 签名 v1 的只读 GET 请求。"""
+    params: dict[str, Any] = {
+        "Format": "JSON",
+        "Version": version,
+        "AccessKeyId": ak,
+        "SignatureMethod": "HMAC-SHA1",
+        "SignatureVersion": "1.0",
+        "SignatureNonce": str(uuid.uuid4()),
+        "Timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "Action": action,
+    }
+    params.update(extra or {})
+    params["Signature"] = _aliyun_signature(params, sk)
+    kwargs: dict[str, Any] = {"params": params}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    return client.get(endpoint, **kwargs)
+
+
+def _oss_region(location: str) -> str:
+    """把 OSS 的 Location（如 ``oss-cn-hangzhou``）归一成地域名 ``cn-hangzhou``。"""
+    value = (location or "").strip()
+    if value.startswith("oss-"):
+        value = value[4:]
+    return value or DEFAULT_REGION
+
+
+def _oss_endpoint(region: str) -> str:
+    return f"oss-{region}.aliyuncs.com"
+
+
+# ── 操作 ────────────────────────────────────────────────
 
 def _redact(text: str, *secrets: str) -> str:
     """把可能出现在接口返回中的密钥替换掉，任何路径都不回显凭据。"""
@@ -138,61 +413,293 @@ def _redact(text: str, *secrets: str) -> str:
     return text
 
 
+def _rpc_failure(resp, ak: str, sk: str) -> str:
+    """把 RPC 失败响应转成一句脱敏后的错误信息。"""
+    payload = safe_json(resp) or {}
+    code = str(payload.get("Code") or "").strip()
+    detail = str(payload.get("Message") or code or f"HTTP {resp.status_code}")
+    return f"请求失败：{_redact(detail, ak, sk)}"
+
+
+def _oss_failure(resp, ak: str, sk: str) -> str:
+    """把 OSS 失败响应（XML）转成一句脱敏后的错误信息。"""
+    code, message = _xml_error(resp.text)
+    detail = message or code or f"HTTP {resp.status_code}"
+    return f"请求失败：{_redact(detail, ak, sk)}"
+
+
+_WHOAMI_COLUMNS = [
+    {"key": "item", "label": "项目", "width": 140},
+    {"key": "value", "label": "值", "mono": True},
+]
+
+_INSTANCE_COLUMNS = [
+    {"key": "InstanceId", "label": "实例 ID", "mono": True},
+    {"key": "InstanceName", "label": "实例名"},
+    {"key": "Status", "label": "状态", "width": 100, "type": "tag"},
+    {"key": "PublicIp", "label": "公网 IP", "width": 130, "mono": True},
+    {"key": "InstanceType", "label": "规格"},
+]
+
+_BUCKET_COLUMNS = [
+    {"key": "name", "label": "桶名", "mono": True},
+    {"key": "creationDate", "label": "创建时间", "width": 200},
+    {"key": "region", "label": "地域", "width": 120},
+]
+
+_OBJECT_COLUMNS = [
+    {"key": "key", "label": "对象 Key", "mono": True},
+    {"key": "size", "label": "大小", "width": 100, "type": "number"},
+    {"key": "lastModified", "label": "最后修改", "width": 200},
+]
+
+_OBJECT_ROW_ACTION = {
+    "id": "list_objects",
+    "label": "预览",
+    "params": {"bucket": "$row.name", "region": "$row.region", "endpoint": "$row.endpoint"},
+}
+
+
 def actions(data: dict) -> list[dict]:
-    """声明可用操作（凭据完整时提供只读的调用者身份查询）。"""
+    """声明可用操作（凭据完整时提供只读的身份 / 实例 / 对象存储查询）。"""
     data = data or {}
     if not (_field(data, "access_key_id") and _field(data, "access_key_secret")):
         return []
-    return [{
-        "id": "whoami",
-        "name": "查看调用者身份",
-        "kind": "form",
-        "submit": "查询",
-        "fields": [],
-    }]
+    return [
+        {
+            "id": "whoami",
+            "name": "查看调用者身份",
+            "kind": "list",
+            "group": "身份",
+            "order": 10,
+            "description": "STS GetCallerIdentity 身份信息 + 只读权限探测",
+            "columns": _WHOAMI_COLUMNS,
+            "empty_text": "未获取到身份信息",
+        },
+        {
+            "id": "list_instances",
+            "name": "云主机实例列表",
+            "kind": "list",
+            "group": "计算",
+            "order": 20,
+            "description": f"ECS DescribeInstances（地域默认 {DEFAULT_REGION}，可在表单里改）",
+            "columns": _INSTANCE_COLUMNS,
+            # 列表操作也能带 fields：前端渲染成表格上方一行内联表单，点「刷新」时并入参数
+            "fields": [
+                {
+                    "key": "region",
+                    "label": "地域",
+                    "placeholder": f"默认 {DEFAULT_REGION}，如 cn-beijing / cn-shanghai",
+                }
+            ],
+            "submit": "查询",
+            "empty_text": f"暂无云主机实例（默认地域 {DEFAULT_REGION}）",
+        },
+        {
+            "id": "list_buckets",
+            "name": "对象存储桶列表",
+            "kind": "list",
+            "group": "存储",
+            "order": 30,
+            "description": "OSS ListBuckets（只读）",
+            "columns": _BUCKET_COLUMNS,
+            "row_actions": [_OBJECT_ROW_ACTION],
+            "empty_text": "暂无对象存储桶",
+        },
+        {
+            "id": "list_objects",
+            "name": "对象预览",
+            "kind": "list",
+            "group": "存储",
+            "order": 40,
+            "description": "OSS ListObjects（填桶名直接查，或从「对象存储桶列表」行内「预览」进入）",
+            "columns": _OBJECT_COLUMNS,
+            "fields": [
+                {"key": "bucket", "label": "桶名", "placeholder": "如 my-bucket"},
+                {
+                    "key": "region",
+                    "label": "地域",
+                    "placeholder": f"默认 {DEFAULT_REGION}，如 cn-beijing",
+                },
+            ],
+            "submit": "查询",
+            "empty_text": "该桶暂无对象（仅显示前 50 个）",
+        },
+    ]
 
 
 def run_action(action_id: str, params: dict, data: dict) -> dict:
-    """执行操作：调用 STS GetCallerIdentity 查看当前凭据身份（只读）。"""
+    """执行操作（全部只读，绝不产生远端变更）。"""
     data = data or {}
+    params = params or {}
     try:
-        if action_id != "whoami":
-            return {"ok": False, "error": "未知操作"}
-
-        access_key_id = _field(data, "access_key_id")
-        access_key_secret = _field(data, "access_key_secret")
-        if not access_key_id or not access_key_secret:
+        ak = _field(data, "access_key_id")
+        sk = _field(data, "access_key_secret")
+        if not ak or not sk:
             return {"ok": False, "error": "AccessKey ID 或 AccessKey Secret 为空"}
 
-        # 复用与 verify 相同的 RPC 签名 v1 逻辑，仅请求体构造重复一次
-        query: dict[str, Any] = {
-            "Format": "JSON",
-            "Version": "2015-04-01",
-            "AccessKeyId": access_key_id,
-            "SignatureMethod": "HMAC-SHA1",
-            "SignatureVersion": "1.0",
-            "SignatureNonce": str(uuid.uuid4()),
-            "Timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "Action": "GetCallerIdentity",
-        }
-        query["Signature"] = _aliyun_signature(query, access_key_secret)
+        if action_id == "whoami":
+            return _run_whoami(ak, sk)
+        if action_id == "list_instances":
+            return _run_list_instances(ak, sk, params)
+        if action_id == "list_buckets":
+            return _run_list_buckets(ak, sk)
+        if action_id == "list_objects":
+            return _run_list_objects(ak, sk, params)
+        return {"ok": False, "error": "未知操作"}
+    except Exception as exc:  # noqa: BLE001 - 操作边界兜底，绝不抛出
+        return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
 
-        with make_client() as client:
-            resp = client.get(STS_ENDPOINT, params=query)
 
+def _run_whoami(ak: str, sk: str) -> dict:
+    """身份信息 + 权限探测（各接口独立只读调用）。"""
+    with make_client() as client:
+        resp = _rpc_get(client, STS_ENDPOINT, "GetCallerIdentity", "2015-04-01", {}, ak, sk)
         payload = safe_json(resp) or {}
         code = str(payload.get("Code") or "").strip()
         if resp.status_code != 200 or code:
-            detail = str(payload.get("Message") or code or f"HTTP {resp.status_code}")
-            return {"ok": False, "error": f"查询失败：{_redact(detail, access_key_id, access_key_secret)}"}
+            return {"ok": False, "error": _rpc_failure(resp, ak, sk)}
 
-        lines = ["调用者身份："]
-        for key in ("AccountId", "Arn", "UserId"):
-            if payload.get(key):
-                lines.append(f"{key}: {payload[key]}")
-        return {"ok": True, "output": "\n".join(lines)}
-    except Exception as exc:  # noqa: BLE001 - 操作边界兜底，绝不抛出
-        return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
+        rows = [
+            {"item": "账号 ID", "value": payload.get("AccountId") or "—"},
+            {"item": "ARN", "value": payload.get("Arn") or "—"},
+            {"item": "UserId", "value": payload.get("UserId") or "—"},
+        ]
+
+        rights = []
+        if _rpc_probe(
+            client,
+            ECS_ENDPOINT,
+            "DescribeInstances",
+            ECS_VERSION,
+            {"RegionId": DEFAULT_REGION, "PageSize": "1"},
+            ak,
+            sk,
+        ) == _PROBE_OK:
+            rights.append("云主机管理")
+        if _oss_probe_buckets(client, ak, sk) == _PROBE_OK:
+            rights.append("对象存储")
+        rows.append({"item": "探测到的权限", "value": "、".join(rights) if rights else "未探测到额外资源权限"})
+
+    return {"ok": True, "rows": rows, "columns": _WHOAMI_COLUMNS, "total": len(rows), "has_more": False}
+
+
+def _run_list_instances(ak: str, sk: str, params: dict) -> dict:
+    region = _field(params, "region") or DEFAULT_REGION
+    with make_client() as client:
+        resp = _rpc_get(
+            client,
+            ECS_ENDPOINT,
+            "DescribeInstances",
+            ECS_VERSION,
+            {"RegionId": region, "PageSize": "100"},
+            ak,
+            sk,
+        )
+    payload = safe_json(resp) or {}
+    if resp.status_code != 200 or payload.get("Code"):
+        return {"ok": False, "error": _rpc_failure(resp, ak, sk)}
+
+    instances = first_list(payload, "Instances") or []
+    rows = []
+    for inst in instances:
+        if not isinstance(inst, dict):
+            continue
+        ips = first_list(inst.get("PublicIpAddress") or {}, "IpAddress") or []
+        rows.append(
+            {
+                "InstanceId": inst.get("InstanceId") or "",
+                "InstanceName": inst.get("InstanceName") or "",
+                "Status": inst.get("Status") or "",
+                "PublicIp": ips[0] if ips else "",
+                "InstanceType": inst.get("InstanceType") or "",
+            }
+        )
+    return {
+        "ok": True,
+        "rows": rows,
+        "columns": _INSTANCE_COLUMNS,
+        "total": int(payload.get("TotalCount") or len(rows)),
+        "empty_text": f"暂无云主机实例（地域 {region}）",
+        "has_more": bool(payload.get("TotalCount") and int(payload["TotalCount"]) > len(rows)),
+    }
+
+
+def _run_list_buckets(ak: str, sk: str) -> dict:
+    with make_client() as client:
+        resp = _oss_get(client, f"{OSS_GLOBAL_ENDPOINT}/", ak, sk, "/")
+    if resp.status_code != 200:
+        return {"ok": False, "error": _oss_failure(resp, ak, sk)}
+
+    rows = []
+    for bucket in _xml_findall(resp.text, "Bucket"):
+        name = _xml_text(bucket, "Name")
+        if not name:
+            continue
+        region = _oss_region(_xml_text(bucket, "Location"))
+        endpoint = _xml_text(bucket, "ExtranetEndpoint") or _oss_endpoint(region)
+        rows.append(
+            {
+                "name": name,
+                "creationDate": _xml_text(bucket, "CreationDate"),
+                "region": region,
+                # endpoint 不展示为列，仅供行内「预览」下钻时作为参数使用
+                "endpoint": endpoint,
+            }
+        )
+    return {
+        "ok": True,
+        "rows": rows,
+        "columns": _BUCKET_COLUMNS,
+        "row_actions": [_OBJECT_ROW_ACTION],
+        "total": len(rows),
+        "has_more": False,
+    }
+
+
+def _run_list_objects(ak: str, sk: str, params: dict) -> dict:
+    bucket = _field(params, "bucket")
+    if not bucket:
+        return {
+            "ok": False,
+            "error": "缺少桶名，请在表单里填写，或从「对象存储桶列表」行内点击「预览」进入",
+        }
+    if not _BUCKET_RE.match(bucket):
+        return {"ok": False, "error": "桶名不合法"}
+
+    region = _oss_region(_field(params, "region"))
+    endpoint = _field(params, "endpoint") or _oss_endpoint(region)
+    if not _HOST_RE.match(endpoint):
+        return {"ok": False, "error": "对象存储端点不合法"}
+
+    url = f"https://{bucket}.{endpoint}/"
+    with make_client() as client:
+        resp = _oss_get(client, url, ak, sk, f"/{bucket}/", params={"max-keys": "50"})
+    if resp.status_code != 200:
+        return {"ok": False, "error": _oss_failure(resp, ak, sk)}
+
+    root = _xml_root(resp.text)
+    rows = []
+    for content in _xml_findall(root, "Contents"):
+        key = _xml_text(content, "Key")
+        if not key:
+            continue
+        size_raw = _xml_text(content, "Size")
+        rows.append(
+            {
+                "key": key,
+                "size": int(size_raw) if size_raw.isdigit() else size_raw,
+                "lastModified": _xml_text(content, "LastModified"),
+            }
+        )
+    return {
+        "ok": True,
+        "rows": rows,
+        "columns": _OBJECT_COLUMNS,
+        "total": len(rows),
+        "empty_text": f"该桶暂无对象（{bucket}，仅显示前 50 个）",
+        "has_more": _xml_text(root, "IsTruncated").lower() == "true",
+    }
 
 
 def get_display_summary(data):

@@ -1,0 +1,32 @@
+{
+  "name": "秘塔 AI 搜索",
+  "version": "1.0.0",
+  "credential_type": "api_metaso",
+  "author": "Credential Vault",
+  "description": "验证秘塔 AI 搜索（Metaso）API Key 有效性",
+  "icon": "logo.png",
+  "fields": [
+    {
+      "key": "base_url",
+      "label": "Base URL",
+      "type": "url",
+      "required": false,
+      "placeholder": "留空使用默认地址",
+      "default": "https://metaso.cn/api/v1"
+    },
+    {
+      "key": "api_key",
+      "label": "API Key",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "mk-..."
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

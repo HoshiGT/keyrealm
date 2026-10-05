@@ -1,14 +1,20 @@
-"""Cloudflare API Token / Global API Key 验证插件（plugins/cloud/ 类别下的独立子插件）。
+"""Cloudflare API Token / Global API Key 验证插件（plugins/dns/ 类别下的独立子插件）。
 
 自带全部实现：支持 token 与 global 两种认证模式，调用只读的
 /user 或 /user/tokens/verify 接口，不产生任何资源变更。
-仅从 cloud_common 复用通用工具。
+仅从 dns_common 复用通用工具。
+
+操作（凭据完整时提供）：
+- ``list_zones``（列表）站点列表，行内可下钻 ``list_dns_records``（DNS 记录）
+  或打开 ``set_dns_record``（新增记录）并自动带站点；
+- ``list_dns_records``（列表）指定站点的 DNS 记录，行内 ``set_dns_record``（修改记录）；
+- ``set_dns_record``（表单，写操作）记录 ID 留空 = 新增，填写 = 修改该记录。
 """
 from __future__ import annotations
 
 from typing import Any, Optional
 
-from cloud_common import VerifyResult, body_snippet, guarded, make_client, safe_json
+from dns_common import VerifyResult, body_snippet, guarded, make_client, safe_json
 
 # Cloudflare API 基地址
 API_BASE = "https://api.cloudflare.com/client/v4"
@@ -160,9 +166,13 @@ def _secrets(data: dict) -> tuple[str, ...]:
 
 
 def _redact(text: str, *secrets: str) -> str:
-    """把可能出现在接口返回中的密钥替换掉，任何路径都不回显凭据。"""
+    """把可能出现在接口返回中的密钥替换掉，任何路径都不回显凭据。
+
+    只替换长度 ≥ 6 的密钥：与 backend/api.py 的净化口径一致，否则短密钥
+    会把域名、记录值里的常见字符整片打码成 ``***``。
+    """
     for secret in secrets:
-        if secret:
+        if secret and len(secret) >= 6:
             text = text.replace(secret, "***")
     return text
 
@@ -210,31 +220,53 @@ def _resolve_zone(client, headers: dict, zone: str) -> tuple[str, str]:
 
 
 def actions(data: dict) -> list[dict]:
-    """声明可用操作（凭据完整时提供站点查询与 DNS 记录查看 / 维护）。"""
+    """声明可用操作（凭据完整时提供站点 / DNS 记录查看与维护）。"""
     if _cf_headers(data or {}) is None:
         return []
     return [
         {
             "id": "list_zones",
-            "name": "查看站点（Zones）",
-            "kind": "form",
-            "submit": "查询",
-            "fields": [],
+            "name": "站点列表",
+            "kind": "list",
+            "columns": [
+                {"key": "name", "label": "站点", "mono": True},
+                {"key": "status", "label": "状态", "width": 110},
+                {"key": "plan", "label": "套餐", "width": 130},
+            ],
+            "row_actions": [
+                {"id": "list_dns_records", "label": "解析", "params": {"zone": "$row.name"}},
+                {"id": "set_dns_record", "label": "新增", "params": {"zone": "$row.name"}},
+            ],
+            "empty_text": "该账号下没有站点",
         },
         {
             "id": "list_dns_records",
-            "name": "查看 DNS 记录",
-            "kind": "form",
-            "submit": "查询",
-            "fields": [
+            "name": "DNS 记录",
+            "kind": "list",
+            "columns": [
+                {"key": "name", "label": "记录名", "mono": True},
+                {"key": "record_type", "label": "类型", "type": "tag", "width": 90},
+                {"key": "content", "label": "记录值", "mono": True},
+                {"key": "ttl", "label": "TTL", "width": 80},
+                {"key": "proxied_text", "label": "代理", "width": 80},
+            ],
+            # 行内「修改」把该记录预填进 set_dns_record 表单（id / zone / proxied 不在列里，仅供模板取值）
+            "row_actions": [
                 {
-                    "key": "zone",
-                    "label": "站点",
-                    "type": "text",
-                    "placeholder": "站点名称（example.com）或 Zone ID",
-                    "required": True,
+                    "id": "set_dns_record",
+                    "label": "修改",
+                    "params": {
+                        "zone": "$row.zone",
+                        "record_id": "$row.id",
+                        "record_type": "$row.record_type",
+                        "name": "$row.name",
+                        "content": "$row.content",
+                        "ttl": "$row.ttl",
+                        "proxied": "$row.proxied",
+                    },
                 },
             ],
+            "empty_text": "该站点下没有 DNS 记录",
         },
         {
             "id": "set_dns_record",
@@ -250,12 +282,18 @@ def actions(data: dict) -> list[dict]:
                     "placeholder": "站点名称 或 Zone ID",
                     "required": True,
                 },
-                {"key": "record_id", "label": "记录 ID", "type": "text", "placeholder": "留空=新增；填写=修改该记录"},
+                {
+                    "key": "record_id",
+                    "label": "记录 ID",
+                    "type": "text",
+                    "placeholder": "留空=新增；从记录行「修改」进入时自动填写",
+                },
                 {
                     "key": "record_type",
                     "label": "记录类型",
                     "type": "select",
                     "options": ["A", "AAAA", "CNAME", "TXT", "MX", "NS", "SRV"],
+                    "default": "A",
                 },
                 {
                     "key": "name",
@@ -279,7 +317,7 @@ def actions(data: dict) -> list[dict]:
 
 
 def run_action(action_id: str, params: dict, data: dict) -> dict:
-    """执行操作：查看站点 / DNS 记录（只读），或新增 / 修改 DNS 记录（写）。"""
+    """执行操作：站点 / DNS 记录列表（读），新增 / 修改 DNS 记录（写）。"""
     data = data or {}
     params = params or {}
     secrets = _secrets(data)
@@ -295,18 +333,22 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
             if payload.get("success") is not True:
                 raise _ActionError(_api_error(payload, resp.status_code))
             zones = payload.get("result") if isinstance(payload.get("result"), list) else []
-            lines = [f"共 {len(zones)} 个站点：", ""]
+            rows = []
             for zone in zones:
                 if not isinstance(zone, dict):
                     continue
-                lines.append(str(zone.get("name") or "-"))
-                lines.append(f"    id={zone.get('id', '-')}  状态={zone.get('status', '-')}")
-            return {"ok": True, "output": "\n".join(lines)}
+                plan = zone.get("plan")
+                rows.append({
+                    "name": str(zone.get("name") or ""),
+                    "status": str(zone.get("status") or ""),
+                    "plan": str(plan.get("name") or "") if isinstance(plan, dict) else "",
+                })
+            return {"ok": True, "rows": rows, "total": len(rows)}
 
         if action_id in ("list_dns_records", "set_dns_record"):
             zone_input = _field(params, "zone")
             if not zone_input:
-                return {"ok": False, "error": "请填写站点名称或 Zone ID"}
+                return {"ok": False, "error": "请填写站点名称或 Zone ID（或从站点列表行内的「解析」进入）"}
 
             with make_client() as client:
                 zone_id, zone_name = _resolve_zone(client, headers, zone_input)
@@ -321,18 +363,23 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
                     if payload.get("success") is not True:
                         raise _ActionError(_api_error(payload, resp.status_code))
                     records = payload.get("result") if isinstance(payload.get("result"), list) else []
-                    lines = [f"{zone_name or zone_id} 共 {len(records)} 条 DNS 记录：", ""]
+                    rows = []
                     for record in records:
                         if not isinstance(record, dict):
                             continue
-                        proxied = "是" if record.get("proxied") else "否"
-                        lines.append(
-                            f"{str(record.get('type', '')):<6} {record.get('name', '')} → {record.get('content', '')}"
-                        )
-                        lines.append(
-                            f"    TTL={record.get('ttl', '')}  代理={proxied}  id={record.get('id', '')}"
-                        )
-                    return {"ok": True, "output": "\n".join(lines)}
+                        proxied = bool(record.get("proxied"))
+                        rows.append({
+                            "name": str(record.get("name") or ""),
+                            "record_type": str(record.get("type") or "").upper(),
+                            "content": str(record.get("content") or ""),
+                            "ttl": str(record.get("ttl", "")),
+                            "proxied_text": "是" if proxied else "否",
+                            # id / zone / proxied 不进列，供行内「修改」回填
+                            "id": str(record.get("id") or ""),
+                            "zone": zone_name or zone_id,
+                            "proxied": "true" if proxied else "false",
+                        })
+                    return {"ok": True, "rows": rows, "total": len(rows)}
 
                 # set_dns_record：record_id 留空=新增（POST），填写=修改（PUT）
                 record_type = (_field(params, "record_type") or "A").upper()
@@ -357,21 +404,21 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
                         headers=headers,
                         json=body,
                     )
-                    verb = f"修改记录 {record_id}"
+                    verb = "修改"
                 else:
                     resp = client.post(
                         f"{API_BASE}/zones/{zone_id}/dns_records",
                         headers=headers,
                         json=body,
                     )
-                    verb = "新增记录"
+                    verb = "新增"
                 payload = safe_json(resp) or {}
                 if payload.get("success") is not True:
-                    raise _ActionError(f"{verb}失败：{_api_error(payload, resp.status_code)}")
+                    raise _ActionError(f"{verb}DNS 记录失败：{_api_error(payload, resp.status_code)}")
                 result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
                 return {
                     "ok": True,
-                    "output": f"{verb}成功：{record_type} {name} → {content}（id={result.get('id', '')}）",
+                    "output": f"{verb}DNS 记录成功：{record_type} {name} → {content}（id={result.get('id', '')}）",
                 }
 
         return {"ok": False, "error": "未知操作"}

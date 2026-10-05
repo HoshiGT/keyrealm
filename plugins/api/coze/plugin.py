@@ -5,10 +5,33 @@
 """
 from typing import Any
 
-from api_common import VerifyResult, body_snippet, guarded, make_client, safe_json
+from api_common import VerifyResult, body_snippet, first_list, guarded, make_client, safe_json
 
 NAME = "字节扣子 Coze"
 DEFAULT_BASE_URL = "https://api.coze.cn"
+
+
+def _parse_workspaces(payload: dict) -> tuple:
+    """从 ``/v1/workspaces`` 的响应里取出「工作区列表」与「总数」。
+
+    **verify 与「操作」共用这一个解析器**：原先两处各写一份，verify 只认 ``total_count``、
+    操作只认 ``workspace_list`` / ``items``，字段名一旦对不上就会出现
+    「凭据列表说 1 个工作区、点了操作却说无工作区」这种自相矛盾。共用之后不可能再分叉。
+    """
+    if not isinstance(payload, dict):
+        return [], None
+    data = payload.get("data")
+    if isinstance(data, list):
+        return data, len(data)
+    if not isinstance(data, dict):
+        return [], None
+    items = first_list(data, "workspace_list", "items", "list", "workspaces")
+    total = data.get("total_count")
+    try:
+        total = int(total) if total is not None else None
+    except (TypeError, ValueError):
+        total = None
+    return items, total
 
 
 def _unconfirmed(status: int, snippet: str) -> VerifyResult:
@@ -26,10 +49,10 @@ def _verify_coze(base_url: str, api_key: str) -> VerifyResult:
     payload = safe_json(resp)
     if status == 200:
         info: dict[str, Any] = {}
-        if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
-            total = payload["data"].get("total_count")
-            if total is not None:
-                info["workspace_count"] = total
+        items, total = _parse_workspaces(payload)
+        count = total if total is not None else len(items)
+        if count:
+            info["workspace_count"] = count
         return VerifyResult(status="valid", message="凭证有效", account_info=info or None)
     if status in (401, 403):
         return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
@@ -107,18 +130,18 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
             return {"ok": False, "error": f"查询失败（HTTP {resp.status_code}）"}
 
         payload = safe_json(resp) or {}
-        info = payload.get("data")
-        info = info if isinstance(info, dict) else {}
-        items = info.get("workspace_list") or info.get("items") or []
-        items = items if isinstance(items, list) else []
-        total = info.get("total_count", len(items))
-        lines = [f"共 {total} 个工作区：", ""]
+        items, total = _parse_workspaces(payload)
+        count = total if total is not None else len(items)
+        if not items:
+            if count:
+                # 有总数却没有明细：如实说明，别让「字段名变了」看起来像「你没有工作区」
+                return {"ok": True, "output": f"共 {count} 个工作区，但接口未返回明细（响应字段可能已变更）"}
+            return {"ok": True, "output": "共 0 个工作区"}
+        lines = [f"共 {count} 个工作区：", ""]
         for index, item in enumerate(items, 1):
             if not isinstance(item, dict):
                 continue
             lines.append(f"{index}. {item.get('name', '')} (id={item.get('id', '')})")
-        if not items:
-            lines.append("（无工作区）")
         return {"ok": True, "output": "\n".join(lines)}
     except Exception as exc:  # noqa: BLE001 - 操作边界兜底
         return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
