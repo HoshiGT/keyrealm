@@ -129,35 +129,24 @@ def missing_distributions() -> list[str]:
 
 
 def fail_missing_deps(missing: list[str], allow_missing: bool) -> None:
-    """打显眼的缺依赖清单 + 安装命令；默认中止，``--allow-missing-deps`` 可强行继续。"""
+    """打缺依赖清单与安装命令；默认中止，``--allow-missing-deps`` 可继续。
+
+    只报「缺什么、怎么装」——它跑在哪个解释器由构建头部的 `解释器 : …` 一行给出。
+    """
     print()
     print("!" * 62)
-    print(f"依赖检查未通过：当前 Python 环境缺少 {len(missing)} 个依赖 ——")
+    print(f"依赖检查未通过：缺少 {len(missing)} 个依赖")
     for name in missing:
         print(f"  · {name}")
     print()
-    print("  这些包装不上，打出的程序就会缺功能或在运行时报错，请先安装：")
-    print("      pip install -r requirements.txt")
-    print('  （socks5 代理等 extras 依赖也在其中，如 httpx[socks] → socksio）')
-    print()
-    # 这条提示是为了省掉一类真实踩过的坑：装了包却仍报缺。
-    # 多半是「pip 装进 A、构建跑在 B」——Windows 上 `py`/`py3.14` 启动器**不会**用已激活的 venv，
-    # 它固定选系统 Python；而 PowerShell 里 `python` 才会用 venv。把解释器路径打出来一眼可辨。
-    print(f"  当前解释器：{sys.executable}")
-    print("  若你刚 pip install 过却仍缺包，多半是装到了别的解释器：")
-    print("    · 激活 venv 后用 `python scripts/build.py`（`py` / `py3.14` 启动器不用 venv）")
-    print("    · 或直接点名：`.venv\\Scripts\\python.exe scripts/build.py`")
+    print("  pip install -r requirements.txt")
     if allow_missing:
         print()
-        print("  --allow-missing-deps 已指定：忽略缺失，继续构建（产物可能不完整）。")
-        print("!" * 62)
-        print()
-        return
-    print()
-    print("  装好后重新运行本脚本。确实要忽略缺失可加 --allow-missing-deps")
+        print("  --allow-missing-deps：忽略缺失继续构建（产物可能不完整）。")
     print("!" * 62)
     print()
-    sys.exit(1)
+    if not allow_missing:
+        sys.exit(1)
 
 
 def run_capture(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
