@@ -235,6 +235,15 @@ def timeout() -> float:
 - `VAULT_TIMEOUT` 由外部环境显式设置时优先于设置页的值（与 `VAULT_PROXY` 同约定）；
 - 模块里的 `TIMEOUT` 常量退化为**默认值**，不再是唯一来源。源码见 `backend/verify_options.py`。
 
+**单次请求可以覆盖全局超时**（`make_client(request_timeout=…)`、
+`probe_openai_chat(..., timeout=…)`）：用于「一次 `verify` 里要连试多个候选、每个只给短超时」
+的厂商——例如 NVIDIA 的模型清单是过期超集，押注单个模型名必烂，于是按候选短名单逐个试
+（`plugins/llm/nvidia/plugin.py` 的 `PROBE_MODELS` / `PROBE_TIMEOUT`）。
+
+> ⚠️ 自己循环试候选时，**每个候选的超时（`httpx.TimeoutException`）与网络异常必须在插件内
+> `try` 掉**。让它冒泡到 `@guarded` 会直接结束整次 `verify`——第一个候选挂死就白费了后面的候选，
+> 表现和改之前一模一样。
+
 ---
 
 ## 2.4 欠费探测（quota_probe）
@@ -289,6 +298,10 @@ def quota_probe(data: dict):
 聊天端点还带模型后缀，通用实现拼不出来；且它有个坑：**免费档模型（ernie-speed / lite / tiny）
 不计费，欠费时照样能对话**，所以自动选型只挑付费档（`ernie-3.5-8k`）。
 
+另一个实例：`plugins/llm/nvidia/plugin.py`——NVIDIA 没有余额接口，且**模型清单是过期超集**
+（列着但已下线的模型会 `410`/`404`）。它的 `quota_probe` 直接复用 `verify` 的候选短名单逐个试，
+谁通就用谁，全试完没结论就 `None`。
+
 `quota_probe(data)` 的返回约定（后端消费，插件不必自己判断展示）：
 
 | 返回 | 含义 |
@@ -305,6 +318,13 @@ def quota_probe(data: dict):
   其它错误（401/403/429/模型不存在）**不下结论**，避免误报。自建实现请沿用同一原则。
 - **开关与模型从凭据数据里读**（`data["probe_chat"]` / `data["probe_model"]`），不经环境变量——
   数据本来就在插件手里。插件侧没有 `quota_probe` 属性时后端直接跳过，故**接入是可选的**。
+
+> **通用原则：同一个 HTTP 状态码可能含义完全不同，必须读响应体再下结论。**
+> 写 `if status in (400, 401, 403): 判无效` 之前，先确认该厂商会不会用这些码表达**非凭据问题**。
+> 两个已踩的坑：Gemini 的 `400` 既可能是 `API_KEY_INVALID`（真失效），也可能是
+> `FAILED_PRECONDITION`「出口地区不支持」（key 没问题）；NVIDIA 的 `/models` **根本不鉴权**，
+> 拿它验证会「任何 key 都有效」。判定时读 `error.status` / `details[].reason` / 错误文案，
+> 拿不准就返回 `error`（不是 `invalid`）——**假红比假绿更坑人**。
 
 ---
 

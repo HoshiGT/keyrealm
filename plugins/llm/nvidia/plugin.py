@@ -1,19 +1,42 @@
 """NVIDIA NIM API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
 
-NIM 无 /models 公开列表，改用 chat 探针（消耗极小额度，可识别欠费）。
+**鉴权只能靠 chat 端点**：`GET /v1/models` 不鉴权（匿名与真 key 返回同一份清单，
+拿它验证会「任何 key 都有效」）。`POST /v1/chat/completions` 才走鉴权
+（坏 key → 401/403，真 key → 200，欠费 → 402/429）。
+
+但 NVIDIA **会下线模型**，且各账号开通的模型不同（清单是过期超集：大量 410 Gone
+与 404 Not found for account），所以**不能赌单个模型名**——候选短名单逐个短超时试，
+命中即止（历史上的硬编码 model 就曾因「网关接受后永不响应」把真 key 必卡成超时）。
 """
 from __future__ import annotations
 
-from llm_common import VerifyResult, guarded, make_quota_probe
-from llm_protocols import probe_openai_chat, chat_completion, fetch_models, chat_completion_stream
+import httpx
+
+from llm_common import VerifyResult, guarded, probe_requested
+from llm_protocols import (
+    probe_openai_chat,
+    chat_completion,
+    fetch_models,
+    chat_completion_stream,
+    quota_chat_probe,
+)
 
 NAME = "NVIDIA NIM"
 DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
 PROTOCOL = "openai_chat"
 
-# 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费
-quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai")
-CHAT_MODEL = "deepseek-ai/deepseek-v4.1-flash"
+# 探针候选模型（按偏好排序）：verify 与欠费探测都从这里依次试，命中即止。
+# 只列「本账号实测能 200 的通用对话模型」不够通用——不同账号开通情况不同，
+# 所以靠「多个候选 + 短超时 + 换下一个」而不是押注某一个名字。
+PROBE_MODELS = (
+    "nvidia/nemotron-3-super-120b-a12b",
+    "openai/gpt-oss-20b",
+    "meta/llama-3.2-11b-vision-instruct",
+)
+# 单个候选给的超时：多个候选累加也不能太久。卡住的模型会烧满这个值再换下一个。
+PROBE_TIMEOUT = 10.0
+
+CHAT_MODEL = PROBE_MODELS[0]
 
 
 def validate(data: dict) -> list[str]:
@@ -29,6 +52,12 @@ def validate(data: dict) -> list[str]:
     return errors
 
 
+def _candidates(data: dict) -> list[str]:
+    """探针候选：凭据指定的 ``probe_model`` 优先，其后依次是内置短名单。"""
+    preferred = str((data or {}).get("probe_model") or "").strip()
+    return ([preferred] if preferred else []) + [m for m in PROBE_MODELS if m != preferred]
+
+
 def _verify(data: dict) -> VerifyResult:
     api_key = (data.get("api_key") or "").strip()
     if not api_key:
@@ -38,13 +67,53 @@ def _verify(data: dict) -> VerifyResult:
     if not base_url:
         return VerifyResult(status="error", message=f"厂商「{NAME}」需要填写 Base URL")
 
-    return probe_openai_chat(base_url, api_key, CHAT_MODEL)
+    tried: list[str] = []
+    reason = ""
+    for model in _candidates(data):
+        tried.append(model)
+        try:
+            result = probe_openai_chat(base_url, api_key, model, timeout=PROBE_TIMEOUT)
+        except httpx.TimeoutException:
+            reason = f"候选无响应（超时 {int(PROBE_TIMEOUT)} 秒）"
+            continue
+        except httpx.HTTPError as exc:
+            reason = f"网络请求失败（{type(exc).__name__}）"
+            continue
+        # 200 → 有效；401/403 → 密钥本身无效，换模型也是白换，直接定论
+        if result.status in ("valid", "invalid"):
+            return result
+        # 404 / 410 / 5xx 等：这个模型不可用，换下一个候选
+        reason = result.message
+    # 压掉末次响应里与固定开头重复的措辞，只留差异部分（如 HTTP 410）
+    detail = reason.replace("无法确认凭证状态", "").strip(" ()")
+    message = f"候选模型均不可用，未能确认凭证状态（已试 {'、'.join(tried)}）"
+    return VerifyResult(status="error", message=f"{message}：{detail}" if detail else message)
 
 
 @guarded
 def verify(data: dict) -> VerifyResult:
     """验证 API Key 是否有效。保证不抛出异常。"""
     return _verify(data or {})
+
+
+def quota_probe(data: dict) -> dict | None:
+    """欠费探测（凭据开关 ``probe_chat``，默认关）：复用 verify 的候选名单。
+
+    通用实现会「自动挑一个名字像 flash 的便宜模型」，在 NVIDIA 上正好会挑到
+    已失效/挂死的款，所以这里自己走候选名单。
+    """
+    data = data or {}
+    if not probe_requested(data):
+        return None
+    base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
+    api_key = (data.get("api_key") or "").strip()
+    if not base_url or not api_key:
+        return None
+    for model in _candidates(data):
+        verdict = quota_chat_probe(base_url, api_key, "openai", preferred_model=model)
+        if verdict:
+            return verdict
+    return None
 
 
 def list_models(data: dict) -> list:

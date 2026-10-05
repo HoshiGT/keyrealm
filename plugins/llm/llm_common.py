@@ -110,8 +110,18 @@ def proxy() -> Optional[str]:
     return None
 
 
-def make_client(follow_redirects: bool = True) -> httpx.Client:
-    return httpx.Client(timeout=timeout(), follow_redirects=follow_redirects, proxy=proxy())
+def make_client(follow_redirects: bool = True,
+                request_timeout: Optional[float] = None) -> httpx.Client:
+    """建一个 httpx 客户端（自动带上代理）。
+
+    ``request_timeout`` 为空时用全局超时 ``timeout()``；显式传入则覆盖之——
+    供「一个验证里要连试多个候选、每个只给短超时」的场景使用（见 NVIDIA 插件）。
+    """
+    return httpx.Client(
+        timeout=timeout() if request_timeout is None else request_timeout,
+        follow_redirects=follow_redirects,
+        proxy=proxy(),
+    )
 
 
 def safe_json(response: httpx.Response) -> Optional[dict]:

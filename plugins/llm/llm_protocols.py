@@ -404,11 +404,16 @@ def probe_anthropic_models(base_url: str, api_key: str, verify_path: str = "/mod
     return _interpret_simple(resp)
 
 
-def probe_openai_chat(base_url: str, api_key: str, model: str) -> VerifyResult:
-    """OpenAI 协议：POST {base}/chat/completions（消耗极小额度，可识别欠费）。"""
+def probe_openai_chat(base_url: str, api_key: str, model: str,
+                      timeout: Optional[float] = None) -> VerifyResult:
+    """OpenAI 协议：POST {base}/chat/completions（消耗极小额度，可识别欠费）。
+
+    ``timeout`` 为空时用全局超时；显式传入则单次请求用它（用于「连试多个候选
+    模型、每个只给短超时」的验证策略）。
+    """
     url = base_url.rstrip("/") + "/chat/completions"
     body = {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}
-    with make_client() as client:
+    with make_client(request_timeout=timeout) as client:
         resp = _request_with_retry(
             client, "POST", url,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},

@@ -42,28 +42,57 @@ def _org_info(payload) -> Optional[dict]:
     return info or None
 
 
+def _google_error(payload) -> tuple[str, str]:
+    """从 Google 错误体取 (status, reason)，取不到就给空串。
+
+    形如 ``{"error": {"code": 400, "message": "...", "status": "INVALID_ARGUMENT",
+    "details": [{"reason": "API_KEY_INVALID"}]}}``。
+    """
+    err = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(err, dict):
+        return "", ""
+    reason = ""
+    for item in err.get("details") or []:
+        if isinstance(item, dict) and item.get("reason"):
+            reason = str(item["reason"])
+            break
+    return str(err.get("status") or ""), reason
+
+
 def _probe(base_url: str, api_key: str) -> VerifyResult:
     url = base_url.rstrip("/") + "/models"
     with make_client() as client:
         resp = client.get(url, params={"key": api_key})
     status = resp.status_code
     payload = safe_json(resp)
+    snippet = body_snippet(resp)
     if status == 200:
         return VerifyResult(
             status="valid",
             message="凭证有效",
             account_info=_org_info(payload),
         )
-    # Google 无效 key 返回 400（INVALID_ARGUMENT）或 403
-    if status in (400, 401, 403):
-        return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
     if status == 429:
         return VerifyResult(status="valid", message="凭证有效，但触发速率限制 (HTTP 429)")
+
+    # 失败响应**不能一律按 400/403 → 无效**：同一个 400 有多种含义。
+    #   · INVALID_ARGUMENT / API_KEY_INVALID → 密钥确实无效
+    #   · FAILED_PRECONDITION / "User location is not supported" → **出口地区**不被 Gemini
+    #     支持，密钥本身没问题（换受支持地区的节点再验即可），判成无效就是假红
+    err_status, reason = _google_error(payload)
+    lowered = snippet.lower()
+    if reason == "API_KEY_INVALID" or "api key not valid" in lowered or status == 401:
+        return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
+    if err_status == "FAILED_PRECONDITION" or "location is not supported" in lowered:
+        return VerifyResult(
+            status="error",
+            message=f"出口地区不被 Gemini 支持，未能确认凭证状态（{snippet}）",
+        )
+    # 其余（403 密钥受限、5xx、未知 400）：给出 Google 的原因，不臆断为无效
     message = f"无法确认凭证状态 (HTTP {status})"
-    snippet = body_snippet(resp)
-    if snippet:
-        message = f"{message}: {snippet}"
-    return VerifyResult(status="error", message=message)
+    if err_status or reason:
+        message += f" [{reason or err_status}]"
+    return VerifyResult(status="error", message=f"{message}: {snippet}" if snippet else message)
 
 
 def _verify(data: dict) -> VerifyResult:
