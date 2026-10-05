@@ -291,6 +291,24 @@ def quota_probe(data: dict):
 
 ---
 
+## 2.5 不使用代理的插件要显式声明（USES_PROXY）
+
+「用哪个代理」是**每个凭据的通用设置**，默认所有插件都会出现该选项——判据是插件**默认走代理**
+（对应 `backend/plugin_manager.plugin_uses_proxy()`，默认 `True`）。
+
+确实不支持 HTTP 代理的插件（例如走标准库 `smtplib` 的 `mail_smtp`、无出网请求的
+`im_wechat_ilink`），在模块级显式声明即可把它从界面上隐去：
+
+```python
+USES_PROXY = False   # 本插件不经 httpx / 无出网请求，不支持 HTTP 代理
+```
+
+> 早期是用「模块里有没有 `make_client`」判定的——那样会**漏掉间接发请求的插件**：
+> 例如 NVIDIA NIM 自己没 `import make_client`，而是经 `llm_protocols` 的 `probe_openai_chat`
+> 发请求，于是被误判为「不走代理」而隐藏了选项。现改为「默认 True + 显式排除」。
+
+---
+
 ## 3. plugin.py 接口
 
 必须暴露 `verify(data)`；可选 `validate(data)` 与 `get_display_summary(data)`。
@@ -413,6 +431,10 @@ def get_display_summary(data):
 - 点下去后按**目标 action 的 `kind`** 分派：`form` → 打开表单并预填；`list` → 下钻；其它 → 直接执行。
 - 所以**同一个 action 既可以被菜单直接调用、又可以被某一行调用**，靠 `params` 里有没有值来区分。例如
   `add_record` 直接调用时让用户填域名，从某一行调用时自动带上域名。
+- **纯下钻操作不进顶层菜单**：若某个 action 只被别的 action 当 `row_action` 目标、且自身没有任何
+  `fields`（点了也没参数可填），前端会把它从「操作」菜单里隐去——否则用户点进去只会得到一句
+  「缺少 xxx」。它仍照常被行内按钮调用；要让它也能单独用，就给它加上可填的 `fields`
+  （例如 `list_records` 加一个 `domain` 输入框）。
 
 #### 3.1.3 `save_to`：下载类操作（会自动弹「另存为」）
 
@@ -607,10 +629,15 @@ qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）。
 - **dns**：
   - dnspod / godaddy / cloudflare —— **域名（站点）列表 → 行内「解析」下钻到解析记录 → 行内「修改」**，
     以及行内「新增」；前两者是 `write`，Cloudflare 用同一个表单（留空 `record_id` 即新增）
-  - duckdns —— 查看当前解析（它没有域名列表/新增解析的开放接口，只有 DoH 查询）
+  - duckdns —— 当前解析（`list`：A / TXT 两行）→ 行内「修改」下钻到「更新解析」（`write`），
+    另有「清除 TXT」（`write`）。DuckDNS 没有域名列表接口（一个 token 对应自有子域名），
+    查询经 Cloudflare DoH；更新/清除走其 `update` 接口
 - **cloud**：aliyun / tencentcloud 同构 ——
-  `whoami`（身份 + **探测到的权限**）· `list_instances`（云主机）·
-  `list_buckets`（**对象存储**桶列表）→ 行内「预览」下钻 `list_objects`（对象 key/大小/时间，前 50）
+  `whoami`（身份 + **探测到的权限**）· `list_regions`（**地域列表**，含中文名）→ 行内「实例」下钻
+  `list_instances`（云主机，`region` 可预填可手填）· `list_buckets`（**对象存储**桶列表）→
+  行内「预览」下钻 `list_objects`（**区分文件夹前缀与文件**，可继续进入前缀）；
+  文件行「下载」（`save_to` 单对象）、文件夹行「打包下载」（`download_prefix`，本地打成 zip 后 `save_to`，
+  对象数/总字节有上限，超出会如实报错而非静默截断）
 - **dev**：github —— 账号信息（含 `X-OAuth-Scopes` 权限）· **仓库列表 → 行内「打包下载」（`save_to`，弹另存为）**
   与行内「详情」下钻；huggingface / wandb —— 查看账号信息
 - **im**：feishu —— 应用信息与权限 · 机器人信息 · 用户详情（按 `open_id` 或邮箱）· 群组 · 知识库 · 云文档；
