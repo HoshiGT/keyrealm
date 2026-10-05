@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 
+import { api } from '@/api'
 import { useMcpStore } from '@/stores/mcp'
 import { useAppStore } from '@/stores/app'
 import { copyText } from '@/utils/clipboard'
@@ -17,9 +18,42 @@ const revealedToken = ref(null)
 
 onMounted(() => {
   mcpStore.refreshAll().catch((err) => ElMessage.error(err.message || '加载 MCP 状态失败'))
+  loadListen().catch(() => {})
 })
 
 const serverUrl = computed(() => mcpStore.serverUrl)
+
+// ── 监听地址 ─────────────────────────────────────────
+const listenHost = ref('127.0.0.1')
+const listenPort = ref(8765)
+const savingListen = ref(false)
+
+async function loadListen() {
+  const options = await api.getMcpOptions()
+  listenHost.value = (options && options.host) || '127.0.0.1'
+  listenPort.value = (options && options.port) || 8765
+}
+
+async function saveListen() {
+  savingListen.value = true
+  try {
+    const result = await api.setMcpOptions(listenHost.value, listenPort.value)
+    if (result && result.ok === false) {
+      ElMessage.error(result.message || '保存失败')
+      return
+    }
+    await mcpStore.fetchStatus()
+    ElMessage.success(
+      result.restarted
+        ? `已在 ${result.host}:${result.port} 重启服务`
+        : `监听地址已保存为 ${result.host}:${result.port}（服务未运行，下次启动生效）`,
+    )
+  } catch (err) {
+    ElMessage.error(err.message || '保存失败')
+  } finally {
+    savingListen.value = false
+  }
+}
 
 async function toggleServer() {
   try {
@@ -28,6 +62,10 @@ async function toggleServer() {
       ElMessage.success('MCP 服务已停止')
     } else {
       const result = await mcpStore.start()
+      if (result && result.ok === false) {
+        ElMessage.error(result.message || '启动失败')
+        return
+      }
       ElMessage.success(`MCP 服务已启动：${result.url}`)
     }
     await appStore.refreshTray()
@@ -42,6 +80,8 @@ const SENSITIVE_TOOLS = new Set([
   'vault_create_credential',
   'vault_update_credential',
   'vault_delete_credential',
+  'vault_export_backup',
+  'vault_import_backup',
 ])
 
 async function togglePermission(toolName, enabled) {
@@ -117,10 +157,32 @@ async function copyClientConfig() {
           <code class="mono">{{ mcpStore.running ? serverUrl : '—' }}</code>
           <el-button v-if="mcpStore.running" text size="small" @click="copyUrl">复制</el-button>
         </el-descriptions-item>
-        <el-descriptions-item label="活跃 Token">{{ mcpStore.status.active_tokens }} 个</el-descriptions-item>
         <el-descriptions-item label="传输协议">SSE (Server-Sent Events)</el-descriptions-item>
         <el-descriptions-item label="鉴权方式">Bearer Token</el-descriptions-item>
       </el-descriptions>
+
+      <!-- 监听地址：改完保存即生效；服务在运行则按新地址重启 -->
+      <div class="listen-row">
+        <span class="token-label">监听地址</span>
+        <el-input v-model="listenHost" class="listen-host" placeholder="127.0.0.1" />
+        <span class="listen-colon">:</span>
+        <el-input-number
+          v-model="listenPort"
+          :min="1"
+          :max="65535"
+          :controls="false"
+          class="listen-port"
+        />
+        <el-button
+          type="primary"
+          size="small"
+          :loading="savingListen"
+          @click="saveListen"
+        >保存并重启</el-button>
+        <span class="text-muted token-hint">
+          默认 127.0.0.1:8765；端口被占用会报错且不自动更换
+        </span>
+      </div>
 
       <div class="token-row">
         <span class="token-label">访问 Token</span>
@@ -138,7 +200,6 @@ async function copyClientConfig() {
         >
           {{ mcpStore.running ? '停止服务' : '启动服务' }}
         </el-button>
-        <el-button :icon="Refresh" @click="mcpStore.fetchStatus()">刷新</el-button>
         <el-button text @click="copyClientConfig">复制客户端配置</el-button>
       </div>
 
@@ -155,7 +216,6 @@ async function copyClientConfig() {
       <template #header>
         <div class="card-header">
           <span>工具权限（全局开关）</span>
-          <span class="text-muted">关闭后所有 Token 均无法调用该工具</span>
         </div>
       </template>
 
@@ -250,5 +310,29 @@ async function copyClientConfig() {
 
 .token-row .el-button {
   margin-left: auto;
+}
+
+.listen-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.listen-row .token-label {
+  min-width: 60px;
+}
+
+.listen-host {
+  width: 170px;
+}
+
+.listen-port {
+  width: 96px;
+}
+
+.listen-colon {
+  color: var(--el-text-color-secondary);
 }
 </style>

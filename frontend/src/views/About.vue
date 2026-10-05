@@ -57,15 +57,6 @@ onMounted(() => {
           Python 3.11+ · pywebview · SQLite · cryptography
         </el-descriptions-item>
       </el-descriptions>
-
-      <el-alert type="info" :closable="false" show-icon class="about-alert">
-        <template #title>数据存储与安全</template>
-        <template #default>
-          所有凭据仅保存在本机数据库中，使用由主密码派生的密钥加密（AES-256-GCM）。
-          除验证时向对应服务商发起请求外，任何凭据明文都不会离开本机；
-          通过 MCP 提供给 AI Agent 的明文访问受工具权限与 Token 范围双重控制。
-        </template>
-      </el-alert>
     </el-card>
   </div>
 </template>
@@ -92,9 +83,5 @@ onMounted(() => {
 .about-sub {
   font-size: 12px;
   margin-top: 2px;
-}
-
-.about-alert {
-  margin-top: 16px;
 }
 </style>

@@ -2,9 +2,10 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Edit, Expand, Fold, Plus, Refresh, Search, SetUp } from '@element-plus/icons-vue'
+import { Back, Delete, Edit, Expand, Fold, Plus, Refresh, Search, SetUp, Sort } from '@element-plus/icons-vue'
 
 import CredentialForm from '@/components/CredentialForm.vue'
+import ScopeDefaultsDialog from '@/components/ScopeDefaultsDialog.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { useVaultStore } from '@/stores/vault'
 import { STATUS_OPTIONS, formatDateTimeFull } from '@/utils/format'
@@ -17,7 +18,9 @@ const vaultStore = useVaultStore()
 
 const formVisible = ref(false)
 const editing = ref(null)
-const verifyingId = ref(null)
+// 正在验证中的凭据 id 列表：逐条独立，互不影响——只记单个 id 的话，点了 A 再点 B
+// 会让 A 的按钮重新可点，重复触发同一凭据的验证。
+const verifyingIds = ref([])
 const batchStarting = ref(false)
 
 const filters = vaultStore.filters
@@ -38,6 +41,12 @@ const createDefaultType = computed(() => {
 // ── 批量验证：手动勾选（含一键全选）后并发验证 ──
 const batchPickVisible = ref(false)
 const batchPickIds = ref([])
+
+// 运行参数：打开对话框时从后端回填，点「验证」时随本次验证一起保存。
+// 边界（min/max）由后端下发，避免前后端各写一份常量。
+const batchConcurrency = ref(8)
+const batchTimeout = ref(20)
+const batchLimits = ref({ concurrency_range: [1, 32], timeout_range: [5, 300] })
 
 /** 该类型是否允许批量验证（manifest batch_verify=false 的类型只能手动单条验证） */
 function canBatchVerify(type) {
@@ -62,6 +71,17 @@ const pickIndeterminate = computed(
 function openBatchPick() {
   batchPickIds.value = pickableCredentials.value.map((c) => c.id)
   batchPickVisible.value = true
+  // 回填上次保存的并发数 / 超时与取值范围（失败不阻塞对话框，沿用本地默认值）
+  vaultStore
+    .fetchBatchOptions()
+    .then((opt) => {
+      if (!opt || opt.ok === false) return
+      batchConcurrency.value = Number(opt.concurrency) || batchConcurrency.value
+      batchTimeout.value = Number(opt.timeout) || batchTimeout.value
+      if (opt.concurrency_range) batchLimits.value.concurrency_range = opt.concurrency_range
+      if (opt.timeout_range) batchLimits.value.timeout_range = opt.timeout_range
+    })
+    .catch(() => {})
 }
 
 function onPickAll(checked) {
@@ -74,7 +94,8 @@ async function startPickedBatch() {
   batchPickVisible.value = false
   batchStarting.value = true
   try {
-    await vaultStore.batchVerify('all', null, null, ids)
+    await vaultStore.batchVerify('all', null, null, ids,
+      batchConcurrency.value, batchTimeout.value)
   } catch (err) {
     ElMessage.error(err.message || '批量验证启动失败')
   } finally {
@@ -82,13 +103,12 @@ async function startPickedBatch() {
   }
 }
 
-// ── 简易操作（插件可选能力，例如 LLM 简单对话）──
+// ── 简易操作（插件可选能力：简单对话 / 表单 / 列表）──
 /**
  * 对话框的初始状态只在这里定义一份。
  *
- * 模板会直接读 models / modelsLoading 等字段（如 `!actionDialog.models.length`），
- * 字段缺失会在渲染时抛 TypeError 让整个弹窗内容渲染失败、看起来像卡死，
- * 所以「初始化」和「打开对话框」必须共用同一份字段定义，避免再次漏字段。
+ * 模板会直接读 models / listRows 等字段，字段缺失会在渲染时抛 TypeError 让整个弹窗内容
+ * 渲染失败、看起来像卡死，所以「初始化」和「打开对话框」必须共用同一份字段定义。
  */
 function blankActionDialog() {
   return {
@@ -97,17 +117,39 @@ function blankActionDialog() {
     actionId: '',
     kind: '',
     title: '',
+    actions: [],       // 该凭据声明的全部操作（行内动作要按 id 找到目标操作）
+    description: '',   // 操作的说明（菜单里与对话框顶部都会展示）
+    row: null,         // 由行内动作打开时，记住那一行（save_to 的文件名模板要用）
+    // ── chat ──
     model: '',
     models: [],
     modelsLoading: false,
     streamId: null,
+    messages: [],
+    input: '',
+    modelError: '',
+    // ── form ──
     fields: [],
     values: {},
     submitLabel: '运行',
     write: false,
+    saveTo: null,      // 声明了 save_to 的操作：执行前先弹「另存为」
     output: '',
-    messages: [],
-    input: '',
+    formRows: [],      // form 操作也可以返回 rows（例如「查用户详情」），有就渲染成表格
+    // ── list ──
+    listTitle: '',
+    listCrumb: [],     // 下钻路径（面包屑），点「返回」逐级还原
+    listColumns: [],
+    listRows: [],
+    listRowActions: [],
+    listEmptyText: '',
+    listLoading: false,
+    listError: '',
+    listTotal: null,
+    listHasMore: false,
+    listParams: {},    // 本次列表请求用的参数（「刷新」重跑要用）
+    listStack: [],     // 下钻栈：返回时直接还原上一帧，不必重新请求
+    // ── 公共 ──
     busy: false,
     error: '',
   }
@@ -118,28 +160,77 @@ const actionDialog = ref(blankActionDialog())
 /** 模型列表拉取失败的提示：不阻塞对话，只提示用户回退为手动输入模型名 */
 const MODELS_ERROR = '获取模型列表失败，请手动输入模型名'
 
-/** 拉取该凭据可用模型列表（失败则回退为手动输入模型名） */
+// 「模型列表常驻」有两层意思：按钮一直在（随时可刷新），以及重开对话框不必再等网络。
+const modelsCache = new Map()
+
+/** 拉取该凭据可用模型列表 */
 async function loadModels() {
   const dialog = actionDialog.value
   if (!dialog.credentialId || dialog.modelsLoading) return
+  const cached = modelsCache.get(dialog.credentialId)
+  if (cached && !dialog.models.length) dialog.models = [...cached]
   dialog.modelsLoading = true
-  // 清掉上一次拉取留下的提示，避免重试成功后仍显示旧错误
-  if (dialog.error === MODELS_ERROR) dialog.error = ''
+  dialog.modelError = ''
   try {
     const list = await api.listCredentialModels(dialog.credentialId)
-    dialog.models = Array.isArray(list) ? list : []
-    // 后端取模型列表失败时是静默返回空数组的（见 plugin_base.call_list_models），
-    // 不提示的话用户只会看到一个空下拉框，不知道可以直接手动填模型名。
-    if (!dialog.models.length) dialog.error = MODELS_ERROR
+    const models = Array.isArray(list) ? list : []
+    if (models.length) {
+      dialog.models = models
+      modelsCache.set(dialog.credentialId, [...models])
+      // 只在用户还没选过时自动取第一个；已经有选择就**绝不覆写**
+      // （否则刷新一次就把人挑好的模型换掉了）
+      if (!dialog.model) dialog.model = models[0]
+    } else {
+      dialog.modelError = MODELS_ERROR
+    }
   } catch {
-    dialog.models = []
-    dialog.error = MODELS_ERROR
+    // 失败时保留已有的列表与选择，只提示
+    dialog.modelError = MODELS_ERROR
   } finally {
     dialog.modelsLoading = false
   }
 }
 
-async function openActions(row) {
+// ── 操作权限探测（插件可选 capabilities）──
+// 懒加载 + 会话内缓存；**不落 localStorage**（服务端权限会变，缓存旧结果会错误地藏掉能用的操作）。
+const capsCache = new Map()
+
+async function loadCapabilities(credentialId, { force = false } = {}) {
+  const fallback = { available: null, note: '', error: true }
+  if (!credentialId) return fallback
+  if (!force && capsCache.has(credentialId)) return capsCache.get(credentialId)
+  try {
+    const caps = await api.credentialCapabilities(credentialId)
+    const normalized = {
+      // available === null 表示「未知 → 全部可用」（fail-open：探测抖一下不能把能用的操作藏掉）
+      available: caps && Array.isArray(caps.available) ? caps.available.map(String) : null,
+      note: (caps && caps.note) || '',
+      error: !!(caps && caps.error),
+    }
+    capsCache.set(credentialId, normalized)
+    return normalized
+  } catch {
+    capsCache.set(credentialId, fallback)
+    return fallback
+  }
+}
+
+/** 按 capabilities 过滤：声明了但不可用 → 隐藏；available 里没对应声明 → 静默丢弃 */
+function filterActions(actions, caps) {
+  if (!caps || caps.available === null) return actions
+  const allowed = new Set(caps.available)
+  return actions.filter((a) => allowed.has(String(a.id)))
+}
+
+const actionMenu = ref({ visible: false, x: 0, y: 0, row: null, items: [], all: [], note: '', pending: false })
+
+function closeActionMenu() {
+  actionMenu.value.visible = false
+}
+
+/** 点「操作」：0 个 → 提示；1 个 → 直接进；≥2 个 → 弹选择菜单 */
+async function openActions(row, event) {
+  closeActionMenu()
   let actions = []
   try {
     actions = await api.listCredentialActions(row.id)
@@ -147,9 +238,66 @@ async function openActions(row) {
     ElMessage.error(err.message || '获取操作失败')
     return
   }
-  const action = (actions || []).find((a) => a.kind === 'chat') || (actions || [])[0]
-  if (!action) {
+  actions = Array.isArray(actions) ? actions : []
+  if (!actions.length) {
     ElMessage.info('该凭据暂无可用操作')
+    return
+  }
+
+  // 单个操作直接进，保住原有的一键体验；只有实现 capabilities 的插件才会真的联网探测
+  if (actions.length === 1) {
+    const caps = await loadCapabilities(row.id)
+    if (caps.available !== null && caps.available.length === 0) {
+      ElMessageBox.alert(caps.note || '当前凭据没有任何可用操作权限', '无可用操作', {
+        type: 'warning',
+        confirmButtonText: '知道了',
+      }).catch(() => {})
+      return
+    }
+    openAction(row, actions[0], {}, { actions })
+    return
+  }
+
+  const sorted = [...actions].sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
+  const rect = event && event.currentTarget ? event.currentTarget.getBoundingClientRect() : null
+  actionMenu.value = {
+    visible: true,
+    x: rect ? rect.left : (event?.clientX ?? 0),
+    y: rect ? rect.bottom + 4 : (event?.clientY ?? 0),
+    row,
+    items: sorted,
+    all: sorted,
+    note: '',
+    pending: true,
+  }
+  // 菜单先按声明全列出，权限探测回来再收敛（避免「先显示后消失」的抖动）
+  loadCapabilities(row.id).then((caps) => {
+    if (!actionMenu.value.visible) return
+    const available = filterActions(sorted, caps)
+    actionMenu.value.items = available
+    actionMenu.value.note = caps.note
+    actionMenu.value.pending = false
+    if (!available.length) {
+      closeActionMenu()
+      ElMessageBox.alert(caps.note || '当前凭据没有任何可用操作权限', '无可用操作', {
+        type: 'warning',
+        confirmButtonText: '知道了',
+      }).catch(() => {})
+    }
+  })
+}
+
+function pickFromMenu(action) {
+  const row = actionMenu.value.row
+  const all = actionMenu.value.all
+  closeActionMenu()
+  if (row) openAction(row, action, {}, { actions: all })
+}
+
+/** 统一入口：按 kind 分派到 chat / form / list */
+function openAction(cred, action, seed = {}, extra = {}) {
+  if ((action.kind || '') === 'list') {
+    openList(cred, action, seed, extra.actions || [])
     return
   }
   const fields = action.fields || []
@@ -157,30 +305,221 @@ async function openActions(row) {
   fields.forEach((f) => {
     values[f.key] = f.default !== undefined && f.default !== null ? f.default : ''
   })
-  // 基于初始状态展开，保证 fields 之外的字段（models / modelsLoading / streamId …）一个都不少
+  Object.assign(values, seed || {})
+  // 基于初始状态展开，保证 fields 之外的字段（models / listRows / …）一个都不少
   actionDialog.value = {
     ...blankActionDialog(),
     visible: true,
-    credentialId: row.id,
+    credentialId: cred.id,
     actionId: action.id,
     kind: action.kind || '',
-    title: `${action.name || '操作'} · ${row.name}`,
+    title: `${action.name || '操作'} · ${cred.name}`,
+    description: action.description || '',
+    actions: extra.actions || [action],
+    row: extra.row || null,
     model: action.model || '',
     fields,
     values,
     submitLabel: action.submit || '运行',
     write: !!action.write,
+    saveTo: action.save_to || null,
   }
   // 模型列表要联网拉取，这里刻意不 await：先让弹窗渲染出来，加载过程由 modelsLoading 表达，
   // 否则网络慢时用户看到的是一个迟迟不出现的弹窗（表现为「卡住」）。
   if (actionDialog.value.kind === 'chat') loadModels()
 }
 
-/** 写操作确认文案：仅列出非密码字段的取值 */
+// ── 列表类操作（kind: "list"）──
+
+function listFrame(dialog) {
+  return {
+    actionId: dialog.actionId,
+    title: dialog.listTitle,
+    columns: dialog.listColumns,
+    rows: dialog.listRows,
+    rowActions: dialog.listRowActions,
+    emptyText: dialog.listEmptyText,
+    total: dialog.listTotal,
+    hasMore: dialog.listHasMore,
+    params: dialog.listParams,
+  }
+}
+
+function applyFrame(dialog, frame) {
+  dialog.actionId = frame.actionId
+  dialog.listTitle = frame.title
+  dialog.listColumns = frame.columns
+  dialog.listRows = frame.rows
+  dialog.listRowActions = frame.rowActions
+  dialog.listEmptyText = frame.emptyText
+  dialog.listTotal = frame.total
+  dialog.listHasMore = frame.hasMore
+  dialog.listParams = frame.params
+  dialog.listError = ''
+}
+
+function openList(cred, action, params = {}, actionsOverride = []) {
+  const dialog = actionDialog.value
+  const sameCredential = dialog.credentialId === cred.id && dialog.visible
+  const crumb = sameCredential && dialog.listTitle
+    ? [...dialog.listCrumb, dialog.listTitle]
+    : []
+  // 行内动作要按 id 找到「目标操作」，所以必须一直带着完整操作表
+  const known = (actionsOverride && actionsOverride.length)
+    ? actionsOverride
+    : (dialog.actions.length ? dialog.actions : [action])
+  actionDialog.value = {
+    ...(sameCredential ? dialog : blankActionDialog()),
+    visible: true,
+    credentialId: cred.id,
+    actionId: action.id,
+    kind: 'list',
+    title: `${action.name || '列表'} · ${cred.name}`,
+    description: action.description || '',
+    actions: known,
+    listTitle: action.name || '列表',
+    listCrumb: crumb,
+    listColumns: action.columns || [],
+    listRows: [],
+    listRowActions: action.row_actions || [],
+    listEmptyText: action.empty_text || '暂无数据',
+    listParams: params || {},
+    listError: '',
+    listLoading: true,
+    error: '',
+    busy: false,
+    // 列表操作也能带 fields（例如「收件箱」要选拉取封数/文件夹）：渲染成表头上方一行表单，
+    // 点「拉取/刷新」时把表单值并进 params。从某一行下钻时，行参数先填进去当默认值。
+    fields: action.fields || [],
+    values: buildInitialValues(action, params),
+    submitLabel: action.submit || '刷新',
+  }
+  fetchList(action.id, dialog.listParams)
+}
+
+/** 表单初始值：field.default 打底，行参数（下钻/行内动作带来的）覆盖 */
+function buildInitialValues(action, seed) {
+  const values = {}
+  ;(action.fields || []).forEach((field) => {
+    values[field.key] = field.default !== undefined && field.default !== null ? field.default : ''
+  })
+  Object.assign(values, seed || {})
+  return values
+}
+
+/** 结果没给 columns 时，按第一行的键兜底造列（插件偷懒也不至于空表） */
+function deriveColumns(rows) {
+  if (!Array.isArray(rows) || !rows.length || typeof rows[0] !== 'object') return []
+  return Object.keys(rows[0]).map((key) => ({ key, label: key }))
+}
+
+async function fetchList(actionId, params) {
+  const dialog = actionDialog.value
+  dialog.listLoading = true
+  dialog.listError = ''
+  try {
+    const res = await api.runCredentialAction(dialog.credentialId, actionId, params || {})
+    dialog.listRows = Array.isArray(res.rows) ? res.rows : []
+    dialog.listColumns = (Array.isArray(res.columns) && res.columns.length)
+      ? res.columns
+      : (dialog.listColumns.length ? dialog.listColumns : deriveColumns(dialog.listRows))
+    if (res.row_actions) dialog.listRowActions = res.row_actions
+    if (res.empty_text) dialog.listEmptyText = res.empty_text
+    dialog.listTotal = res.total ?? null
+    dialog.listHasMore = !!res.has_more
+  } catch (err) {
+    dialog.listError = err.message || '加载失败'
+  } finally {
+    dialog.listLoading = false
+  }
+}
+
+/** 「拉取/刷新」：基础参数（下钻带进来的）+ 表单里当前的值 */
+function listRequestParams() {
+  const dialog = actionDialog.value
+  return { ...dialog.listParams, ...dialog.values }
+}
+
+function refreshList() {
+  const dialog = actionDialog.value
+  if (dialog.kind !== 'list' || dialog.listLoading) return
+  fetchList(dialog.actionId, listRequestParams())
+}
+
+/** 「返回」：还原上一帧（不重新请求） */
+function popList() {
+  const dialog = actionDialog.value
+  const stack = [...dialog.listStack]
+  const frame = stack.pop()
+  if (!frame) return
+  dialog.listStack = stack
+  dialog.listCrumb = dialog.listCrumb.slice(0, -1)
+  applyFrame(dialog, frame)
+}
+
+// 行内动作的参数模板：只认 `$row.<列key>`，解析不到就禁用该按钮（绝不把 undefined 发出去）
+const ROW_REF = /^\$row\.(.+)$/
+
+function resolveRowParams(template, row) {
+  const out = {}
+  for (const [key, value] of Object.entries(template || {})) {
+    if (typeof value === 'string') {
+      const matched = value.match(ROW_REF)
+      if (matched) {
+        const actual = (row || {})[matched[1]]
+        if (actual === undefined || actual === null || actual === '') return null
+        out[key] = actual
+        continue
+      }
+    }
+    out[key] = value
+  }
+  return out
+}
+
+function rowActionDisabled(rowAction, row) {
+  return resolveRowParams(rowAction.params, row) === null
+}
+
+function findAction(actionId) {
+  return actionDialog.value.actions.find((a) => a.id === actionId) || null
+}
+
+function runRowAction(rowAction, row) {
+  const params = resolveRowParams(rowAction.params, row)
+  if (params === null) return
+  const target = findAction(rowAction.id)
+  if (!target) {
+    ElMessage.warning(`未找到操作「${rowAction.id}」`)
+    return
+  }
+  const kind = target.kind || ''
+  if (kind === 'list') {
+    // 下钻：把当前帧压栈，返回时直接还原
+    actionDialog.value.listStack = [...actionDialog.value.listStack, listFrame(actionDialog.value)]
+    openList({ id: actionDialog.value.credentialId }, target, params)
+    return
+  }
+  if (kind === 'form') {
+    // 打开表单并用行参数预填；确认留到提交时（预填后就弹确认等于白问）
+    openAction({ id: actionDialog.value.credentialId }, target, params, {
+      actions: actionDialog.value.actions,
+      row,
+    })
+    return
+  }
+  // 其它（含 chat）：与普通操作一致
+  openAction({ id: actionDialog.value.credentialId }, target, params, {
+    actions: actionDialog.value.actions,
+    row,
+  })
+}
+
+/** 写操作确认文案：只列**非敏感**字段的取值（密码、令牌一律不进确认框） */
 function actionSummary() {
   const dialog = actionDialog.value
   const parts = dialog.fields
-    .filter((field) => field.type !== 'password')
+    .filter((field) => field.type !== 'password' && !field.sensitive)
     .map((field) => {
       const value = dialog.values[field.key]
       return value === undefined || value === null || value === '' ? '' : `${field.label}=${value}`
@@ -189,34 +528,85 @@ function actionSummary() {
   return parts.join('，')
 }
 
+/** 写操作的二次确认；返回 true 表示用户确认。 */
+async function confirmWrite() {
+  const dialog = actionDialog.value
+  const summary = actionSummary()
+  const actionName = String(dialog.title || '').split(' · ')[0]
+  try {
+    await ElMessageBox.confirm(
+      `此操作会改动远端数据${summary ? `（${summary}）` : ''}。确认执行「${actionName}」？`,
+      '确认写操作',
+      {
+        type: 'warning',
+        confirmButtonText: '确认执行',
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** save_to 的文件名模板：支持 `$row.<列key>`（与 params 同一套语法） */
+function resolveSaveName() {
+  const dialog = actionDialog.value
+  const raw = String((dialog.saveTo && dialog.saveTo.default_name) || '')
+  if (!raw) return ''
+  // 模板里有变量却拿不到那一行（比如用户从菜单直接点「打包下载」而不是从某一行点的）
+  // → 宁可留空让用户自己起名，也不要甩一个字面的 "$row.name.zip" 到保存框里
+  if (/\$row\./.test(raw) && !dialog.row) return ''
+  const filled = raw.replace(/\$row\.([A-Za-z0-9_]+)/g, (whole, key) => {
+    const value = dialog.row ? dialog.row[key] : undefined
+    return value === undefined || value === null || value === '' ? whole : String(value)
+  })
+  return /\$row\./.test(filled) ? '' : filled
+}
+
+/** 弹「另存为」并返回路径；空串 = 用户取消 */
+async function pickSavePath() {
+  try {
+    const res = await api.pickSavePath(resolveSaveName())
+    return (res && res.path) || ''
+  } catch (err) {
+    ElMessage.error(err.message || '选择保存路径失败')
+    return ''
+  }
+}
+
 async function runActionForm() {
   const dialog = actionDialog.value
   if (dialog.busy) return
-  if (dialog.write) {
-    const summary = actionSummary()
-    const actionName = dialog.title.split(' · ')[0]
-    try {
-      await ElMessageBox.confirm(
-        `此操作会改动远端数据${summary ? `（${summary}）` : ''}。确认执行「${actionName}」？`,
-        '确认写操作',
-        {
-          type: 'warning',
-          confirmButtonText: '确认执行',
-          cancelButtonText: '取消',
-          confirmButtonClass: 'el-button--danger',
-        },
-      )
-    } catch {
-      return
-    }
+  // 顺序：先确认（写操作）→ 再选保存路径 → 最后执行。
+  // 先让人起好文件名再问「确定吗」是反的，而且取消确认不该弹出系统对话框。
+  if (dialog.write && !(await confirmWrite())) return
+
+  const params = { ...dialog.values }
+  if (dialog.saveTo) {
+    const path = await pickSavePath()
+    if (!path) return
+    params[dialog.saveTo.key || 'path'] = path
   }
+
   dialog.busy = true
   dialog.error = ''
   dialog.output = ''
   try {
-    const res = await api.runCredentialAction(dialog.credentialId, dialog.actionId, { ...dialog.values })
-    if (res && res.ok) dialog.output = res.output || '（无输出）'
-    else dialog.error = (res && res.error) || '执行失败'
+    const res = await api.runCredentialAction(dialog.credentialId, dialog.actionId, params)
+    if (res && res.ok) {
+      dialog.output = res.output || (Array.isArray(res.rows) && res.rows.length ? '' : '（无输出）')
+      // 表单操作也可能返回 rows（契约里允许）——有就渲染成表格，而不是只留一行字
+      dialog.formRows = Array.isArray(res.rows) ? res.rows : []
+      if (Array.isArray(res.columns) && res.columns.length) {
+        dialog.listColumns = res.columns
+      } else if (dialog.formRows.length && !dialog.listColumns.length) {
+        dialog.listColumns = deriveColumns(dialog.formRows)
+      }
+    } else {
+      dialog.error = (res && res.error) || '执行失败'
+    }
   } catch (err) {
     dialog.error = err.message || '执行失败'
   } finally {
@@ -225,13 +615,31 @@ async function runActionForm() {
 }
 
 // ── 流式对话：后端逐段推送 vault:action_stream，前端按 stream_id 追加 ──
+
+/** 把本轮那条（通常还是空的）助手占位气泡改成红色报错——报错留在对话流里，
+ *  与普通对话同形，而不是在聊天框下方另起一条提示。 */
+function failAssistant(dialog, message) {
+  const last = dialog.messages[dialog.messages.length - 1]
+  if (last && last.role === 'assistant') {
+    // 已经流出了部分内容时保留下来，报错另起一行，避免把已生成的内容一并吞掉
+    last.content = last.content ? `${last.content}\n\n${message}` : message
+    last.error = true
+  } else {
+    dialog.messages.push({ role: 'assistant', content: message, error: true })
+  }
+  dialog.busy = false
+}
+
 function handleActionStream(detail) {
   const dialog = actionDialog.value
   if (!detail || !dialog.streamId || detail.stream_id !== dialog.streamId) return
   if (detail.done) {
     dialog.busy = false
     dialog.streamId = null
-    if (detail.error) dialog.error = detail.error
+    if (detail.error) {
+      failAssistant(dialog, detail.error)
+      return
+    }
     const last = dialog.messages[dialog.messages.length - 1]
     // 终态用后端净化后的完整 output 覆盖已显示的流式内容：
     // 逐块 delta 净化无法处理被切断的密钥，覆盖可兜底。
@@ -253,27 +661,25 @@ async function sendChat() {
   const text = (dialog.input || '').trim()
   if (!text || dialog.busy) return
   dialog.messages.push({ role: 'user', content: text })
-  const payloadMessages = dialog.messages.map((m) => ({ role: m.role, content: m.content }))
+  // 报错气泡只是给用户看的，别当成历史回复喂给模型（空内容同理）
+  const payloadMessages = dialog.messages
+    .filter((m) => !m.error && m.content)
+    .map((m) => ({ role: m.role, content: m.content }))
   dialog.messages.push({ role: 'assistant', content: '' })
   dialog.input = ''
   dialog.busy = true
-  dialog.error = ''
   try {
     const res = await api.streamCredentialAction(dialog.credentialId, dialog.actionId, {
       model: dialog.model,
       messages: payloadMessages,
     })
     if (res && res.ok === false) {
-      dialog.error = res.error || '执行失败'
-      dialog.messages.pop()
-      dialog.busy = false
+      failAssistant(dialog, res.error || '执行失败')
       return
     }
     dialog.streamId = res.stream_id
   } catch (err) {
-    dialog.error = err.message || '执行失败'
-    dialog.messages.pop()
-    dialog.busy = false
+    failAssistant(dialog, err.message || '执行失败')
   }
 }
 
@@ -322,6 +728,7 @@ const ACCOUNT_INFO_LABELS = {
   first_name: '名称',
   scopes: '权限',
   plan: '套餐',
+  chat_probe: '实测',
   accountType: '账户类型',
   canTrade: '可交易',
   canWithdraw: '可提现',
@@ -448,22 +855,49 @@ function toggleTreeCollapsed() {
 }
 
 // ── 目录树右键菜单：删除插件（连其凭据一并删除）──
-const ctxMenu = ref({ visible: false, x: 0, y: 0, type: '', name: '' })
+const ctxMenu = ref({
+  visible: false, x: 0, y: 0, name: '',
+  scope: 'plugin', scopeKey: '', credentialType: '', canDelete: false,
+})
 
+// 类别节点与服务节点都可右键：类别给「类别默认设置」，服务节点另有「删除插件」
 function onTreeContextMenu(event, data) {
-  if (!data || !data.credential_type) return // 仅服务节点（插件）可删除
+  if (!data) return
+  const isCategory = !!data.category && !data.credential_type
+  const isService = !!data.credential_type
+  if (!isCategory && !isService) return
   event.preventDefault()
   ctxMenu.value = {
     visible: true,
     x: event.clientX,
     y: event.clientY,
-    type: data.credential_type,
     name: data.label,
+    scope: isService ? 'plugin' : 'category',
+    scopeKey: isService ? data.credential_type : (data.category || data.rel_path || ''),
+    credentialType: isService ? data.credential_type : '',
+    canDelete: isService,
   }
 }
 
 function closeCtxMenu() {
   ctxMenu.value.visible = false
+  closeActionMenu()
+}
+
+// ── 类别 / 插件默认设置 ─────────────────────────────────
+const scopeDialog = ref({ visible: false, scope: 'plugin', scopeKey: '', credentialType: '', title: '' })
+
+function openScopeDefaults() {
+  const { scope, scopeKey, credentialType, name } = ctxMenu.value
+  closeCtxMenu()
+  if (!scopeKey) return
+  scopeDialog.value = {
+    visible: true,
+    scope,
+    scopeKey,
+    credentialType,
+    title: `${scope === 'category' ? '类别' : '插件'}默认设置：${name}`,
+  }
 }
 
 async function deletePluginFromTree() {
@@ -746,6 +1180,66 @@ onBeforeUnmount(() => {
   dragCleanup = []
 })
 
+// ── 排序：只影响展示顺序，持久化 localStorage ──────────────
+
+const SORT_FIELD_KEY = 'vault.credentials.sortField'
+const SORT_DIR_KEY = 'vault.credentials.sortDir'
+
+const SORT_FIELDS = [
+  { value: 'created_at', label: '添加时间' },
+  { value: 'name', label: '名称' },
+  { value: 'status', label: '状态' },
+  { value: 'last_verified', label: '最后验证' },
+  { value: 'last_valid', label: '最后有效' },
+  { value: 'group', label: '分组' },
+]
+const SORT_FIELD_VALUES = SORT_FIELDS.map((item) => item.value)
+const SORT_DIRS = [
+  { value: 'asc', label: '升序' },
+  { value: 'desc', label: '降序' },
+]
+
+const sortField = ref(
+  SORT_FIELD_VALUES.includes(localStorage.getItem(SORT_FIELD_KEY))
+    ? localStorage.getItem(SORT_FIELD_KEY)
+    : 'created_at',
+)
+const sortDir = ref(localStorage.getItem(SORT_DIR_KEY) === 'asc' ? 'asc' : 'desc')
+watch(sortField, (value) => localStorage.setItem(SORT_FIELD_KEY, value))
+watch(sortDir, (value) => localStorage.setItem(SORT_DIR_KEY, value))
+
+// 状态排序权重：需要处理的排前面（配合「升序」= 异常优先）
+const STATUS_ORDER = { invalid: 0, error: 1, unknown: 2, valid: 3 }
+
+/** 时间字符串 → 可比较的毫秒数（空值/非法值一律当 0，即最早） */
+function timeValue(value) {
+  const parsed = Date.parse(value || '')
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+const nameCollator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' })
+
+/** 各排序依据的比较函数：一律写成「升序」方向，方向由外层统一翻转 */
+const SORT_COMPARATORS = {
+  created_at: (a, b) => timeValue(a.created_at) - timeValue(b.created_at),
+  name: (a, b) => nameCollator.compare(a.name || '', b.name || ''),
+  status: (a, b) =>
+    (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9) ||
+    nameCollator.compare(a.name || '', b.name || ''),
+  last_verified: (a, b) => timeValue(a.last_verified_at) - timeValue(b.last_verified_at),
+  last_valid: (a, b) => timeValue(a.last_valid_at) - timeValue(b.last_valid_at),
+  group: (a, b) =>
+    nameCollator.compare(a.group_name || '', b.group_name || '') ||
+    nameCollator.compare(a.name || '', b.name || ''),
+}
+
+const sortedCredentials = computed(() => {
+  const rows = [...(vaultStore.credentials || [])]
+  const compare = SORT_COMPARATORS[sortField.value] || SORT_COMPARATORS.created_at
+  const sign = sortDir.value === 'asc' ? 1 : -1
+  return rows.sort((a, b) => sign * compare(a, b))
+})
+
 // ── 数据加载与操作 ────────────────────────────────────────
 
 async function load() {
@@ -794,7 +1288,8 @@ function openEdit(row) {
 }
 
 async function verifyRow(row) {
-  verifyingId.value = row.id
+  if (verifyingIds.value.includes(row.id)) return // 已在验证中：忽略重复点击
+  verifyingIds.value = [...verifyingIds.value, row.id]
   try {
     const result = await vaultStore.verifyCredential(row.id)
     if (result.status === 'valid') ElMessage.success(`${row.name}：验证通过`)
@@ -802,7 +1297,7 @@ async function verifyRow(row) {
   } catch (err) {
     ElMessage.error(err.message || '验证失败')
   } finally {
-    verifyingId.value = null
+    verifyingIds.value = verifyingIds.value.filter((id) => id !== row.id)
   }
 }
 
@@ -859,6 +1354,12 @@ onMounted(async () => {
       <h2 class="section-title">凭据管理</h2>
       <span class="text-muted">共 {{ vaultStore.credentials.length }} 条</span>
       <div class="spacer" />
+      <el-select v-model="sortField" class="sort-field" :prefix-icon="Sort">
+        <el-option v-for="opt in SORT_FIELDS" :key="opt.value" :label="opt.label" :value="opt.value" />
+      </el-select>
+      <el-select v-model="sortDir" class="sort-dir">
+        <el-option v-for="opt in SORT_DIRS" :key="opt.value" :label="opt.label" :value="opt.value" />
+      </el-select>
       <el-popover placement="bottom-end" :width="200" trigger="click">
         <template #reference>
           <el-button :icon="SetUp">列设置</el-button>
@@ -981,7 +1482,7 @@ onMounted(async () => {
         <el-table
           ref="tableRef"
           v-loading="vaultStore.loadingCredentials"
-          :data="vaultStore.credentials"
+          :data="sortedCredentials"
           empty-text="暂无凭据，点击右上角「添加凭据」开始"
           style="width: 100%"
         >
@@ -1042,7 +1543,7 @@ onMounted(async () => {
                 <el-button
                   v-if="pluginFor(row.credential_type)?.has_actions"
                   size="small"
-                  @click="openActions(row)"
+                  @click="openActions(row, $event)"
                 >
                   操作
                 </el-button>
@@ -1050,7 +1551,7 @@ onMounted(async () => {
                   size="small"
                   type="primary"
                   plain
-                  :loading="verifyingId === row.id"
+                  :loading="verifyingIds.includes(row.id)"
                   @click="verifyRow(row)"
                 >
                   验证
@@ -1079,6 +1580,33 @@ onMounted(async () => {
         <span class="pick-count text-muted">
           已选 {{ batchPickIds.length }} / {{ pickableCredentials.length }}
         </span>
+      </div>
+      <div class="pick-options">
+        <span class="pick-opt">
+          <span class="text-muted">并发线程数</span>
+          <el-input-number
+            v-model="batchConcurrency"
+            :min="batchLimits.concurrency_range[0]"
+            :max="batchLimits.concurrency_range[1]"
+            :step="1"
+            step-strictly
+            size="small"
+            controls-position="right"
+          />
+        </span>
+        <span class="pick-opt">
+          <span class="text-muted">超时（秒）</span>
+          <el-input-number
+            v-model="batchTimeout"
+            :min="batchLimits.timeout_range[0]"
+            :max="batchLimits.timeout_range[1]"
+            :step="1"
+            step-strictly
+            size="small"
+            controls-position="right"
+          />
+        </span>
+        <span class="text-muted pick-opt-hint">并发越高越快，但可能触发目标限流</span>
       </div>
       <div class="pick-list">
         <el-checkbox-group v-model="batchPickIds">
@@ -1118,16 +1646,49 @@ onMounted(async () => {
       @click="closeCtxMenu"
       @contextmenu.prevent="closeCtxMenu"
     />
+    <!-- 多个操作时的选择菜单（单个操作会直接进，不经过这里） -->
+    <div
+      v-if="actionMenu.visible"
+      class="ctx-menu action-menu"
+      :style="{ left: `${actionMenu.x}px`, top: `${actionMenu.y}px` }"
+      @click.stop
+    >
+      <div
+        v-for="item in actionMenu.items"
+        :key="item.id"
+        class="ctx-item"
+        @click="pickFromMenu(item)"
+      >
+        <div>{{ item.name || item.id }}</div>
+        <div v-if="item.description" class="ctx-desc">{{ item.description }}</div>
+      </div>
+      <div v-if="actionMenu.pending" class="ctx-hint">正在检测权限…</div>
+      <div v-else-if="actionMenu.note" class="ctx-hint">{{ actionMenu.note }}</div>
+    </div>
+
     <div
       v-if="ctxMenu.visible"
       class="ctx-menu"
       :style="{ left: `${ctxMenu.x}px`, top: `${ctxMenu.y}px` }"
     >
-      <div class="ctx-item is-danger" @click="deletePluginFromTree">
+      <div class="ctx-item" @click="openScopeDefaults">
+        <el-icon><SetUp /></el-icon>
+        {{ ctxMenu.scope === 'category' ? '类别默认设置' : '插件默认设置' }}
+      </div>
+      <div v-if="ctxMenu.canDelete" class="ctx-item is-danger" @click="deletePluginFromTree">
         <el-icon><Delete /></el-icon>
         删除插件「{{ ctxMenu.name }}」
       </div>
     </div>
+
+    <!-- 类别 / 插件默认设置（与「插件管理」页共用同一个对话框） -->
+    <ScopeDefaultsDialog
+      v-model="scopeDialog.visible"
+      :scope="scopeDialog.scope"
+      :scope-key="scopeDialog.scopeKey"
+      :credential-type="scopeDialog.credentialType"
+      :title="scopeDialog.title"
+    />
 
     <el-dialog
       v-model="actionDialog.visible"
@@ -1135,6 +1696,8 @@ onMounted(async () => {
       width="640px"
       :close-on-click-modal="false"
     >
+      <div v-if="actionDialog.description" class="action-desc">{{ actionDialog.description }}</div>
+
       <template v-if="actionDialog.kind === 'chat'">
         <div class="chat-model">
           <span class="text-muted">模型</span>
@@ -1150,12 +1713,15 @@ onMounted(async () => {
           >
             <el-option v-for="m in actionDialog.models" :key="m" :label="m" :value="m" />
           </el-select>
+          <!-- 常驻：随时可刷新；拉过一次后会缓存在会话里，重开对话框不必再等网络 -->
           <el-button
-            v-if="!actionDialog.models.length"
             size="small"
             :loading="actionDialog.modelsLoading"
             @click="loadModels"
-          >获取模型列表</el-button>
+          >{{ actionDialog.models.length ? '刷新模型列表' : '获取模型列表' }}</el-button>
+          <span v-if="actionDialog.modelError" class="chat-model-error">
+            {{ actionDialog.modelError }}
+          </span>
         </div>
         <div class="chat-box">
           <div
@@ -1164,7 +1730,7 @@ onMounted(async () => {
             class="chat-msg"
             :class="msg.role"
           >
-            <div class="chat-bubble">{{ msg.content }}</div>
+            <div class="chat-bubble" :class="{ 'is-error': msg.error }">{{ msg.content }}</div>
           </div>
           <el-empty
             v-if="!actionDialog.messages.length"
@@ -1172,7 +1738,6 @@ onMounted(async () => {
             :image-size="50"
           />
         </div>
-        <div v-if="actionDialog.error" class="chat-error">{{ actionDialog.error }}</div>
         <div class="chat-input">
           <el-input
             v-model="actionDialog.input"
@@ -1218,7 +1783,144 @@ onMounted(async () => {
         </div>
         <div v-if="actionDialog.error" class="chat-error">{{ actionDialog.error }}</div>
         <pre v-if="actionDialog.output" class="action-output">{{ actionDialog.output }}</pre>
+        <el-table
+          v-if="actionDialog.formRows.length"
+          :data="actionDialog.formRows"
+          size="small"
+          max-height="300"
+          class="mt-10"
+        >
+          <el-table-column
+            v-for="col in actionDialog.listColumns"
+            :key="col.key"
+            :prop="col.key"
+            :label="col.label"
+            :min-width="120"
+            show-overflow-tooltip
+          />
+        </el-table>
       </template>
+      <!-- 列表类操作：表格 + 行内动作 + 下钻 -->
+      <template v-else-if="actionDialog.kind === 'list'">
+        <div class="list-toolbar">
+          <el-button
+            v-if="actionDialog.listStack.length"
+            size="small"
+            :icon="Back"
+            @click="popList"
+          >返回</el-button>
+          <span class="list-crumb">
+            <template v-for="(crumb, index) in actionDialog.listCrumb" :key="index">{{ crumb }} / </template>
+            <strong>{{ actionDialog.listTitle }}</strong>
+          </span>
+          <span v-if="actionDialog.listTotal !== null" class="text-muted">
+            共 {{ actionDialog.listTotal }} 条{{ actionDialog.listHasMore ? '（仅显示部分）' : '' }}
+          </span>
+          <el-button
+            size="small"
+            :icon="Refresh"
+            :loading="actionDialog.listLoading"
+            @click="refreshList"
+          >刷新</el-button>
+        </div>
+
+        <!-- 列表参数：例如「收件箱」要选拉取封数/文件夹 -->
+        <el-form
+          v-if="actionDialog.fields.length"
+          class="list-fields"
+          size="small"
+          :inline="true"
+          @submit.prevent
+        >
+          <el-form-item
+            v-for="field in actionDialog.fields"
+            :key="field.key"
+            :label="field.label"
+          >
+            <el-select
+              v-if="field.type === 'select'"
+              v-model="actionDialog.values[field.key]"
+              :placeholder="field.placeholder || '请选择'"
+              clearable
+            >
+              <el-option
+                v-for="option in field.options || []"
+                :key="option"
+                :label="option"
+                :value="option"
+              />
+            </el-select>
+            <el-input
+              v-else
+              v-model="actionDialog.values[field.key]"
+              :placeholder="field.placeholder || ''"
+              :style="{ width: field.type === 'text' ? '160px' : '200px' }"
+            />
+          </el-form-item>
+          <el-form-item>
+            <el-button
+              type="primary"
+              :loading="actionDialog.listLoading"
+              @click="refreshList"
+            >{{ actionDialog.submitLabel }}</el-button>
+          </el-form-item>
+        </el-form>
+
+        <el-alert v-if="actionDialog.listError" type="error" :closable="false" show-icon class="list-error">
+          <template #title>
+            {{ actionDialog.listError }}
+            <el-button link size="small" @click="refreshList">重试</el-button>
+          </template>
+        </el-alert>
+
+        <el-table
+          v-else
+          v-loading="actionDialog.listLoading"
+          :data="actionDialog.listRows"
+          size="small"
+          max-height="380"
+        >
+          <el-table-column
+            v-for="col in actionDialog.listColumns"
+            :key="col.key"
+            :prop="col.key"
+            :label="col.label"
+            :width="col.width || ''"
+            :min-width="col.width ? 0 : 120"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              <code v-if="col.mono" class="mono">{{ row[col.key] ?? '—' }}</code>
+              <el-tag v-else-if="col.type === 'tag'" size="small" effect="plain">
+                {{ row[col.key] ?? '—' }}
+              </el-tag>
+              <span v-else>{{ row[col.key] ?? '—' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            v-if="actionDialog.listRowActions.length"
+            label="操作"
+            width="190"
+            fixed="right"
+          >
+            <template #default="{ row }">
+              <el-button
+                v-for="rowAction in actionDialog.listRowActions"
+                :key="rowAction.id"
+                size="small"
+                text
+                type="primary"
+                :disabled="rowActionDisabled(rowAction, row)"
+                @click="runRowAction(rowAction, row)"
+              >{{ rowAction.label || rowAction.id }}</el-button>
+            </template>
+          </el-table-column>
+          <template #empty>
+            <el-empty :description="actionDialog.listEmptyText || '暂无数据'" :image-size="50" />
+          </template>
+        </el-table>
+      </template>
+
       <el-empty v-else description="该操作暂无可视化界面" :image-size="60" />
     </el-dialog>
 
@@ -1408,6 +2110,29 @@ onMounted(async () => {
   font-size: 12px;
 }
 
+.pick-options {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.pick-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.pick-opt .el-input-number {
+  width: 104px;
+}
+
+.pick-opt-hint {
+  font-size: 12px;
+}
+
 .pick-list {
   max-height: 46vh;
   overflow-y: auto;
@@ -1475,8 +2200,16 @@ onMounted(async () => {
 .chat-model {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+/* 模型列表拉取失败的提示：占满一行落在下拉框下方，不挤压「获取模型列表」按钮 */
+.chat-model-error {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--el-color-danger);
 }
 
 .chat-model-select {
@@ -1514,6 +2247,12 @@ onMounted(async () => {
 
 .chat-msg.user .chat-bubble {
   background: var(--el-color-primary-light-8);
+}
+
+/* 报错气泡：与普通回复同形，仅换红字红底，便于在对话流中一眼看出 */
+.chat-bubble.is-error {
+  color: var(--el-color-danger);
+  background: var(--el-color-danger-light-9);
 }
 
 .chat-error {
@@ -1594,5 +2333,62 @@ onMounted(async () => {
 
 .table-card :deep(.el-table__header-wrapper th.is-drag-over) {
   border-left: 2px solid var(--el-color-primary);
+}
+
+.list-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.list-crumb {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.list-crumb strong {
+  color: var(--el-text-color-primary);
+}
+
+.list-error {
+  margin-bottom: 10px;
+}
+
+.list-fields {
+  margin-bottom: 4px;
+}
+
+.action-desc {
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.ctx-desc {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.mt-10 {
+  margin-top: 10px;
+}
+
+.action-menu {
+  min-width: 160px;
+}
+
+.ctx-hint {
+  padding: 4px 10px 2px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.sort-field {
+  width: 132px;
+}
+
+.sort-dir {
+  width: 96px;
 }
 </style>

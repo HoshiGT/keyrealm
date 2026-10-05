@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Connection,
   Document,
@@ -12,7 +12,6 @@ import {
   Grid,
   InfoFilled,
   Key,
-  Rank,
   RefreshLeft,
   Setting,
   Lock,
@@ -129,7 +128,16 @@ function onDrop(item, event) {
   localStorage.setItem(NAV_ORDER_KEY, JSON.stringify(list.map((i) => i.path)))
 }
 
-function resetNavOrder() {
+async function resetNavOrder() {
+  try {
+    await ElMessageBox.confirm(
+      '将把侧栏菜单恢复到默认顺序，当前的自定义排列会被清除。是否继续？',
+      '恢复默认顺序',
+      { type: 'warning', confirmButtonText: '恢复', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
   localStorage.removeItem(NAV_ORDER_KEY)
   navItems.value = NAV_ITEMS.slice()
   resetDrag()
@@ -195,6 +203,22 @@ async function handleMinimize() {
         <span v-show="!collapsed" class="brand-text">Credential Vault</span>
       </div>
 
+      <!-- 预留位：后续功能按钮加在这里 -->
+      <div class="aside-toolbar">
+        <el-tooltip
+          :content="collapsed ? '展开侧栏' : '收起侧栏'"
+          :placement="collapsed ? 'right' : 'bottom'"
+        >
+          <el-button text @click="collapsed = !collapsed">
+            <el-icon><component :is="collapsed ? Expand : Fold" /></el-icon>
+          </el-button>
+        </el-tooltip>
+        <el-tooltip v-if="isCustomOrder" content="恢复默认顺序" placement="bottom">
+          <el-button text :icon="RefreshLeft" @click="resetNavOrder" />
+        </el-tooltip>
+        <span class="toolbar-spacer" />
+      </div>
+
       <el-menu :default-active="activePath" :collapse="collapsed" :collapse-transition="false" router class="layout-menu">
         <el-menu-item
           v-for="item in navItems"
@@ -215,27 +239,6 @@ async function handleMinimize() {
           <template #title>{{ item.title }}</template>
         </el-menu-item>
       </el-menu>
-
-      <div v-show="!collapsed" class="nav-hint">
-        <el-icon><Rank /></el-icon>
-        <span>拖拽菜单项可调整顺序</span>
-      </div>
-
-      <div class="aside-footer">
-        <el-button text class="collapse-btn" @click="collapsed = !collapsed">
-          <el-icon><component :is="collapsed ? Expand : Fold" /></el-icon>
-          <span v-show="!collapsed">收起侧栏</span>
-        </el-button>
-        <el-button
-          v-if="isCustomOrder && !collapsed"
-          text
-          class="collapse-btn"
-          :icon="RefreshLeft"
-          @click="resetNavOrder"
-        >
-          恢复默认顺序
-        </el-button>
-      </div>
     </el-aside>
 
     <el-container>
@@ -246,7 +249,6 @@ async function handleMinimize() {
             <span class="mcp-indicator" :class="appStore.tray.mcp_running ? 'is-on' : 'is-off'">
               <i class="dot" />
               MCP {{ appStore.tray.mcp_running ? '运行中' : '已停止' }}
-              <template v-if="appStore.tray.active_tokens">· {{ appStore.tray.active_tokens }} Token</template>
             </span>
           </el-tooltip>
 
@@ -419,27 +421,29 @@ async function handleMinimize() {
   overflow-y: auto;
 }
 
-.nav-hint {
+.aside-toolbar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--el-text-color-secondary);
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--el-border-color);
 }
 
-.aside-footer {
-  border-top: 1px solid var(--el-border-color);
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.aside-toolbar .el-button {
+  padding: 6px;
 }
 
-.collapse-btn {
-  width: 100%;
+.toolbar-spacer {
+  margin-left: auto;
+}
+
+.layout-aside.is-collapsed .aside-toolbar {
   justify-content: center;
+  padding: 6px 2px;
+}
+
+.layout-aside.is-collapsed .toolbar-spacer {
+  display: none;
 }
 
 .layout-header {

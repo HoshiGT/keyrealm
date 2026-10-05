@@ -5,6 +5,7 @@ import { Connection, Delete, Edit, Key, Lock, Plus, Refresh, Timer, VideoPlay } 
 
 import { api } from '@/api'
 import { useAppStore } from '@/stores/app'
+import { useProxyStore } from '@/stores/proxy'
 import { useVaultStore } from '@/stores/vault'
 import { formatDateTime, formatRelative } from '@/utils/format'
 
@@ -370,52 +371,98 @@ async function removeSchedule(row) {
   }
 }
 
-/* ── 验证代理 ───────────────────────────────────────── */
-const proxyValue = ref('')
-const proxySaving = ref(false)
+/* ── 验证代理（多代理注册表 + 全局默认） ────────────────
+   代理一律按 id 引用；测试的进行态与结果放在 store 里，切页不会丢。 */
 
-async function loadProxy() {
-  try {
-    const config = await api.getProxy()
-    proxyValue.value = config.proxy || ''
-  } catch (err) {
-    ElMessage.error(err.message || '加载代理配置失败')
-  }
+const proxyStore = useProxyStore()
+
+const proxyDialog = ref(false)
+const proxySaving = ref(false)
+const proxyForm = reactive({ id: null, name: '', url: '' })
+
+const globalProxyValue = computed(() => proxyStore.globalId ?? '')
+
+function openCreateProxy() {
+  proxyForm.id = null
+  proxyForm.name = ''
+  proxyForm.url = ''
+  proxyDialog.value = true
+}
+
+function openEditProxy(item) {
+  proxyForm.id = item.id
+  proxyForm.name = item.name
+  proxyForm.url = item.url
+  proxyDialog.value = true
 }
 
 async function saveProxy() {
+  const name = proxyForm.name.trim()
+  const url = proxyForm.url.trim()
+  if (!name) {
+    ElMessage.warning('请填写代理名称')
+    return
+  }
+  if (!url) {
+    ElMessage.warning('请填写代理地址')
+    return
+  }
   proxySaving.value = true
   try {
-    const res = await api.setProxy(proxyValue.value)
-    ElMessage.success(res && res.proxy ? '验证代理已保存' : '已切换为直连（不使用代理）')
-    // 代理变了，旧的测试结论即失效，避免用户误读
-    proxyTest.value = null
+    if (proxyForm.id) {
+      await proxyStore.update(proxyForm.id, name, url)
+      ElMessage.success('代理已更新')
+    } else {
+      await proxyStore.create(name, url)
+      ElMessage.success('代理已新增')
+    }
+    // 地址变了旧结论就失效，避免用户对着过期结果下判断
+    proxyStore.clearResult()
+    proxyDialog.value = false
   } catch (err) {
-    ElMessage.error(err.message || '保存代理失败')
+    ElMessage.error(err.message || '保存失败')
   } finally {
     proxySaving.value = false
   }
 }
 
-/* 代理连通性测试：后端同一批探测分别走直连与代理，前端只负责展示对照结果 */
-const proxyTesting = ref(false)
-const proxyTest = ref(null)
-
-async function runProxyTest() {
-  proxyTesting.value = true
-  proxyTest.value = null
+async function removeProxy(item) {
   try {
-    // 传当前输入框的值：允许「先测再存」，不用为了测试先保存一次配置
-    const result = await api.testProxy(proxyValue.value)
+    await ElMessageBox.confirm(
+      `确定删除代理「${item.name}」吗？引用它的凭据会自动回退到全局代理。`,
+      '删除代理',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await proxyStore.remove(item.id)
+    ElMessage.success('代理已删除')
+  } catch (err) {
+    ElMessage.error(err.message || '删除失败')
+  }
+}
+
+async function changeGlobalProxy(value) {
+  try {
+    await proxyStore.setGlobal(value === '' ? null : value)
+    ElMessage.success(value === '' ? '全局已切换为直连' : '已设为全局默认代理')
+  } catch (err) {
+    ElMessage.error(err.message || '设置失败')
+    await proxyStore.fetch().catch(() => {})
+  }
+}
+
+/* 代理连通性测试：后端同一批探测分别走直连与代理，前端只负责展示对照结果 */
+async function runProxyTest(id = null) {
+  try {
+    const result = await proxyStore.runTest(id)
     if (result && result.ok === false) {
-      ElMessage.error(result.message || '代理地址无效')
-      return
+      ElMessage.error(result.message || '代理测试失败')
     }
-    proxyTest.value = result
   } catch (err) {
     ElMessage.error(err.message || '代理测试失败')
-  } finally {
-    proxyTesting.value = false
   }
 }
 
@@ -479,7 +526,7 @@ onMounted(async () => {
   await Promise.all([
     loadSchedules(),
     loadCloseAction(),
-    loadProxy(),
+    proxyStore.fetch().catch(() => {}),
     vaultStore.fetchGroups().catch(() => {}),
     vaultStore.fetchPlugins().catch(() => {}),
     appStore.refreshTray().catch(() => {}),
@@ -616,65 +663,97 @@ onMounted(async () => {
     <el-card shadow="never">
       <template #header><span>网络与代理</span></template>
 
+      <!-- 全局默认代理：凭据没单独指定时用它 -->
       <div class="setting-row">
         <div class="setting-info">
-          <div class="setting-label">验证代理</div>
+          <div class="setting-label">默认代理</div>
           <div class="setting-desc">
-            验证凭据时使用的代理，留空表示直连。支持 http / https / socks5，例如
-            socks5://127.0.0.1:10808。也可用环境变量 VAULT_PROXY 覆盖（环境变量优先）。
+            凭据没有单独指定代理时用它。可在下面维护多个代理、各自取名；其它模块一律按 id 引用。
+            支持 http / https / socks5。环境变量 VAULT_PROXY 仍可覆盖（外部变量优先）。
           </div>
         </div>
         <div class="inline-row">
-          <el-input
-            v-model="proxyValue"
-            class="proxy-input"
-            placeholder="socks5://127.0.0.1:10808"
-            clearable
-          />
-          <el-button type="primary" :loading="proxySaving" @click="saveProxy">保存</el-button>
-          <el-button :icon="Connection" :loading="proxyTesting" @click="runProxyTest">
-            测试代理
-          </el-button>
+          <el-select v-model="globalProxyValue" class="proxy-input" @change="changeGlobalProxy">
+            <el-option value="" label="直连（不使用代理）" />
+            <el-option
+              v-for="item in proxyStore.items"
+              :key="item.id"
+              :value="item.id"
+              :label="`${item.name}（${item.url}）`"
+            />
+          </el-select>
+          <el-button
+            :icon="Connection"
+            :loading="proxyStore.testing && proxyStore.testingId === null"
+            @click="runProxyTest(null)"
+          >测试当前</el-button>
         </div>
       </div>
 
-      <!-- 测试结果：直连 / 代理两组对照，外加综合结论 -->
-      <template v-if="proxyTest || proxyTesting">
+      <el-divider />
+
+      <div class="proxy-list-head">
+        <span class="setting-label">代理列表</span>
+        <el-button size="small" :icon="Plus" @click="openCreateProxy">新增代理</el-button>
+      </div>
+
+      <el-empty
+        v-if="!proxyStore.items.length"
+        description="还没有代理，点「新增代理」添加"
+        :image-size="48"
+      />
+      <div v-else class="proxy-list">
+        <div v-for="item in proxyStore.items" :key="item.id" class="proxy-item">
+          <el-tag v-if="proxyStore.globalId === item.id" size="small" type="success" effect="plain">默认</el-tag>
+          <span class="proxy-name">{{ item.name }}</span>
+          <code class="mono proxy-url">{{ item.url }}</code>
+          <el-button
+            size="small"
+            :loading="proxyStore.testing && proxyStore.testingId === item.id"
+            @click="runProxyTest(item.id)"
+          >测试</el-button>
+          <el-button size="small" :icon="Edit" @click="openEditProxy(item)" />
+          <el-button size="small" type="danger" plain :icon="Delete" @click="removeProxy(item)" />
+        </div>
+      </div>
+
+      <!-- 测试结果：直连 / 代理两组对照，外加综合结论（状态在 store 里，切页不丢） -->
+      <template v-if="proxyStore.result || proxyStore.testing">
         <el-divider />
 
-        <div v-if="proxyTesting && !proxyTest" class="probe-loading">
+        <div v-if="proxyStore.testing && !proxyStore.result" class="probe-loading">
           正在探测直连与代理出口，最多约 10 秒…
         </div>
 
         <el-alert
-          v-if="proxyTest && proxyTest.verdict"
-          :type="verdictType(proxyTest.verdict.level)"
-          :title="proxyTest.verdict.headline"
+          v-if="proxyStore.result && proxyStore.result.verdict"
+          :type="verdictType(proxyStore.result.verdict.level)"
+          :title="proxyStore.result.verdict.headline"
           :closable="false"
           show-icon
         >
           <ul class="verdict-list">
-            <li v-for="(line, index) in proxyTest.verdict.details" :key="index">{{ line }}</li>
+            <li v-for="(line, index) in proxyStore.result.verdict.details" :key="index">{{ line }}</li>
           </ul>
         </el-alert>
 
-        <div v-if="proxyTest" class="probe-grid">
+        <div v-if="proxyStore.result" class="probe-grid">
           <div class="probe-card">
             <div class="probe-title">不挂代理（直连）</div>
             <div class="probe-row">
               <span class="probe-k">出口 IP</span>
-              <span class="probe-v">{{ probeIpText(proxyTest.direct && proxyTest.direct.ip) }}</span>
+              <span class="probe-v">{{ probeIpText(proxyStore.result.direct && proxyStore.result.direct.ip) }}</span>
             </div>
             <div class="probe-row">
               <span class="probe-k">国内站点</span>
-              <span class="probe-v" :class="probeClass(proxyTest.direct && proxyTest.direct.domestic)">
-                {{ probeSiteText(proxyTest.direct && proxyTest.direct.domestic) }}
+              <span class="probe-v" :class="probeClass(proxyStore.result.direct && proxyStore.result.direct.domestic)">
+                {{ probeSiteText(proxyStore.result.direct && proxyStore.result.direct.domestic) }}
               </span>
             </div>
             <div class="probe-row">
               <span class="probe-k">国外站点</span>
-              <span class="probe-v" :class="probeClass(proxyTest.direct && proxyTest.direct.foreign)">
-                {{ probeSiteText(proxyTest.direct && proxyTest.direct.foreign) }}
+              <span class="probe-v" :class="probeClass(proxyStore.result.direct && proxyStore.result.direct.foreign)">
+                {{ probeSiteText(proxyStore.result.direct && proxyStore.result.direct.foreign) }}
               </span>
             </div>
           </div>
@@ -682,23 +761,25 @@ onMounted(async () => {
           <div class="probe-card">
             <div class="probe-title">
               挂代理
-              <span v-if="proxyTest.proxy" class="text-muted">（{{ proxyTest.proxy_source || '已配置' }}）</span>
+              <span v-if="proxyStore.result.proxy" class="text-muted">
+                （{{ proxyStore.result.proxy }}）
+              </span>
             </div>
-            <template v-if="proxyTest.proxied">
+            <template v-if="proxyStore.result.proxied">
               <div class="probe-row">
                 <span class="probe-k">出口 IP</span>
-                <span class="probe-v">{{ probeIpText(proxyTest.proxied.ip) }}</span>
+                <span class="probe-v">{{ probeIpText(proxyStore.result.proxied.ip) }}</span>
               </div>
               <div class="probe-row">
                 <span class="probe-k">国内站点</span>
-                <span class="probe-v" :class="probeClass(proxyTest.proxied.domestic)">
-                  {{ probeSiteText(proxyTest.proxied.domestic) }}
+                <span class="probe-v" :class="probeClass(proxyStore.result.proxied.domestic)">
+                  {{ probeSiteText(proxyStore.result.proxied.domestic) }}
                 </span>
               </div>
               <div class="probe-row">
                 <span class="probe-k">国外站点</span>
-                <span class="probe-v" :class="probeClass(proxyTest.proxied.foreign)">
-                  {{ probeSiteText(proxyTest.proxied.foreign) }}
+                <span class="probe-v" :class="probeClass(proxyStore.result.proxied.foreign)">
+                  {{ probeSiteText(proxyStore.result.proxied.foreign) }}
                 </span>
               </div>
             </template>
@@ -707,6 +788,28 @@ onMounted(async () => {
         </div>
       </template>
     </el-card>
+
+    <!-- 新增 / 编辑代理 -->
+    <el-dialog
+      v-model="proxyDialog"
+      :title="proxyForm.id ? '编辑代理' : '新增代理'"
+      width="460px"
+      :close-on-click-modal="false"
+    >
+      <el-form label-position="top">
+        <el-form-item label="名称">
+          <el-input v-model="proxyForm.name" placeholder="例如：生产梯子 / 本机 Clash" clearable />
+        </el-form-item>
+        <el-form-item label="代理地址">
+          <el-input v-model="proxyForm.url" placeholder="socks5://127.0.0.1:10808" clearable />
+          <div class="field-hint">需带协议前缀，支持 http / https / socks4 / socks5 / socks5h</div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="proxyDialog = false">取消</el-button>
+        <el-button type="primary" :loading="proxySaving" @click="saveProxy">保存</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 修改主密码 -->
     <el-dialog v-model="passwordDialog" title="修改主密码" width="480px" :close-on-click-modal="false">
@@ -975,6 +1078,45 @@ onMounted(async () => {
 
 .proxy-input {
   width: 280px;
+}
+
+/* ── 代理列表 ───────────────────────────────────────── */
+.proxy-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.proxy-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.proxy-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.proxy-item:last-child {
+  border-bottom: none;
+}
+
+.proxy-name {
+  min-width: 110px;
+  font-size: 13px;
+}
+
+.proxy-url {
+  flex: 1;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .close-select {

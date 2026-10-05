@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { useVaultStore } from '@/stores/vault'
 import { api } from '@/api'
+import ProxySelect from '@/components/ProxySelect.vue'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -90,6 +91,41 @@ function schemaDefaults(list, source = {}) {
   return data
 }
 
+// ── 代理选择 + 类别/插件默认设置 ──────────────────────────
+
+const proxyMode = ref('global')
+const proxyId = ref(null)
+// 该插件的请求是否走代理（mail_smtp 用标准库 smtplib，不走 HTTP 代理，显示此项只会误导）
+const usesProxy = ref(true)
+// 后端按「子模块预设 > 上层模块预设 > 全局」算好的实际出口，用于下拉里那项的括注
+const inheritedProxy = ref('')
+
+/**
+ * 拉取该插件的默认设置。
+ * `apply=true`（新建）时才把默认值注入表单——编辑时套默认会把用户显式清空的字段复活。
+ */
+async function loadDefaults(credentialType, { apply = false } = {}) {
+  if (!credentialType) return
+  try {
+    const res = await api.getCredentialDefaults(credentialType)
+    usesProxy.value = !res || res.uses_proxy !== false
+    inheritedProxy.value = (res && res.inherited_proxy) || ''
+    const values = (res && res.values) || {}
+    if (apply) {
+      Object.entries(values).forEach(([key, value]) => {
+        if (key.startsWith('_')) return          // 保留键单独处理
+        const current = form.data[key]
+        if (current === undefined || current === null || current === '') form.data[key] = value
+      })
+      // **代理不从默认设置预填**：预填等于把它烤成「条目设置」，从此永远压着插件/类别预设，
+      // 以后改预设对已有凭据就不生效了。凭据的默认状态就该是「跟随上层设置」，
+      // 由后端在验证时按 凭据 > 插件预设 > 类别预设 > 全局 实时解析。
+    }
+  } catch {
+    usesProxy.value = true
+  }
+}
+
 async function resetForm() {
   const existing = props.credential
   const targetId = existing && existing.id ? existing.id : null
@@ -103,15 +139,22 @@ async function resetForm() {
     const schema = (plugin && plugin.fields_schema) || []
     // 先用非敏感字段同步预填，再拉取完整明文补全敏感字段（避免空值覆盖密钥）
     form.data = schemaDefaults(schema, existing.data_plain || {})
+    const plain = existing.data_plain || {}
+    proxyMode.value = plain._proxy_mode || 'global'
+    proxyId.value = plain._proxy_id ?? null
     try {
       const full = await api.getCredential(targetId)
       // 防止快速切换时把旧结果写进新表单
       if (props.credential && props.credential.id === targetId && full && full.data) {
         form.data = schemaDefaults(schema, full.data)
+        proxyMode.value = full.data._proxy_mode || 'global'
+        proxyId.value = full.data._proxy_id ?? null
       }
     } catch {
       // 拉取失败则回退到 data_plain（非敏感字段）
     }
+    // 编辑时不套默认（否则会把用户显式清空的字段复活），只取 uses_proxy 决定要不要显示代理项
+    await loadDefaults(existing.credential_type, { apply: false })
   } else {
     const initialType = props.defaultType || (plugins.value[0] && plugins.value[0].credential_type) || ''
     form.name = ''
@@ -120,26 +163,70 @@ async function resetForm() {
     form.auto_verify = true
     const plugin = plugins.value.find((item) => item.credential_type === initialType)
     form.data = schemaDefaults((plugin && plugin.fields_schema) || [])
+    proxyMode.value = 'global'
+    proxyId.value = null
+    await loadDefaults(initialType, { apply: true })
   }
   if (formRef.value) formRef.value.clearValidate()
 }
 
+// ── 模型字段（manifest 里 type: "model"）─────────────────
+// 候选来自该凭据（或表单里尚未保存的草稿）的模型列表；目标站取不到时就退回自由输入。
+
+const modelOptions = ref([])
+const modelsLoading = ref(false)
+
+const hasModelField = computed(() => schema.value.some((f) => f.type === 'model'))
+
+let modelTimer = null
+
+async function loadModelOptions() {
+  if (!hasModelField.value || !form.credential_type) return
+  modelsLoading.value = true
+  try {
+    const list = await api.listDraftModels(form.credential_type, { ...form.data })
+    modelOptions.value = Array.isArray(list) ? list : []
+  } catch {
+    modelOptions.value = []
+  } finally {
+    modelsLoading.value = false
+  }
+}
+
+/** 输入站点/密钥后再延迟拉取，免得每敲一个字符就打一次目标站 */
+function scheduleModelLoad() {
+  if (!hasModelField.value) return
+  clearTimeout(modelTimer)
+  modelTimer = setTimeout(loadModelOptions, 600)
+}
+
+watch(
+  () => [form.credential_type, form.data.base_url, form.data.api_key],
+  () => scheduleModelLoad(),
+)
+
 watch(
   () => props.modelValue,
-  (visible) => {
-    if (visible) resetForm()
+  async (visible) => {
+    if (!visible) return
+    await resetForm()
+    modelOptions.value = []
+    loadModelOptions()
   },
   { immediate: true },
 )
 
-// 创建模式下切换凭据类型时，按新插件的 fields_schema 重建字段。
+// 创建模式下切换凭据类型时，按新插件的 fields_schema 重建字段，并重新套用该插件的默认设置。
 watch(
   () => form.credential_type,
-  (next, prev) => {
+  async (next, prev) => {
     if (!props.modelValue || isEdit.value) return
     if (!prev || next === prev) return
     const plugin = plugins.value.find((item) => item.credential_type === next)
     form.data = schemaDefaults((plugin && plugin.fields_schema) || [])
+    proxyMode.value = 'global'
+    proxyId.value = null
+    await loadDefaults(next, { apply: true })
     if (formRef.value) formRef.value.clearValidate()
   },
 )
@@ -149,6 +236,9 @@ function buildData() {
   schema.value.forEach((field) => {
     data[field.key] = coerce(field, form.data[field.key])
   })
+  // 保留键不在 manifest 字段里，得单独带上：后端按这两个键决定该凭据走哪个代理
+  data._proxy_mode = proxyMode.value || 'global'
+  if (proxyMode.value === 'proxy' && proxyId.value) data._proxy_id = proxyId.value
   return data
 }
 
@@ -314,11 +404,40 @@ async function submit() {
 
           <el-switch v-else-if="field.type === 'checkbox'" v-model="form.data[field.key]" />
 
+          <!-- 模型名：候选来自该凭据的模型列表，取不到也能直接输入（allow-create） -->
+          <el-select
+            v-else-if="field.type === 'model'"
+            v-model="form.data[field.key]"
+            :placeholder="field.placeholder || '留空自动选择'"
+            filterable
+            allow-create
+            default-first-option
+            clearable
+            :loading="modelsLoading"
+            class="full-width"
+            @visible-change="(open) => open && !modelOptions.length && loadModelOptions()"
+          >
+            <el-option v-for="opt in modelOptions" :key="opt" :label="opt" :value="opt" />
+          </el-select>
+
           <el-input v-else v-model="form.data[field.key]" :placeholder="field.placeholder || ''" clearable />
 
+          <div v-if="field.hint" class="field-hint">{{ field.hint }}</div>
           <div v-if="field.sensitive" class="field-hint">敏感字段，加密存储且不会在列表中展示</div>
         </el-form-item>
       </template>
+
+      <el-form-item v-if="usesProxy" label="使用代理">
+        <ProxySelect
+          v-model:mode="proxyMode"
+          v-model:proxyId="proxyId"
+          :inherit-hint="inheritedProxy"
+        />
+        <div class="field-hint">
+          该凭据验证时走哪个出口。优先级：<strong>本条凭据 &gt; 该插件预设 &gt; 所属类别预设 &gt; 全局默认</strong>
+          ——「跟随上层设置」就是按这个顺序往上找
+        </div>
+      </el-form-item>
 
       <el-form-item>
         <el-checkbox v-model="form.auto_verify">

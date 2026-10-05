@@ -175,15 +175,23 @@ export const useVaultStore = defineStore('vault', {
       return result
     },
 
-    /** 批量验证：进度与结果通过后端事件驱动（见 applyBatchProgress / applyBatchDone）。 */
-    async batchVerify(scope = 'all', groupId = null, credentialType = null, credentialIds = null) {
+    /** 批量验证：进度与结果通过后端事件驱动（见 applyBatchProgress / applyBatchDone）。
+     *  concurrency / timeout 来自「批量验证」对话框，传了即随本次验证落库。 */
+    async batchVerify(scope = 'all', groupId = null, credentialType = null, credentialIds = null,
+      concurrency = null, timeout = null) {
       this.batch = { ...emptyBatch(), running: true }
       try {
-        return await api.batchVerify(scope, groupId, credentialType, credentialIds)
+        return await api.batchVerify(scope, groupId, credentialType, credentialIds,
+          concurrency, timeout)
       } catch (err) {
         this.batch.running = false
         throw err
       }
+    },
+
+    /** 批量验证的运行参数（并发线程数 / 请求超时）与取值范围，用于对话框回填。 */
+    async fetchBatchOptions() {
+      return await api.getBatchOptions()
     },
 
     // ── 分组 ──────────────────────────────────────────────

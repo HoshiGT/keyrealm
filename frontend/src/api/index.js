@@ -60,9 +60,12 @@ export function whenReady() {
 
 function unwrap(result, method) {
   if (result && typeof result === 'object' && !Array.isArray(result)) {
-    // 后端约定一：{ ok: false, message } 表示业务失败
+    // 后端约定一：{ ok: false, ... } 表示业务失败。
+    // **插件操作返回的是 { ok: false, error: "具体原因" }**（没有 message 字段），
+    // 这里必须把 error 也取上，否则所有插件错误都显示成一句通用的「操作失败」。
     if (result.ok === false) {
-      throw new ApiError(result.message || '操作失败', method)
+      const detail = Array.isArray(result.details) ? result.details.join('；') : ''
+      throw new ApiError(result.message || result.error || detail || '操作失败', method)
     }
     // 后端约定二：{ error: '错误码', message?/details? } 同样表示失败
     // （如 vault_locked / validation_failed / not_found），不能当成成功返回，
@@ -153,11 +156,18 @@ export const api = {
   deleteCredential: (id) => call('delete_credential', id),
   verifyCredential: (id) => call('verify_credential', id),
   listCredentialActions: (id) => call('list_credential_actions', id),
+  // 该凭据「真正能用」的操作（插件可选能力）；{available, note, error}
+  credentialCapabilities: (id) => call('credential_capabilities', id),
+  // 弹系统「另存为」，拿用户选的路径（下载类操作先用它换路径，再塞进 params 交给插件）
+  pickSavePath: (defaultName = '', fileTypes = null) => call('pick_save_path', defaultName, fileTypes),
   runCredentialAction: (id, actionId, params) => call('run_credential_action', id, actionId, params),
   listCredentialModels: (id) => call('list_credential_models', id),
+  listDraftModels: (credentialType, data = null) => call('list_draft_models', credentialType, data),
   streamCredentialAction: (id, actionId, params) => call('stream_credential_action', id, actionId, params),
-  batchVerify: (scope = 'all', groupId = null, credentialType = null, credentialIds = null) =>
-    call('batch_verify', scope, groupId, credentialType, credentialIds),
+  batchVerify: (scope = 'all', groupId = null, credentialType = null, credentialIds = null,
+    concurrency = null, timeout = null) =>
+    call('batch_verify', scope, groupId, credentialType, credentialIds, concurrency, timeout),
+  getBatchOptions: () => call('get_batch_options'),
   checkDuplicateCredential: (credentialType, data) =>
     call('check_duplicate_credential', credentialType, data),
 
@@ -179,6 +189,8 @@ export const api = {
   getMcpStatus: () => call('get_mcp_status'),
   startMcp: () => call('start_mcp'),
   stopMcp: () => call('stop_mcp'),
+  getMcpOptions: () => call('get_mcp_options'),
+  setMcpOptions: (host, port) => call('set_mcp_options', host, port),
   listMcpPermissions: () => call('list_mcp_permissions'),
   setMcpPermission: (toolName, enabled) => call('set_mcp_permission', toolName, enabled),
   getMcpToken: () => call('get_mcp_token'),
@@ -208,15 +220,28 @@ export const api = {
   confirmCloseAction: (action, remember = false) =>
     call('confirm_close_action', action, remember),
 
-  // ── 验证代理 ────────────────────────────────────────────
-  getProxy: () => call('get_proxy'),
-  setProxy: (proxy) => call('set_proxy', proxy),
-  // 连通性自检：传空串表示按当前生效的代理设置测试（可能是环境变量或已保存值）。
+  // ── 验证代理（注册表，其它模块一律按 id 引用） ──────────
+  listProxies: () => call('list_proxies'),
+  createProxy: (name, url) => call('create_proxy', name, url),
+  updateProxy: (proxyId, name = null, url = null) => call('update_proxy', proxyId, name, url),
+  deleteProxy: (proxyId) => call('delete_proxy', proxyId),
+  // proxyId 传 null/0 表示「直连」
+  setGlobalProxy: (proxyId = null) => call('set_global_proxy', proxyId),
+  // 连通性自检：proxyId 传 null 表示测当前全局生效的那个。
   // 返回 { ok, proxy, proxy_source, direct, proxied, verdict }。
-  testProxy: (proxy = '') => call('test_proxy', proxy),
+  testProxyId: (proxyId = null) => call('test_proxy_id', proxyId),
+
+  // ── 类别 / 插件默认设置 ─────────────────────────────────
+  getCredentialDefaults: (credentialType) => call('get_credential_defaults', credentialType),
+  getScopeOptions: (scope, scopeKey, credentialType = '') =>
+    call('get_scope_options', scope, scopeKey, credentialType),
+  setScopeOptions: (scope, scopeKey, values, credentialType = '') =>
+    call('set_scope_options', scope, scopeKey, values, credentialType),
+  clearScopeOptions: (scope, scopeKey) => call('clear_scope_options', scope, scopeKey),
 
   // ── 备份 / 恢复 ─────────────────────────────────────────
-  exportBackup: (scope = 'all', encrypted = true) => call('export_backup', scope, encrypted),
+  exportBackup: (scope = 'all', encrypted = true, credentialIds = null) =>
+    call('export_backup', scope, encrypted, credentialIds),
   importBackup: () => call('import_backup'),
 
   // ── 日志 ────────────────────────────────────────────────

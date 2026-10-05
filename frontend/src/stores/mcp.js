@@ -3,7 +3,7 @@ import { api } from '@/api'
 
 export const useMcpStore = defineStore('mcp', {
   state: () => ({
-    status: { running: false, port: 8765, active_tokens: 0, url: '' },
+    status: { running: false, host: '127.0.0.1', port: 8765, active_tokens: 0, url: '' },
     permissions: [],
     token: null,
     loading: false,
@@ -12,7 +12,9 @@ export const useMcpStore = defineStore('mcp', {
 
   getters: {
     running: (state) => !!state.status.running,
-    serverUrl: (state) => state.status.url || `http://localhost:${state.status.port || 8765}/sse`,
+    serverUrl: (state) =>
+      state.status.url ||
+      `http://${state.status.host || '127.0.0.1'}:${state.status.port || 8765}/sse`,
     toolOptions: (state) =>
       state.permissions.map((permission) => ({
         label: permission.tool_name,
@@ -28,7 +30,9 @@ export const useMcpStore = defineStore('mcp', {
         {
           mcpServers: {
             'credential-vault': {
-              url: state.status.url || `http://localhost:${state.status.port || 8765}/sse`,
+              url:
+                state.status.url ||
+                `http://${state.status.host || '127.0.0.1'}:${state.status.port || 8765}/sse`,
               headers: { Authorization: 'Bearer cv_<your_token>' },
             },
           },
@@ -40,7 +44,7 @@ export const useMcpStore = defineStore('mcp', {
 
   actions: {
     clear() {
-      this.status = { running: false, port: 8765, active_tokens: 0, url: '' }
+      this.status = { running: false, host: '127.0.0.1', port: 8765, active_tokens: 0, url: '' }
       this.permissions = []
       this.token = null
     },
@@ -49,9 +53,10 @@ export const useMcpStore = defineStore('mcp', {
       const status = await api.getMcpStatus()
       this.status = {
         running: !!(status && status.running),
+        host: (status && status.host) || '127.0.0.1',
         port: (status && status.port) || 8765,
         active_tokens: (status && status.active_tokens) || 0,
-        url: (status && status.url) || `http://localhost:${(status && status.port) || 8765}/sse`,
+        url: (status && status.url) || '',
       }
       return this.status
     },
@@ -115,6 +120,7 @@ export const useMcpStore = defineStore('mcp', {
     applyStatusEvent(detail) {
       if (!detail) return
       if (detail.running !== undefined) this.status.running = !!detail.running
+      if (detail.host !== undefined) this.status.host = detail.host
       if (detail.port !== undefined) this.status.port = detail.port
       if (detail.active_tokens !== undefined) this.status.active_tokens = detail.active_tokens
     },
