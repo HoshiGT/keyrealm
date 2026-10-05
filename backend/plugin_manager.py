@@ -404,6 +404,28 @@ def get_module(credential_type: str) -> Optional[Any]:
     return _loaded_modules[credential_type]
 
 
+def _log_proxy_outlet(what: str, credential_type: str, resolved, data: dict = None) -> None:
+    """记下本次调用**实际生效的出口**（直连 / 哪个代理）。
+
+    为什么值得专门记一行：凭据里写着「用代理 #1」、实际却直连，这种错配在界面上
+    **完全看不出来**（下拉里照样显示着代理名）。排查「配了代理还是不生效」时，
+    这行日志是唯一的抓手。``resolved`` 就是 ``credential_proxy_scope`` yield 出来的解析结果。
+
+    引用的代理**已不存在**时升级成 WARNING——那是静默降级成直连的最常见原因。
+    """
+    try:
+        missing = proxy_store.missing_proxy_ref(data or {}, credential_type)
+        if missing is not None:
+            _log.warning("%s %s：引用的代理 #%s **已不存在**，已回落直连"
+                         "（请到「系统设置 → 网络与代理」重新选择，或改预设）",
+                         what, credential_type, missing)
+            return
+        _log.info("%s %s：代理出口 = %s", what, credential_type,
+                  proxy_store.describe_outlet(resolved))
+    except Exception:  # noqa: BLE001 - 记日志绝不能影响调用本身
+        pass
+
+
 def verify_credential(credential_type: str, data: dict) -> VerifyResult:
     """调用插件验证凭据（含「按凭据解析代理」与「欠费探测」）"""
     module = get_module(credential_type)
@@ -411,7 +433,8 @@ def verify_credential(credential_type: str, data: dict) -> VerifyResult:
         return VerifyResult(status="error", message=_module_missing_error(credential_type))
     # 代理作用域收口在这里：单条 / 批量 / MCP / 定时 四条路径都经此函数，
     # 因此各条凭据的「用哪个代理」自动生效且线程隔离（见 proxy_store）。
-    with proxy_store.credential_proxy_scope(data, credential_type):
+    with proxy_store.credential_proxy_scope(data, credential_type) as outlet:
+        _log_proxy_outlet("验证", credential_type, outlet, data)
         result = call_verify(module, data)
         _apply_quota_probe(credential_type, module, data, result)
     return result
@@ -501,7 +524,8 @@ def plugin_capabilities(credential_type: str, data: dict) -> dict:
     module = get_module(credential_type)
     if module is None:
         return {"available": None, "note": "", "error": True}
-    with proxy_store.credential_proxy_scope(data, credential_type):
+    with proxy_store.credential_proxy_scope(data, credential_type) as outlet:
+        _log_proxy_outlet("权限探测", credential_type, outlet, data)
         return call_capabilities(module, data)
 
 
@@ -510,7 +534,8 @@ def run_plugin_action(credential_type: str, action_id: str, params: dict, data: 
     module = get_module(credential_type)
     if module is None:
         return {"ok": False, "error": _module_missing_error(credential_type)}
-    with proxy_store.credential_proxy_scope(data, credential_type):
+    with proxy_store.credential_proxy_scope(data, credential_type) as outlet:
+        _log_proxy_outlet("操作", credential_type, outlet, data)
         return call_run_action(module, action_id, params, data)
 
 
@@ -519,7 +544,8 @@ def plugin_models(credential_type: str, data: dict) -> list:
     module = get_module(credential_type)
     if module is None:
         return []
-    with proxy_store.credential_proxy_scope(data, credential_type):
+    with proxy_store.credential_proxy_scope(data, credential_type) as outlet:
+        _log_proxy_outlet("模型列表", credential_type, outlet, data)
         return call_list_models(module, data)
 
 
@@ -536,7 +562,8 @@ def stream_plugin_action(credential_type: str, action_id: str, params: dict, dat
     module = get_module(credential_type)
     if module is None:
         return {"ok": False, "error": _module_missing_error(credential_type)}
-    with proxy_store.credential_proxy_scope(data, credential_type):
+    with proxy_store.credential_proxy_scope(data, credential_type) as outlet:
+        _log_proxy_outlet("流式操作", credential_type, outlet, data)
         return call_stream_action(module, action_id, params, data, on_delta,
                                   on_progress, should_cancel)
 

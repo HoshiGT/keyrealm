@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from typing import Optional, Union
 
 from . import database as db
@@ -204,12 +205,48 @@ def credential_proxy_scope(data: dict, credential_type: str = ""):
     """在本次调用期间生效「该凭据的代理」，退出时按 token 还原（支持嵌套、线程安全）。
 
     ``credential_type`` 是继承链的关键——没有它就只能看条目自己的设置，找不到子模块/类别预设。
+
+    **yield 出本次解析结果**（``ctx.DIRECT`` / 代理 URL / ``ctx.UNSET``），供调用方记日志：
+    「配了代理却没走」这类问题在界面上完全看不出来，唯一能查的就是这行日志。
     """
-    token = ctx.begin(resolve_credential_proxy(data, credential_type))
+    resolved = resolve_credential_proxy(data, credential_type)
+    token = ctx.begin(resolved)
     try:
-        yield
+        yield resolved
     finally:
         ctx.end(token)
+
+
+def describe_outlet(resolved: Union[object, str]) -> str:
+    """把解析结果说成人话，给日志用（把「继续回退环境变量」也展开成实际值）。"""
+    if resolved is ctx.DIRECT:
+        return "直连（该凭据显式选了直连）"
+    if resolved is not ctx.UNSET:
+        return str(resolved)
+    for key in ("VAULT_PROXY", "ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"):
+        value = os.environ.get(key)
+        if value:
+            return f"{value}（来自环境变量 {key}）"
+    return "直连（未配置代理）"
+
+
+def missing_proxy_ref(data: dict, credential_type: str = ""):
+    """本次**本应走某个代理、但那个 id 已经不存在** → 返回该 id；否则 ``None``。
+
+    为什么专门查这个：悬空引用会被 `_resolve_spec` **静默降级成直连**，而界面上
+    「使用代理」下拉照样好好显示着代理名——用户以为在走代理，实际是直连，
+    表现就是「配了代理还是不生效」，且查不到任何线索。**这条必须能被看见。**
+    """
+    data = data or {}
+    candidates = [(data.get(KEY_MODE), data.get(KEY_ID))]
+    inherited_mode, inherited_id = inherited_proxy(credential_type)
+    candidates.append((inherited_mode, inherited_id))
+    for mode, proxy_id in candidates:
+        if str(mode or "").strip().lower() != MODE_PROXY or not proxy_id:
+            continue
+        if get_proxy_url(proxy_id) is None:
+            return proxy_id
+    return None
 
 
 # ── 连通性测试 ───────────────────────────────────────────
