@@ -10,19 +10,29 @@
 
 本插件提供的操作（``actions``）：
 
-- ``whoami``          查看调用者身份（STS GetCallerIdentity + 权限探测）
-- ``list_instances``  云主机实例列表（ECS DescribeInstances，表单可改地域）
-- ``list_buckets``    对象存储桶列表（OSS ListBuckets）
-- ``list_objects``    对象预览（OSS ListObjects，填桶名直查或从桶列表行内「预览」进入）
+- ``whoami``           查看调用者身份（STS GetCallerIdentity + 权限探测）
+- ``list_regions``     地域列表（ECS DescribeRegions，含中文名；行内「实例」下钻）
+- ``list_instances``   云主机实例列表（ECS DescribeInstances，表单可改地域）
+- ``list_buckets``     对象存储桶列表（OSS ListBuckets；桶列表自带地域）
+- ``list_objects``     对象预览（OSS ListObjectsV2 + delimiter，文件与文件夹分行）
+- ``download_object``  下载单个对象（``save_to``，前端弹「另存为」）
+- ``download_prefix``  把某个前缀（文件夹）下的对象并发拉取后打包成 zip 下载
+
+下载类操作全部走签名 GET 流式读取，磁盘上限见 ``MAX_ZIP_*``。
 """
 from __future__ import annotations
 
 import base64
 import hashlib
 import hmac
+import os
 import re
+import shutil
+import tempfile
 import uuid
 import xml.etree.ElementTree as ET
+import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from email.utils import formatdate
 from typing import Any
@@ -31,6 +41,7 @@ from urllib.parse import quote
 from cloud_common import (
     VerifyResult,
     body_snippet,
+    download_to_file,
     first_list,
     guarded,
     make_client,
@@ -49,6 +60,15 @@ OSS_GLOBAL_ENDPOINT = "https://oss.aliyuncs.com"
 
 # 默认地域（ECS / OSS 均先按此探测）
 DEFAULT_REGION = "cn-hangzhou"
+
+# 对象预览每页条数；枚举（打包下载）时按 OSS 单页上限翻页
+_PAGE_SIZE = 50
+_ENUM_PAGE = 1000
+
+# 打包下载上限：**宁可明确报错，也不静默截断**（前端会原样展示 error/output）
+MAX_ZIP_OBJECTS = 1000                # 单次最多打包的对象数
+MAX_ZIP_BYTES = 512 * 1024 * 1024     # 单次最多打包的原始总字节数（512 MiB）
+_ZIP_WORKERS = 8                      # 并发拉取对象的线程数
 
 # 权限探测的单请求超时（秒）——探测要「整体十几秒内」结束，不能用默认的 20 秒 ×3
 _PROBE_TIMEOUT = 6.0
@@ -151,6 +171,20 @@ def _oss_signature(
     return base64.b64encode(digest).decode("utf-8")
 
 
+def _oss_auth_headers(
+    access_key_id: str, access_key_secret: str, canonicalized_resource: str
+) -> dict:
+    """一次 OSS V1 签名所需的请求头（无 x-oss-*，故 CanonicalizedOSSHeaders 为空）。
+
+    流式下载（``client.stream``）与普通 GET 共用，避免签名逻辑写两遍。
+    """
+    date = formatdate(usegmt=True)
+    signature = _oss_signature(
+        "GET", "", "", date, "", canonicalized_resource, access_key_secret
+    )
+    return {"Date": date, "Authorization": f"OSS {access_key_id}:{signature}"}
+
+
 def _oss_get(
     client,
     url: str,
@@ -160,12 +194,8 @@ def _oss_get(
     params: dict | None = None,
     timeout: float | None = None,
 ):
-    """发起一次 OSS V1 签名的只读 GET（无 x-oss-* 头，故 CanonicalizedOSSHeaders 为空）。"""
-    date = formatdate(usegmt=True)
-    signature = _oss_signature(
-        "GET", "", "", date, "", canonicalized_resource, access_key_secret
-    )
-    headers = {"Date": date, "Authorization": f"OSS {access_key_id}:{signature}"}
+    """发起一次 OSS V1 签名的只读 GET。"""
+    headers = _oss_auth_headers(access_key_id, access_key_secret, canonicalized_resource)
     kwargs: dict[str, Any] = {"params": params, "headers": headers}
     if timeout is not None:
         kwargs["timeout"] = timeout
@@ -259,6 +289,9 @@ def _probe_all(ak: str, sk: str) -> dict:
         status["whoami"] = _rpc_probe(
             client, STS_ENDPOINT, "GetCallerIdentity", "2015-04-01", {}, ak, sk
         )
+        status["list_regions"] = _rpc_probe(
+            client, ECS_ENDPOINT, "DescribeRegions", ECS_VERSION, {}, ak, sk
+        )
         status["list_instances"] = _rpc_probe(
             client,
             ECS_ENDPOINT,
@@ -269,8 +302,10 @@ def _probe_all(ak: str, sk: str) -> dict:
             sk,
         )
         status["list_buckets"] = _oss_probe_buckets(client, ak, sk)
-    # 对象预览与桶列表是同一个 OSS 权限位
+    # 对象预览 / 单对象下载 / 打包下载与桶列表是同一个 OSS 权限位
     status["list_objects"] = status["list_buckets"]
+    status["download_object"] = status["list_buckets"]
+    status["download_prefix"] = status["list_buckets"]
     return status
 
 
@@ -433,6 +468,12 @@ _WHOAMI_COLUMNS = [
     {"key": "value", "label": "值", "mono": True},
 ]
 
+_REGION_COLUMNS = [
+    {"key": "RegionId", "label": "地域 ID", "mono": True},
+    {"key": "LocalName", "label": "名称"},
+    {"key": "RegionEndpoint", "label": "接入点", "width": 220, "mono": True},
+]
+
 _INSTANCE_COLUMNS = [
     {"key": "InstanceId", "label": "实例 ID", "mono": True},
     {"key": "InstanceName", "label": "实例名"},
@@ -449,15 +490,113 @@ _BUCKET_COLUMNS = [
 
 _OBJECT_COLUMNS = [
     {"key": "key", "label": "对象 Key", "mono": True},
+    {"key": "type", "label": "类型", "width": 80, "type": "tag"},
     {"key": "size", "label": "大小", "width": 100, "type": "number"},
     {"key": "lastModified", "label": "最后修改", "width": 200},
 ]
 
+# 地域列表行内「实例」下钻到 list_instances（region 作为 params 传下去预填表单）
+_REGION_ROW_ACTION = {
+    "id": "list_instances",
+    "label": "实例",
+    "params": {"region": "$row.RegionId"},
+}
+
+# 桶列表行内「预览」下钻到 list_objects
 _OBJECT_ROW_ACTION = {
     "id": "list_objects",
     "label": "预览",
     "params": {"bucket": "$row.name", "region": "$row.region", "endpoint": "$row.endpoint"},
 }
+
+# 对象列表的行内按钮：文件夹行有 folderPath（「进入」「打包下载」可用），
+# 文件行有 fileKey（「下载」可用）—— 对方没有的键由前端自动置灰，绝不会传 undefined 过来。
+_OBJECT_ROW_ACTIONS = [
+    {
+        "id": "list_objects",
+        "label": "进入",
+        "params": {
+            "bucket": "$row.bucket",
+            "region": "$row.region",
+            "endpoint": "$row.endpoint",
+            "prefix": "$row.folderPath",
+        },
+    },
+    {
+        "id": "download_object",
+        "label": "下载",
+        "params": {
+            "bucket": "$row.bucket",
+            "region": "$row.region",
+            "endpoint": "$row.endpoint",
+            "key": "$row.fileKey",
+        },
+    },
+    {
+        "id": "download_prefix",
+        "label": "打包下载",
+        "params": {
+            "bucket": "$row.bucket",
+            "region": "$row.region",
+            "endpoint": "$row.endpoint",
+            "prefix": "$row.folderPath",
+        },
+    },
+]
+
+_BUCKET_FIELD = {"key": "bucket", "label": "桶名", "placeholder": "如 my-bucket"}
+_REGION_FIELD = {
+    "key": "region",
+    "label": "地域",
+    "placeholder": f"默认 {DEFAULT_REGION}，如 cn-beijing",
+}
+_ENDPOINT_FIELD = {
+    "key": "endpoint",
+    "label": "Endpoint",
+    "placeholder": "留空按地域推导，如 oss-cn-hangzhou.aliyuncs.com",
+}
+
+
+def _object_row_file(
+    bucket: str, region: str, endpoint: str, key: str, size_raw: str, modified: str
+) -> dict:
+    """文件行（fileKey / fileName 只出现在文件行，供「下载」与另存为默认名使用）。"""
+    return {
+        "key": key,
+        "type": "文件",
+        "size": int(size_raw) if str(size_raw).isdigit() else size_raw,
+        "lastModified": modified,
+        "bucket": bucket,
+        "region": region,
+        "endpoint": endpoint,
+        "fileKey": key,
+        "fileName": key.rstrip("/").rsplit("/", 1)[-1],
+    }
+
+
+def _object_row_folder(bucket: str, region: str, endpoint: str, prefix: str) -> dict:
+    """文件夹行（folderPath / folderName 只出现在文件夹行）。"""
+    name = prefix.rstrip("/").rsplit("/", 1)[-1] or "bucket"
+    return {
+        "key": prefix,
+        "type": "文件夹",
+        "size": "",
+        "lastModified": "",
+        "bucket": bucket,
+        "region": region,
+        "endpoint": endpoint,
+        "folderPath": prefix,
+        "folderName": f"{name}.zip",
+    }
+
+
+def _human_size(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} GB"
 
 
 def actions(data: dict) -> list[dict]:
@@ -477,21 +616,26 @@ def actions(data: dict) -> list[dict]:
             "empty_text": "未获取到身份信息",
         },
         {
+            "id": "list_regions",
+            "name": "地域列表",
+            "kind": "list",
+            "group": "计算",
+            "order": 15,
+            "description": "ECS DescribeRegions（列出该账号可选地域，行内「实例」下钻到该地域的云主机）",
+            "columns": _REGION_COLUMNS,
+            "row_actions": [_REGION_ROW_ACTION],
+            "empty_text": "未获取到地域列表",
+        },
+        {
             "id": "list_instances",
             "name": "云主机实例列表",
             "kind": "list",
             "group": "计算",
             "order": 20,
-            "description": f"ECS DescribeInstances（地域默认 {DEFAULT_REGION}，可在表单里改）",
+            "description": f"ECS DescribeInstances（地域默认 {DEFAULT_REGION}，可直接填，或从「地域列表」行内进入）",
             "columns": _INSTANCE_COLUMNS,
             # 列表操作也能带 fields：前端渲染成表格上方一行内联表单，点「刷新」时并入参数
-            "fields": [
-                {
-                    "key": "region",
-                    "label": "地域",
-                    "placeholder": f"默认 {DEFAULT_REGION}，如 cn-beijing / cn-shanghai",
-                }
-            ],
+            "fields": [_REGION_FIELD],
             "submit": "查询",
             "empty_text": f"暂无云主机实例（默认地域 {DEFAULT_REGION}）",
         },
@@ -501,29 +645,67 @@ def actions(data: dict) -> list[dict]:
             "kind": "list",
             "group": "存储",
             "order": 30,
-            "description": "OSS ListBuckets（只读）",
+            "description": "OSS ListBuckets（只读；桶自带地域，无需先选地域）",
             "columns": _BUCKET_COLUMNS,
             "row_actions": [_OBJECT_ROW_ACTION],
             "empty_text": "暂无对象存储桶",
         },
         {
             "id": "list_objects",
-            "name": "对象预览",
+            "name": "对象浏览",
             "kind": "list",
             "group": "存储",
             "order": 40,
-            "description": "OSS ListObjects（填桶名直接查，或从「对象存储桶列表」行内「预览」进入）",
+            "description": "OSS ListObjectsV2（按 / 分隔列出文件与文件夹；行内可「进入」「下载」「打包下载」）",
             "columns": _OBJECT_COLUMNS,
             "fields": [
-                {"key": "bucket", "label": "桶名", "placeholder": "如 my-bucket"},
+                _BUCKET_FIELD,
                 {
-                    "key": "region",
-                    "label": "地域",
-                    "placeholder": f"默认 {DEFAULT_REGION}，如 cn-beijing",
+                    "key": "prefix",
+                    "label": "前缀",
+                    "placeholder": "留空为桶根目录，如 dir/",
                 },
+                _REGION_FIELD,
+                _ENDPOINT_FIELD,
             ],
+            "row_actions": _OBJECT_ROW_ACTIONS,
             "submit": "查询",
-            "empty_text": "该桶暂无对象（仅显示前 50 个）",
+            "empty_text": "该前缀下暂无对象（仅显示前 50 个）",
+        },
+        {
+            "id": "download_object",
+            "name": "下载对象",
+            "kind": "form",
+            "group": "存储",
+            "order": 50,
+            "description": "下载桶内的单个对象（弹「另存为」；从对象列表行内「下载」进入会自动填好）",
+            "fields": [
+                _BUCKET_FIELD,
+                {"key": "key", "label": "对象 Key", "required": True, "placeholder": "如 dir/file.txt"},
+                _REGION_FIELD,
+                _ENDPOINT_FIELD,
+            ],
+            "save_to": {"key": "path", "default_name": "$row.fileName"},
+            "submit": "下载",
+        },
+        {
+            "id": "download_prefix",
+            "name": "打包下载（zip）",
+            "kind": "form",
+            "group": "存储",
+            "order": 60,
+            "description": (
+                f"把该前缀下所有对象拉下来打成一个 zip（最多 {MAX_ZIP_OBJECTS} 个对象 / "
+                f"{_human_size(MAX_ZIP_BYTES)}，超出会明确报错而不静默截断）"
+            ),
+            "fields": [
+                _BUCKET_FIELD,
+                {"key": "prefix", "label": "前缀（文件夹）", "placeholder": "如 dir/sub/"},
+                _REGION_FIELD,
+                _ENDPOINT_FIELD,
+            ],
+            "save_to": {"key": "path", "default_name": "$row.folderName"},
+            "submit": "打包下载",
         },
     ]
 
@@ -540,12 +722,18 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
 
         if action_id == "whoami":
             return _run_whoami(ak, sk)
+        if action_id == "list_regions":
+            return _run_list_regions(ak, sk)
         if action_id == "list_instances":
             return _run_list_instances(ak, sk, params)
         if action_id == "list_buckets":
             return _run_list_buckets(ak, sk)
         if action_id == "list_objects":
             return _run_list_objects(ak, sk, params)
+        if action_id == "download_object":
+            return _run_download_object(ak, sk, params)
+        if action_id == "download_prefix":
+            return _run_download_prefix(ak, sk, params)
         return {"ok": False, "error": "未知操作"}
     except Exception as exc:  # noqa: BLE001 - 操作边界兜底，绝不抛出
         return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
@@ -582,6 +770,40 @@ def _run_whoami(ak: str, sk: str) -> dict:
         rows.append({"item": "探测到的权限", "value": "、".join(rights) if rights else "未探测到额外资源权限"})
 
     return {"ok": True, "rows": rows, "columns": _WHOAMI_COLUMNS, "total": len(rows), "has_more": False}
+
+
+def _run_list_regions(ak: str, sk: str) -> dict:
+    """地域列表（ECS DescribeRegions，只读）：Regions.Region[] → 地域 ID / 中文名。"""
+    with make_client() as client:
+        resp = _rpc_get(client, ECS_ENDPOINT, "DescribeRegions", ECS_VERSION, {}, ak, sk)
+    payload = safe_json(resp) or {}
+    if resp.status_code != 200 or payload.get("Code"):
+        return {"ok": False, "error": _rpc_failure(resp, ak, sk)}
+
+    regions = first_list(payload, "Regions", "Region") or []
+    rows = []
+    for item in regions:
+        if not isinstance(item, dict):
+            continue
+        region_id = item.get("RegionId") or ""
+        if not region_id:
+            continue
+        rows.append(
+            {
+                "RegionId": region_id,
+                "LocalName": item.get("LocalName") or "",
+                "RegionEndpoint": item.get("RegionEndpoint") or "",
+            }
+        )
+    return {
+        "ok": True,
+        "rows": rows,
+        "columns": _REGION_COLUMNS,
+        "row_actions": [_REGION_ROW_ACTION],
+        "total": len(rows),
+        "has_more": False,
+        "empty_text": "未获取到地域列表",
+    }
 
 
 def _run_list_instances(ak: str, sk: str, params: dict) -> dict:
@@ -657,49 +879,256 @@ def _run_list_buckets(ak: str, sk: str) -> dict:
     }
 
 
-def _run_list_objects(ak: str, sk: str, params: dict) -> dict:
+def _oss_target(params: dict) -> tuple[dict, str]:
+    """校验并归一化 OSS 目标（桶名 / 地域 / endpoint），返回 ``(target, error)``。
+
+    桶名与 endpoint 都做过白名单式校验，避免把接口/用户给的字符串直接拼进 URL。
+    """
     bucket = _field(params, "bucket")
     if not bucket:
-        return {
-            "ok": False,
-            "error": "缺少桶名，请在表单里填写，或从「对象存储桶列表」行内点击「预览」进入",
-        }
+        return {}, "缺少桶名，请在表单里填写，或从「对象存储桶列表」行内点击「预览」进入"
     if not _BUCKET_RE.match(bucket):
-        return {"ok": False, "error": "桶名不合法"}
-
+        return {}, "桶名不合法"
     region = _oss_region(_field(params, "region"))
     endpoint = _field(params, "endpoint") or _oss_endpoint(region)
     if not _HOST_RE.match(endpoint):
-        return {"ok": False, "error": "对象存储端点不合法"}
+        return {}, "对象存储端点不合法"
+    return {"bucket": bucket, "region": region, "endpoint": endpoint}, ""
+
+
+def _run_list_objects(ak: str, sk: str, params: dict) -> dict:
+    """列出一个前缀下的对象与子目录（ListObjectsV2 + delimiter=/）。"""
+    target, error = _oss_target(params)
+    if error:
+        return {"ok": False, "error": error}
+    bucket = target["bucket"]
+    endpoint = target["endpoint"]
+    prefix = _field(params, "prefix")
 
     url = f"https://{bucket}.{endpoint}/"
+    query: dict[str, str] = {"list-type": "2", "delimiter": "/", "max-keys": str(_PAGE_SIZE)}
+    if prefix:
+        query["prefix"] = prefix
     with make_client() as client:
-        resp = _oss_get(client, url, ak, sk, f"/{bucket}/", params={"max-keys": "50"})
+        resp = _oss_get(client, url, ak, sk, f"/{bucket}/", params=query)
     if resp.status_code != 200:
         return {"ok": False, "error": _oss_failure(resp, ak, sk)}
 
     root = _xml_root(resp.text)
-    rows = []
+    rows: list[dict] = []
+    # CommonPrefixes 即「子目录」，排在文件前面
+    for node in _xml_findall(root, "CommonPrefixes"):
+        child = _xml_text(node, "Prefix")
+        if child:
+            rows.append(_object_row_folder(bucket, target["region"], endpoint, child))
     for content in _xml_findall(root, "Contents"):
         key = _xml_text(content, "Key")
-        if not key:
+        if not key or key.endswith("/"):     # 目录占位对象：已由 CommonPrefixes 表达
             continue
-        size_raw = _xml_text(content, "Size")
         rows.append(
-            {
-                "key": key,
-                "size": int(size_raw) if size_raw.isdigit() else size_raw,
-                "lastModified": _xml_text(content, "LastModified"),
-            }
+            _object_row_file(
+                bucket,
+                target["region"],
+                endpoint,
+                key,
+                _xml_text(content, "Size"),
+                _xml_text(content, "LastModified"),
+            )
         )
+    where = prefix or "桶根目录"
     return {
         "ok": True,
         "rows": rows,
         "columns": _OBJECT_COLUMNS,
+        "row_actions": _OBJECT_ROW_ACTIONS,
         "total": len(rows),
-        "empty_text": f"该桶暂无对象（{bucket}，仅显示前 50 个）",
+        "empty_text": f"该前缀下暂无对象（{bucket} / {where}，仅显示前 {_PAGE_SIZE} 个）",
         "has_more": _xml_text(root, "IsTruncated").lower() == "true",
     }
+
+
+def _run_download_object(ak: str, sk: str, params: dict) -> dict:
+    """下载单个对象（流式写入 save_to 指定的路径）。"""
+    target, error = _oss_target(params)
+    if error:
+        return {"ok": False, "error": error}
+    key = _field(params, "key")
+    if not key:
+        return {"ok": False, "error": "缺少对象 Key"}
+    path = _field(params, "path")
+    if not path:
+        return {"ok": False, "error": "未指定保存路径"}
+
+    bucket = target["bucket"]
+    url = f"https://{bucket}.{target['endpoint']}/{quote(key, safe='/~')}"
+    headers = _oss_auth_headers(ak, sk, f"/{bucket}/{key}")
+    with make_client() as client:
+        with client.stream("GET", url, headers=headers) as resp:
+            if resp.status_code != 200:
+                resp.read()                       # 错误体很小，读出来好给出原因
+                return {"ok": False, "error": _oss_failure(resp, ak, sk)}
+            ok, message = download_to_file(resp, path)
+    if not ok:
+        return {"ok": False, "error": message}
+    return {"ok": True, "output": f"已保存到 {message}"}
+
+
+def _list_all_objects(
+    client, bucket: str, endpoint: str, ak: str, sk: str, prefix: str, limit: int
+) -> tuple[list[tuple[str, int]], bool, str]:
+    """翻页枚举前缀下的**全部**对象（打包下载用，不受预览的 50 条限制）。
+
+    返回 ``(objects, over_limit, error)``；``over_limit`` 为真表示已超过 ``limit`` 个
+    并提前停止（调用方据此明确报错，不做静默截断）。
+    """
+    url = f"https://{bucket}.{endpoint}/"
+    token = ""
+    objects: list[tuple[str, int]] = []
+    while True:
+        query: dict[str, str] = {"list-type": "2", "max-keys": str(_ENUM_PAGE)}
+        if prefix:
+            query["prefix"] = prefix
+        if token:
+            query["continuation-token"] = token
+        resp = _oss_get(client, url, ak, sk, f"/{bucket}/", params=query)
+        if resp.status_code != 200:
+            return objects, False, _oss_failure(resp, ak, sk)
+        root = _xml_root(resp.text)
+        for content in _xml_findall(root, "Contents"):
+            key = _xml_text(content, "Key")
+            if not key or key.endswith("/"):
+                continue
+            size_raw = _xml_text(content, "Size")
+            objects.append((key, int(size_raw) if size_raw.isdigit() else 0))
+            if len(objects) > limit:
+                return objects, True, ""
+        if _xml_text(root, "IsTruncated").lower() != "true":
+            break
+        token = _xml_text(root, "NextContinuationToken")
+        if not token:
+            break
+    return objects, False, ""
+
+
+def _zip_entry_name(key: str, prefix: str) -> str | None:
+    """zip 内的相对路径：去掉前缀、保留目录结构；路径不安全（.. / 绝对路径）时返回 None。"""
+    rel = key[len(prefix):] if prefix and key.startswith(prefix) else key
+    rel = rel.lstrip("/")
+    parts = rel.split("/")
+    if not rel or any(part in ("", ".", "..") for part in parts):
+        return None
+    return rel
+
+
+def _run_download_prefix(ak: str, sk: str, params: dict) -> dict:
+    """把某个前缀下的所有对象并发拉取后打包成 zip（本地临时文件 → 原子落盘）。"""
+    target, error = _oss_target(params)
+    if error:
+        return {"ok": False, "error": error}
+    path = _field(params, "path")
+    if not path:
+        return {"ok": False, "error": "未指定保存路径"}
+    prefix = _field(params, "prefix")
+    if not prefix:
+        return {"ok": False, "error": "缺少前缀（文件夹），请在表单里填写，或从对象列表行内点击「打包下载」进入"}
+
+    bucket = target["bucket"]
+    region = target["region"]
+    endpoint = target["endpoint"]
+
+    with make_client() as client:
+        objects, over_limit, list_error = _list_all_objects(
+            client, bucket, endpoint, ak, sk, prefix, MAX_ZIP_OBJECTS
+        )
+    if list_error:
+        return {"ok": False, "error": list_error}
+    if over_limit:
+        return {
+            "ok": False,
+            "error": (
+                f"「{prefix}」下的对象数超过打包上限（{MAX_ZIP_OBJECTS} 个），已枚举前 "
+                f"{MAX_ZIP_OBJECTS + 1} 个即停止。请换一个更小的前缀，或逐个下载。"
+            ),
+        }
+    if not objects:
+        return {"ok": False, "error": f"「{prefix}」下没有可下载的对象"}
+
+    total = sum(size for _, size in objects)
+    if total > MAX_ZIP_BYTES:
+        return {
+            "ok": False,
+            "error": (
+                f"「{prefix}」下共 {len(objects)} 个对象、{_human_size(total)}，"
+                f"超过单次打包上限 {_human_size(MAX_ZIP_BYTES)}。请换一个更小的前缀，或逐个下载。"
+            ),
+        }
+
+    tmpdir = tempfile.mkdtemp(prefix="vault_oss_zip_")
+    part_path = path + ".part"
+    failed: list[str] = []
+    skipped: list[str] = []
+    written = 0
+
+    def _fetch(index: int, key: str) -> tuple[str, str, str]:
+        """把一个对象流式拉到本地临时文件，返回 (key, local_path, error)。"""
+        local = os.path.join(tmpdir, f"{index}.bin")
+        try:
+            url = f"https://{bucket}.{endpoint}/{quote(key, safe='/~')}"
+            headers = _oss_auth_headers(ak, sk, f"/{bucket}/{key}")
+            with make_client() as client:
+                with client.stream("GET", url, headers=headers) as resp:
+                    if resp.status_code != 200:
+                        return key, "", f"{key} (HTTP {resp.status_code})"
+                    with open(local, "wb") as handle:
+                        for chunk in resp.iter_bytes(65536):
+                            handle.write(chunk)
+        except Exception as exc:  # noqa: BLE001 - 单个对象失败不该毁掉整包
+            return key, "", f"{key} ({type(exc).__name__})"
+        return key, local, ""
+
+    try:
+        with ThreadPoolExecutor(max_workers=_ZIP_WORKERS) as pool:
+            futures = [pool.submit(_fetch, i, key) for i, (key, _size) in enumerate(objects)]
+            with zipfile.ZipFile(part_path, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
+                for future in as_completed(futures):
+                    key, local, fetch_error = future.result()
+                    if fetch_error:
+                        failed.append(fetch_error)
+                        continue
+                    try:
+                        entry = _zip_entry_name(key, prefix)
+                        if entry is None:
+                            skipped.append(f"{key}（路径不安全）")
+                            continue
+                        archive.write(local, arcname=entry)
+                        written += 1
+                    except Exception as exc:  # noqa: BLE001
+                        failed.append(f"{key} ({type(exc).__name__})")
+                    finally:
+                        try:
+                            os.remove(local)
+                        except OSError:
+                            pass
+        if written == 0:
+            raise RuntimeError("没有对象写入 zip")
+        os.replace(part_path, path)      # 同目录内的替换是原子的
+    except Exception as exc:  # noqa: BLE001 - 打包失败不留半成品
+        try:
+            os.remove(part_path)
+        except OSError:
+            pass
+        detail = f"，失败 {len(failed)} 个" if failed else ""
+        return {"ok": False, "error": f"打包失败（{type(exc).__name__}{detail}）"}
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    lines = [f"已打包 {written} 个对象（{_human_size(total)}）到 {path}", f"字节数（未压缩）：{total}"]
+    if failed:
+        lines.append(f"失败 {len(failed)} 个：" + "；".join(failed[:5]) + ("…" if len(failed) > 5 else ""))
+    if skipped:
+        lines.append(f"跳过 {len(skipped)} 个：" + "；".join(skipped[:5]) + ("…" if len(skipped) > 5 else ""))
+    lines.append(f"zip 内为相对「{prefix}」的路径")
+    return {"ok": True, "output": "\n".join(lines)}
 
 
 def get_display_summary(data):
