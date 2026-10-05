@@ -18,6 +18,8 @@
 - ``download_prefix``  把某个前缀（文件夹）下的对象并发拉取后打包成 zip 下载
 
 下载类操作全部走签名 GET 流式读取，磁盘上限见 ``MAX_ZIP_*``。
+两个下载操作都声明了 ``progress``，由 ``stream_action`` 边下边回调进度
+（``run_action`` 三个参数调用时不上报，行为与以前一致）。
 """
 from __future__ import annotations
 
@@ -28,6 +30,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -70,6 +73,11 @@ _ENUM_PAGE = 1000
 MAX_ZIP_OBJECTS = 1000                # 单次最多打包的对象数
 MAX_ZIP_BYTES = 512 * 1024 * 1024     # 单次最多打包的原始总字节数（512 MiB）
 _ZIP_WORKERS = 8                      # 并发拉取对象的线程数
+
+# 下载进度上报的节流：每写入这么多字节、或隔这么久才回调一次
+# （chunk 是 64 KiB，大文件不动节流会打出几万次事件）
+_PROGRESS_STEP = 256 * 1024           # 256 KiB
+_PROGRESS_INTERVAL = 0.2              # 秒
 
 # 权限探测的单请求超时（秒）——探测要「整体十几秒内」结束，不能用默认的 20 秒 ×3
 _PROBE_TIMEOUT = 6.0
@@ -818,6 +826,7 @@ def actions(data: dict) -> list[dict]:
                 _REGION_FIELD,
             ],
             "save_to": {"key": "path", "default_name": "$row.fileName"},
+            "progress": True,
             "submit": "下载",
         },
         {
@@ -836,13 +845,19 @@ def actions(data: dict) -> list[dict]:
                 _REGION_FIELD,
             ],
             "save_to": {"key": "path", "default_name": "$row.folderName"},
+            "progress": True,
             "submit": "打包下载",
         },
     ]
 
 
-def run_action(action_id: str, params: dict, data: dict) -> dict:
-    """执行操作（全部只读，绝不产生远端变更）。"""
+def run_action(action_id: str, params: dict, data: dict, progress=None) -> dict:
+    """执行操作（全部只读，绝不产生远端变更）。
+
+    ``progress`` 是**可选**的下载进度回调（见 ``stream_action``）：
+    ``(current, total, text) -> None``，``total <= 0`` 表示总大小未知。
+    只有 ``stream_action`` 会传它，框架直接调用 ``run_action`` 时保持三个参数不变。
+    """
     data = data or {}
     params = params or {}
     try:
@@ -862,12 +877,23 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
         if action_id == "list_objects":
             return _run_list_objects(ak, sk, params)
         if action_id == "download_object":
-            return _run_download_object(ak, sk, params)
+            return _run_download_object(ak, sk, params, progress)
         if action_id == "download_prefix":
-            return _run_download_prefix(ak, sk, params)
+            return _run_download_prefix(ak, sk, params, progress)
         return {"ok": False, "error": "未知操作"}
     except Exception as exc:  # noqa: BLE001 - 操作边界兜底，绝不抛出
         return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
+
+
+def stream_action(action_id: str, params: dict, data: dict, on_delta, on_progress=None) -> dict:
+    """下载类操作的流式执行：边下边上报进度。其它操作回退到 run_action。
+
+    ``on_progress(current, total, text)`` 由框架按关键字传入（声明了才会传），
+    为 None 时下载路径与 ``run_action`` 完全一致，不做任何额外上报。
+    """
+    if action_id in ("download_object", "download_prefix"):
+        return run_action(action_id, params, data, on_progress)
+    return run_action(action_id, params, data)
 
 
 def _run_whoami(ak: str, sk: str) -> dict:
@@ -1076,8 +1102,62 @@ def _run_list_objects(ak: str, sk: str, params: dict) -> dict:
     }
 
 
-def _run_download_object(ak: str, sk: str, params: dict) -> dict:
-    """下载单个对象（流式写入 save_to 指定的路径）。"""
+def _content_length(response) -> int:
+    """响应的 ``Content-Length``；拿不到 / 非法 / 非正数一律返回 0（= 总大小未知）。"""
+    try:
+        raw = response.headers.get("Content-Length") or ""
+        value = int(str(raw).strip())
+    except Exception:  # noqa: BLE001 - 头缺失或不是数字都只是「不知道总大小」
+        return 0
+    return value if value > 0 else 0
+
+
+def _download_with_progress(response, path: str, progress, key: str) -> tuple[bool, str]:
+    """带进度上报的流式落盘（``.part`` + 原子替换的语义与 ``download_to_file`` 一致）。
+
+    **只在调用方拿到进度回调时才走这里**：没有回调时仍调用 ``download_to_file``，
+    保证「不上报」路径的行为与以前逐字节一致。
+    """
+    target = str(path or "").strip()
+    if not target:
+        return False, "未指定保存路径"
+    total = _content_length(response)
+    progress(0, total, f"开始下载 {key.rsplit('/', 1)[-1] or key}")
+
+    def _text(current: int) -> str:
+        """给用户看的量：``12.3 MB / 45.0 MB``；总大小未知（total<=0）时只写已下载量。"""
+        if total > 0:
+            return f"{_human_size(current)} / {_human_size(total)}"
+        return _human_size(current)
+
+    tmp = target + ".part"
+    written = 0
+    reported = 0
+    last = time.monotonic()
+    try:
+        with open(tmp, "wb") as handle:
+            for chunk in response.iter_bytes(65536):
+                handle.write(chunk)
+                written += len(chunk)
+                now = time.monotonic()
+                # 节流：攒够 256 KiB 或过了 0.2 秒才回调一次
+                if written - reported >= _PROGRESS_STEP or now - last >= _PROGRESS_INTERVAL:
+                    reported, last = written, now
+                    progress(written, total, _text(written))
+        os.replace(tmp, target)      # 同目录内的替换是原子的
+    except Exception as exc:  # noqa: BLE001 - 插件边界兜底
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False, f"写入失败：{type(exc).__name__}"
+    if written != reported:          # 不足一个节流阈值的小文件也补报终值，别让进度条停在 0
+        progress(written, total, _text(written))
+    return True, target
+
+
+def _run_download_object(ak: str, sk: str, params: dict, progress=None) -> dict:
+    """下载单个对象（流式写入 save_to 指定的路径）；给了 ``progress`` 就边写边上报。"""
     target, error = _cos_target(params)
     if error:
         return {"ok": False, "error": error}
@@ -1096,7 +1176,10 @@ def _run_download_object(ak: str, sk: str, params: dict) -> dict:
             if resp.status_code != 200:
                 resp.read()                       # 错误体很小，读出来好给出原因
                 return {"ok": False, "error": _cos_failure(resp, ak, sk)}
-            ok, message = download_to_file(resp, path)
+            if progress is None:
+                ok, message = download_to_file(resp, path)
+            else:
+                ok, message = _download_with_progress(resp, path, progress, key)
     if not ok:
         return {"ok": False, "error": message}
     return {"ok": True, "output": f"已保存到 {message}"}
@@ -1149,8 +1232,11 @@ def _zip_entry_name(key: str, prefix: str) -> str | None:
     return rel
 
 
-def _run_download_prefix(ak: str, sk: str, params: dict) -> dict:
-    """把某个前缀下的所有对象并发拉取后打包成 zip（本地临时文件 → 原子落盘）。"""
+def _run_download_prefix(ak: str, sk: str, params: dict, progress=None) -> dict:
+    """把某个前缀下的所有对象并发拉取后打包成 zip（本地临时文件 → 原子落盘）。
+
+    给了 ``progress`` 时按**对象个数**上报（跨对象累加字节数对用户不直观）。
+    """
     target, error = _cos_target(params)
     if error:
         return {"ok": False, "error": error}
@@ -1195,6 +1281,10 @@ def _run_download_prefix(ak: str, sk: str, params: dict) -> dict:
     failed: list[str] = []
     skipped: list[str] = []
     written = 0
+    count = len(objects)
+    done = 0
+    if progress is not None:
+        progress(0, count, f"开始打包 {count} 个对象")
 
     def _fetch(index: int, key: str) -> tuple[str, str, str]:
         """把一个对象流式拉到本地临时文件，返回 (key, local_path, error)。"""
@@ -1220,6 +1310,11 @@ def _run_download_prefix(ak: str, sk: str, params: dict) -> dict:
             with zipfile.ZipFile(part_path, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
                 for future in as_completed(futures):
                     key, local, fetch_error = future.result()
+                    done += 1
+                    if progress is not None:
+                        # 上报「已处理对象数 / 对象总数」，text 带当前对象名
+                        # （失败与跳过的对象同样计入——它们也是「已经处理完」的）
+                        progress(done, count, f"{done}/{count} {key}")
                     if fetch_error:
                         failed.append(fetch_error)
                         continue
