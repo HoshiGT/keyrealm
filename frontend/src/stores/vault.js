@@ -19,6 +19,9 @@ const emptyBatch = () => ({
   // 本次要验证的凭据 id（由 batch_started 事件给）。让对应行的「验证」按钮转成 loading，
   // 免得用户对着已被后台处理的条目重复点。
   ids: [],
+  // 谁触发的：manual / mcp / schedule。**只用于决定要不要整页互斥**——只有用户自己点的
+  // （manual）才锁整页；MCP 与定时任务都在用户没看着的时候跑，锁住界面只会让人莫名点不动。
+  trigger: '',
   result: null,
 })
 
@@ -182,7 +185,10 @@ export const useVaultStore = defineStore('vault', {
      *  concurrency / timeout 来自「批量验证」对话框，传了即随本次验证落库。 */
     async batchVerify(scope = 'all', groupId = null, credentialType = null, credentialIds = null,
       concurrency = null, timeout = null) {
-      this.batch = { ...emptyBatch(), running: true }
+      // 先把 trigger 写成 manual：这里的入口只有用户在对话框里点「验证 N 条」一种，
+      // 而 batch_started 事件要等后端线程起来才到——中间那段空窗期若 trigger 为空，
+      // 整页互斥会滞后一拍。写死反而准确。
+      this.batch = { ...emptyBatch(), running: true, trigger: 'manual' }
       try {
         return await api.batchVerify(scope, groupId, credentialType, credentialIds,
           concurrency, timeout)
@@ -282,6 +288,7 @@ export const useVaultStore = defineStore('vault', {
       this.batch.total = detail.total ?? 0
       this.batch.currentName = ''
       this.batch.status = ''
+      this.batch.trigger = detail.trigger || ''
       this.batch.ids = Array.isArray(detail.credentials) ? detail.credentials : []
     },
 
@@ -289,6 +296,7 @@ export const useVaultStore = defineStore('vault', {
       this.batch.running = false
       // 结束时必须清掉：留着会让整批条目一直显示 loading，直到下一次批量验证
       this.batch.ids = []
+      this.batch.trigger = ''
       this.batch.result = detail || null
       await this.fetchCredentials()
       return this.batch.result
@@ -296,7 +304,9 @@ export const useVaultStore = defineStore('vault', {
 
     /** 重载页面后把仍在跑的批量验证接回界面。
      *  started / progress 都是「推送」事件，重载后已经错过，只能拿一次任务快照兜底。
-     *  任务里不存凭据 id，所以行内 loading 恢复不了——这里只保证横幅还能显示进度。 */
+     *  任务里不存凭据 id，所以行内 loading 恢复不了——这里只保证横幅还能显示进度。
+     *  也同样不存触发方，故**不置 trigger**：重载后默认不锁整页（拿不准时宁可放过，
+     *  锁错了用户会莫名点不动；后端另有 in-flight 保护，重复点也不会真的重跑）。 */
     async resumeBatchFromTasks() {
       if (this.batch.running) return
       let list = []

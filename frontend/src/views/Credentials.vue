@@ -48,10 +48,14 @@ const batchConcurrency = ref(8)
 const batchTimeout = ref(20)
 const batchLimits = ref({ concurrency_range: [1, 32], timeout_range: [5, 300] })
 
-// 批量验证运行期间列表进入「只读」：新增、批量验证、行内动作一律锁上，免得验证还没结束
-// 就把条目改掉/删掉，让结果与界面对不上。**刻意不禁导航**——用户就是要能在后台跑的同时
-// 去「任务」页看进度。所有互斥都由这一个 computed 驱动，不散着写。
+// 批量验证的运行状态。两个来源要分开看：
+//   · 手动批量（用户在「批量验证」对话框里点的）→ **整页只读**：新增、编辑、删除、行内动作
+//     一律锁上，免得验证还没结束就把条目改掉/删掉，让结果与界面对不上。
+//     **刻意不禁导航**——用户就是要能在后台跑的同时去「任务」页看进度。
+//   · 定时任务 / MCP 触发 → 不锁页。那是用户没看着的时候自己跑起来的，把界面冻住只会
+//     让人莫名点不动；只横幅提示 + 禁用本次涉及条目的「验证」按钮。
 const batchRunning = computed(() => vaultStore.batch.running)
+const batchLocked = computed(() => batchRunning.value && vaultStore.batch.trigger === 'manual')
 
 // 本次批量验证覆盖的凭据 id（后端 batch_verify_started 事件下发）。
 // 用字符串归一后比较：id 走一趟 JSON 之后到底是数字还是字符串不值得赌。
@@ -1533,7 +1537,7 @@ onMounted(async () => {
         @click="load"
       >刷新</el-button>
       <el-button :icon="Refresh" :loading="batchStarting" :disabled="batchRunning" @click="openBatchPick">批量验证</el-button>
-      <el-button type="primary" :icon="Plus" :disabled="batchRunning" @click="openCreate">添加凭据</el-button>
+      <el-button type="primary" :icon="Plus" :disabled="batchLocked" @click="openCreate">添加凭据</el-button>
     </div>
 
     <el-card shadow="never">
@@ -1693,23 +1697,25 @@ onMounted(async () => {
                 <el-button
                   v-if="pluginFor(row.credential_type)?.has_actions"
                   size="small"
-                  :disabled="batchRunning"
+                  :disabled="batchLocked"
                   @click="openActions(row, $event)"
                 >
                   操作
                 </el-button>
+                <!-- 「验证」只按**本条是否在本次批量里**禁用：批量勾了 A/B/C，D 的按钮照常可用，
+                     用户想单条补验就补验。整页互斥（batchLocked）交给新增/编辑/删除那些会改数据的地方。 -->
                 <el-button
                   size="small"
                   type="primary"
                   plain
                   :loading="verifyingIds.includes(row.id) || isBatchVerifying(row.id)"
-                  :disabled="batchRunning || isBatchVerifying(row.id)"
+                  :disabled="isBatchVerifying(row.id)"
                   @click="verifyRow(row)"
                 >
                   验证
                 </el-button>
-                <el-button size="small" :icon="Edit" :disabled="batchRunning" @click="openEdit(row)">编辑</el-button>
-                <el-button size="small" type="danger" plain :icon="Delete" :disabled="batchRunning" @click="removeRow(row)" />
+                <el-button size="small" :icon="Edit" :disabled="batchLocked" @click="openEdit(row)">编辑</el-button>
+                <el-button size="small" type="danger" plain :icon="Delete" :disabled="batchLocked" @click="removeRow(row)" />
               </div>
             </template>
           </el-table-column>

@@ -175,9 +175,12 @@ def batch_verify(
     task_id = task["id"]
     should_cancel = tasks.should_cancel(task_id)
     # 前端据此把对应条目的「验证」按钮置成 loading，避免重复点
+    # trigger 用于区分「手动发起」与「定时触发」：手动才整页互斥（用户自己点的，知道在跑），
+    # 定时是后台自己触发的，只提示 + 禁用本次涉及的验证按钮，不能把用户按在界面前。
     _push_event("vault:batch_verify_started", {
         "total": total,
         "skipped": skipped,
+        "trigger": trigger_type,
         "credentials": [c["id"] for c in creds],
     })
 

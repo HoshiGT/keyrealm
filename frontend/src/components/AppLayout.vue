@@ -230,6 +230,14 @@ const batchSummary = computed(() => {
   return `批量验证完成：有效 ${result.valid} · 无效 ${result.invalid} · 异常 ${result.error}${skipped}`
 })
 
+/** 运行中横幅的抬头：区分「自己点的」与「背后跑起来的」，用户才知道界面为什么被锁/没被锁。 */
+const batchRunningLabel = computed(() => {
+  const trigger = vaultStore.batch.trigger
+  if (trigger === 'schedule') return '定时批量验证进行中'
+  if (trigger === 'mcp') return 'MCP 触发的批量验证进行中'
+  return '正在批量验证'
+})
+
 /** 关掉结果横幅 = 认掉这次结果；下一次验证开始时横幅会自然重新出现。 */
 function closeBatchResult() {
   vaultStore.batch.result = null
@@ -344,7 +352,7 @@ async function handleMinimize() {
           <span class="batch-banner-row">
             <span class="batch-banner-text">
               <template v-if="vaultStore.batch.running">
-                正在批量验证
+                {{ batchRunningLabel }}
                 <strong>{{ vaultStore.batch.done }}/{{ vaultStore.batch.total || '—' }}</strong>
                 · 当前：<strong>{{ vaultStore.batch.currentName || '准备中…' }}</strong>
               </template>

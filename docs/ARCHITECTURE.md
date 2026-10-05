@@ -248,7 +248,8 @@ plugins/
   `tasks.should_cancel()`，命中就 `pool.shutdown(wait=False, cancel_futures=True)` 收尾
   （正在跑的那几个让它自己跑完，不强杀线程），任务标成「已取消」并如实写「已处理 n/m」。
 - **三个事件**（前端据此做横幅与行内 loading，不用模态弹窗把人按在前台）：
-  `vault:batch_verify_started`（带本次要验证的凭据 id 列表）、`..._progress`、`..._done`
+  `vault:batch_verify_started`（带本次要验证的凭据 id 列表**与触发方 `trigger`**——`manual` 才让
+  前端整页互斥，`mcp` / `schedule` 是用户没看着时跑起来的，只提示不锁页）、`..._progress`、`..._done`
   （取消时额外带 `canceled` 与 `done`）。
 - **超时**：同样借环境变量下发（插件不允许 `import backend`）——`apply_timeout()` 把值写入 `VAULT_TIMEOUT`，插件侧 `timeout()` 每次发请求时读取，改完立即生效。外部显式设置的同名变量优先。机制与 `VAULT_PROXY` 同构，见 `docs/PLUGIN_GUIDE.md` 第 2.3 节。
 
