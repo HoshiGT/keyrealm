@@ -3,21 +3,19 @@
 一份凭据支持两种**认证方式**（字段 ``auth_mode``）：
 
 - ``api_key``（默认）：标准 OpenAI API Key，走 ``GET /v1/models`` 探针；
-- ``chatgpt``：Codex CLI 的 ChatGPT 登录态文件 ``~/.codex/auth.json``——凭据**不是**普通
-  API Key，判定以**本地解 JWT 为主、联网 best-effort 增强**（详见 ``_verify_chatgpt``）。
+- ``chatgpt``：Codex CLI 的 ChatGPT 登录态——凭据**不是**普通 API Key，判定以**本地解 JWT
+  为主、联网 best-effort 增强**（详见 ``_verify_chatgpt``）。
 
-``auth.json`` 形如::
+登录态**按字段分开填**，不要求粘贴整份 ``~/.codex/auth.json``（那样既难维护、又把不必要的
+字段一起存了）。三个字段一一对应 ``~/.codex/auth.json`` 里 ``tokens`` 下的同名项：
 
-    {"auth_mode": "chatgpt",
-     "OPENAI_API_KEY": null,
-     "tokens": {"id_token": "<JWT>", "access_token": "<JWT>",
-                "refresh_token": "rt.1.<...>", "account_id": "<uuid>"},
-     "last_refresh": "2026-09-28T02:27:37.265912932Z"}
+- ``access_token``（必需）：本地判过期 + 联网校验都用它；
+- ``account_id``（可选）：联网校验的 ``chatgpt-account-id`` 头，留空由 JWT claim 兜底；
+- ``id_token``（可选）：仅在 access_token 缺展示字段时补充。
 
-其内部 ``auth_mode`` 也可能是 ``apikey``（此时 ``OPENAI_API_KEY`` 有值、``tokens`` 可能为空），
-两种都处理。
-
-**绝不调用 refresh_token 换新令牌**——那会轮换掉用户的刷新令牌，属于写副作用。
+**``refresh_token`` 从不收集、也从不使用**：整仓没有任何向 auth 端点换令牌的请求，
+插件只发 ``GET /v1/models`` 与 ``GET /backend-api/me`` 两个只读请求。代刷会轮换掉用户的
+刷新令牌，属于写副作用，明确不做——access_token 过期就让用户回 Codex 重新登录再更新。
 
 安全：任何 ``message`` / ``account_info`` / ``output`` / ``rows`` 都不出现令牌或 API Key 明文，
 展示只用 JWT 里的非敏感 claim（邮箱、套餐、账号 id 前 8 位……）。
@@ -52,9 +50,6 @@ CHATGPT_ME_URL = "https://chatgpt.com/backend-api/me"
 # （二进制 login/src/auth/default_client.rs:76 旁的默认值）。
 ORIGINATOR = "codex_cli_rs"
 USER_AGENT = "codex_cli_rs/0.157.1"
-
-# auth.json 内部 auth_mode=apikey 时走的 OpenAI 标准探针
-OPENAI_API_BASE = "https://api.openai.com/v1"
 
 # id_token / access_token 里自定义 claim 的命名空间
 AUTH_CLAIM_NS = "https://api.openai.com/auth"
@@ -105,13 +100,11 @@ def validate(data: dict) -> list[str]:
 
     errors: list[str] = []
     if _is_chatgpt(data):
-        raw = data.get("auth_json")
-        if not str(raw or "").strip():
-            errors.append("认证方式选「ChatGPT 登录态」时必须粘贴 ~/.codex/auth.json 的内容")
-        else:
-            _, err = _parse_auth_json(raw)
-            if err:
-                errors.append(err)
+        if not (data.get("access_token") or "").strip():
+            errors.append(
+                "认证方式选「ChatGPT 登录态（Codex）」时必须填 access_token"
+                "（＝ ~/.codex/auth.json 里 tokens.access_token 的值）"
+            )
     elif not (data.get("api_key") or "").strip():
         errors.append("认证方式选「API Key」时必须填写 API Key")
     return errors
@@ -133,28 +126,14 @@ def _verify_api_key_mode(data: dict) -> VerifyResult:
 
 
 def _verify_chatgpt_mode(data: dict) -> VerifyResult:
-    """auth_mode=chatgpt：解析并验证 Codex 登录态（本地为主，联网增强）。"""
-    doc, err = _parse_auth_json(data.get("auth_json"))
-    if err:
-        return VerifyResult(status="invalid", message=err)
-
-    auth = _read_auth(doc)
-    # auth.json 内部 auth_mode 显式为 apikey 时以 API Key 为准（此时 tokens 通常为空或残留旧值）
-    if auth["auth_mode"] == "apikey" and auth["api_key"]:
-        return _verify_api_key(auth)
-    if auth["access_token"]:
-        return _verify_chatgpt(auth)
-    if auth["api_key"]:
-        return _verify_api_key(auth)
-    if auth["auth_mode"] == "chatgpt":
+    """auth_mode=chatgpt：验证 Codex 登录态（本地为主，联网增强）。"""
+    auth = _read_auth(data)
+    if not auth["access_token"]:
         return VerifyResult(
             status="invalid",
-            message="auth_mode 是 chatgpt，但缺少 tokens.access_token（登录态不完整，请在 Codex 里重新登录后重新粘贴）",
+            message="缺少 access_token（认证方式选「ChatGPT 登录态（Codex）」时必须填它）",
         )
-    return VerifyResult(
-        status="invalid",
-        message="无法识别的 auth.json：既没有 tokens.access_token，也没有 OPENAI_API_KEY",
-    )
+    return _verify_chatgpt(auth)
 
 
 def _verify(data: dict) -> VerifyResult:
@@ -267,38 +246,24 @@ def _short_id(value, keep: int = 8) -> str:
     return f"{text[:keep]}…" if len(text) > keep else text
 
 
-def _parse_auth_json(raw) -> tuple[Optional[dict], Optional[str]]:
-    """解析用户粘贴的 auth.json，返回 ``(doc, 错误说明)``。"""
-    text = str(raw or "").strip()
-    if not text:
-        return None, "auth.json 内容为空（请粘贴 ~/.codex/auth.json 的全部内容）"
-    try:
-        doc = json.loads(text)
-    except (ValueError, TypeError):
-        return None, "不是合法的 JSON（请粘贴 ~/.codex/auth.json 的完整内容，不要截断）"
-    if not isinstance(doc, dict):
-        return None, "auth.json 顶层应当是一个 JSON 对象"
-    return doc, None
+def _read_auth(data: dict) -> dict:
+    """把用户**分字段**填的登录态摊平成内部结构（不做任何判定）。
 
+    不再要求粘贴整份 auth.json：字段一一对应 `~/.codex/auth.json` 里 `tokens` 下的同名项，
+    - ``access_token``：必需（JWT，用于本地判过期 + 联网校验）
+    - ``account_id``：可选（联网校验的 ``chatgpt-account-id`` 头；留空由 JWT 里的 claim 兜底）
+    - ``id_token``：可选（仅在 access_token 缺展示字段时补充）
 
-def _read_auth(doc: dict) -> dict:
-    """把 auth.json 摊平成我们关心的字段（不做任何判定）。"""
-    tokens = doc.get("tokens")
-    tokens = tokens if isinstance(tokens, dict) else {}
-
+    ``refresh_token`` 刻意**不收**：本插件从不使用它，多存一份长期凭据只是白白扩大保存面。
+    """
     def _text(value) -> str:
         return str(value).strip() if value is not None else ""
 
-    api_key = _text(doc.get("OPENAI_API_KEY"))
     return {
-        "auth_mode": _text(doc.get("auth_mode")).lower(),
-        "last_refresh": _text(doc.get("last_refresh")),
-        "access_token": _text(tokens.get("access_token")),
-        "id_token": _text(tokens.get("id_token")),
-        "refresh_token": _text(tokens.get("refresh_token")),
-        "account_id": _text(tokens.get("account_id")),
-        "api_key": api_key,
-        "api_key_len": len(api_key),
+        "access_token": _text(data.get("access_token")),
+        "id_token": _text(data.get("id_token")),
+        "account_id": _text(data.get("account_id")),
+        "refresh_token": "",
     }
 
 
@@ -360,24 +325,16 @@ def _account_info(claims: dict, payload: Optional[dict]) -> Optional[dict]:
     return info or None
 
 
-def _mode_summary(auth: dict) -> str:
-    if auth["access_token"]:
-        return "ChatGPT 登录态"
-    if auth["api_key"]:
-        return "API Key"
-    return "未知"
-
-
 # ── 验证：ChatGPT 登录态 ──────────────────────────────────
 
 def _verify_chatgpt(auth: dict) -> VerifyResult:
     """auth_mode=chatgpt（有 tokens.access_token）的判定路径。"""
     access_claims = _extract_claims(_decode_jwt_payload(auth["access_token"]))
     if not access_claims.get("exp") and not access_claims.get("email"):
-        # access_token 不是可解 JWT —— 只可能是内容被截断或不是 access_token
+        # access_token 不是可解 JWT —— 多半是粘贴时被截断，或粘错了别的内容
         return VerifyResult(
             status="invalid",
-            message="tokens.access_token 不是可解析的 JWT（内容可能被截断，请重新粘贴完整 auth.json）",
+            message="access_token 不是可解析的 JWT（内容可能被截断；它是 auth.json 里 tokens.access_token 的完整值）",
         )
 
     # id_token 只在 access_token 缺字段时做补充展示（两者 claim 基本一致）
@@ -396,11 +353,12 @@ def _verify_chatgpt(auth: dict) -> VerifyResult:
     # ① 本地先判过期（过期就没必要再联网了）
     if exp_ts is not None and time.time() >= exp_ts:
         stale = _humanize(time.time() - exp_ts) or "刚刚"
-        tail = "（刷新令牌尚在，Codex CLI 下次运行会自动续期；本插件不代刷，以免轮换掉它）" \
-            if auth["refresh_token"] else "（auth.json 里没有 refresh_token，请重新登录 Codex）"
         return VerifyResult(
             status="invalid",
-            message=f"本地校验（未联网）：access_token 已于 {_fmt_ts(exp_ts)} 过期，约 {stale}前{tail}",
+            message=(
+                f"本地校验（未联网）：access_token 已于 {_fmt_ts(exp_ts)} 过期，约 {stale}前。"
+                "本插件不代刷令牌，请在 Codex 里重新登录后把新的 access_token 更新进来。"
+            ),
             account_info=info,
         )
 
@@ -435,17 +393,6 @@ def _verify_chatgpt(auth: dict) -> VerifyResult:
     )
 
 
-def _verify_api_key(auth: dict) -> VerifyResult:
-    """auth.json 内部 auth_mode=apikey（OPENAI_API_KEY 有值）的判定路径：走 OpenAI 标准探针。"""
-    result = probe_openai_models(OPENAI_API_BASE, auth["api_key"])
-    if result.status == "valid":
-        # 补一句模式说明，避免用户以为这是 ChatGPT 订阅额度
-        result.message = "API Key 有效（auth_mode=apikey，走 api.openai.com 计费）"
-    elif result.status == "invalid":
-        result.message = f"{result.message}（auth_mode=apikey）"
-    return result
-
-
 # ── 模型列表（仅 API Key 模式） ───────────────────────────
 
 def list_models(data: dict) -> list:
@@ -463,8 +410,8 @@ CHAT_MODEL = "gpt-4o-mini"
 
 # ── 可选操作：登录态详情（chatgpt 模式，纯本地、无副作用、不联网） ──
 
-def _token_info_rows(doc: dict) -> list:
-    auth = _read_auth(doc)
+def _token_info_rows(data: dict) -> list:
+    auth = _read_auth(data)
     access_claims = _extract_claims(_decode_jwt_payload(auth["access_token"]))
     id_claims = _extract_claims(_decode_jwt_payload(auth["id_token"]))
     claims = {k: (v if v not in (None, "", [], {}) else id_claims.get(k)) for k, v in access_claims.items()}
@@ -476,16 +423,7 @@ def _token_info_rows(doc: dict) -> list:
         if text:
             rows.append({"field": field, "value": text})
 
-    if not auth["access_token"]:
-        add("模式", "API Key 模式（auth_mode={}）".format(auth["auth_mode"] or "未标注"))
-        if auth["api_key"]:
-            add("API Key", f"已配置（长度 {auth['api_key_len']}，内容不展示）")
-        else:
-            add("提示", "这份 auth.json 里既没有 ChatGPT 登录态令牌，也没有 OPENAI_API_KEY")
-        add("最近刷新", auth["last_refresh"])
-        return rows
-
-    add("模式", f"ChatGPT 登录态（auth_mode={auth['auth_mode'] or '未标注'}）")
+    add("模式", "ChatGPT 登录态")
     add("签发者", claims.get("iss"))
     add("签发时间", _fmt_ts(claims.get("iat")))
     exp_ts = claims.get("exp")
@@ -525,10 +463,8 @@ def _token_info_rows(doc: dict) -> list:
         tokens_present.append("access_token")
     if auth["id_token"]:
         tokens_present.append("id_token")
-    if auth["refresh_token"]:
-        tokens_present.append("refresh_token（本插件不会使用）")
-    add("令牌", " · ".join(tokens_present))
-    add("最近刷新", auth["last_refresh"])
+    if tokens_present:
+        add("已提供令牌", " · ".join(tokens_present))
     return rows
 
 
@@ -554,12 +490,11 @@ def actions(data: dict) -> list[dict]:
     """声明可用操作，按认证方式返回：
 
     - ``api_key``：凭据含 API Key 时提供「简单对话」（流式）；
-    - ``chatgpt``：auth.json 可解析时提供「登录态详情」（纯本地只读，不联网）。
+    - ``chatgpt``：填了 access_token 时提供「登录态详情」（纯本地只读，不联网）。
     """
     data = data or {}
     if _is_chatgpt(data):
-        doc, err = _parse_auth_json(data.get("auth_json"))
-        if err:
+        if not (data.get("access_token") or "").strip():
             return []
         return [dict(_TOKEN_INFO_ACTION)]
     if not (data.get("api_key") or "").strip():
@@ -575,11 +510,8 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
     if _is_chatgpt(data):
         if action_id != "token_info":
             return {"ok": False, "error": "未知操作"}
-        doc, err = _parse_auth_json(data.get("auth_json"))
-        if err:
-            return {"ok": False, "error": err}
         try:
-            rows = _token_info_rows(doc)
+            rows = _token_info_rows(data)
         except Exception as exc:  # noqa: BLE001 - 操作边界兜底
             return {"ok": False, "error": f"解析失败：{type(exc).__name__}"}
         return {"ok": True, "rows": rows, "total": len(rows)}
@@ -628,13 +560,9 @@ def get_display_summary(data: dict) -> str:
         base_url = data.get("base_url") or DEFAULT_BASE_URL
         return f"{NAME} | {base_url}"
 
-    doc, err = _parse_auth_json(data.get("auth_json"))
-    if err:
+    auth = _read_auth(data)
+    if not auth["access_token"]:
         return DISPLAY_NAME
-    auth = _read_auth(doc)
-    mode = _mode_summary(auth)
-    if auth["access_token"]:
-        claims = _extract_claims(_decode_jwt_payload(auth["access_token"]))
-        plan = _plan_label(claims.get("plan"))
-        return f"{CHATGPT_NAME} | {mode}" + (f" · {plan}" if plan else "")
-    return f"{CHATGPT_NAME} | {mode}"
+    claims = _extract_claims(_decode_jwt_payload(auth["access_token"]))
+    plan = _plan_label(claims.get("plan"))
+    return f"{CHATGPT_NAME} | ChatGPT 登录态" + (f" · {plan}" if plan else "")

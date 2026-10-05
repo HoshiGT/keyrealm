@@ -628,6 +628,11 @@ qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）。
 - **llm**：18 个厂商 —— 简单对话（`chat`，流式）；其中 **openai** 另有「认证方式」下拉，
   选「ChatGPT 登录态（Codex）」时改为「登录态详情」（`token_info`，只读解析本地 JWT，**不回显任何令牌**）；
   `codebuddy` 是纯登录态类凭据，同样只有 `token_info`。
+  > 登录态**按字段分开填**（`access_token` 必需，`account_id` / `id_token` 可选），
+  > 不要求粘贴整份 `~/.codex/auth.json`——既不便于维护，也会把不必要的字段一起存下来。
+  > **`refresh_token` 不收集也不使用**：插件只发 `GET /v1/models` 与 `GET /backend-api/me`
+  > 两个只读请求，全仓没有任何换令牌的 POST；代刷会轮换掉用户的刷新令牌，属写副作用，明确不做。
+  > access_token 过期就让用户回 Codex 重新登录后更新该字段。
 - **dns**：
   - dnspod / godaddy / cloudflare —— **域名（站点）列表 → 行内「解析」下钻到解析记录 → 行内「修改」**，
     以及行内「新增」；前两者是 `write`，Cloudflare 用同一个表单（留空 `record_id` 即新增）
