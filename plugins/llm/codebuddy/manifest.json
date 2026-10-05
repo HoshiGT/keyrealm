@@ -8,13 +8,55 @@
   "batch_verify": true,
   "fields": [
     {
-      "key": "auth_json",
-      "label": "登录态 JSON",
-      "type": "textarea",
-      "required": true,
+      "key": "access_token",
+      "label": "access_token",
+      "type": "password",
+      "required": false,
       "sensitive": true,
-      "placeholder": "{\n  \"account\": { \"uid\": \"...\", \"nickname\": \"13500001355\" },\n  \"auth\": { \"accessToken\": \"eyJ...\", \"refreshToken\": \"eyJ...\", \"expiresAt\": 1793628000 }\n}",
-      "hint": "粘贴 CodeBuddy 客户端登录态文件的完整内容（含 account 与 auth 两段的整份 JSON）。内容等于长期登录凭据，将加密存储，验证过程只做只读查询、不会刷新或轮换 token。"
+      "placeholder": "eyJhbGciOiJSUzI1NiIsImtpZCI6...",
+      "hint": "必需。打开 CodeBuddy 客户端登录态文件，取 auth.accessToken 的值填到这里（是那串 eyJ 开头的 JWT，不是整份 JSON）。它等于长期登录凭据，将加密存储；验证过程只做只读查询、不会刷新或轮换。"
+    },
+    {
+      "key": "uid",
+      "label": "uid",
+      "type": "text",
+      "required": true,
+      "placeholder": "c0a5fb6b-…",
+      "hint": "必需。登录态文件里 account.uid 的值（形如 c0a5fb6b-… 的 UUID）；验证时会作为请求头 X-User-Id 发送。"
+    },
+    {
+      "key": "refresh_token",
+      "label": "refresh_token",
+      "type": "password",
+      "required": false,
+      "sensitive": true,
+      "placeholder": "留空即可（可选）",
+      "hint": "可选。登录态文件里 auth.refreshToken 的值。只保存、验证过程中绝不使用——CodeBuddy 的刷新会轮换令牌（属写副作用），本插件不刷新。"
+    },
+    {
+      "key": "enterprise_id",
+      "label": "企业 ID",
+      "type": "text",
+      "required": false,
+      "placeholder": "留空即可（个人账号为空）",
+      "hint": "可选。登录态文件里 account.enterpriseId 的值；企业账号才有，个人账号通常为空。填了会让验证带上企业/租户请求头。"
+    },
+    {
+      "key": "domain",
+      "label": "认证域",
+      "type": "text",
+      "required": false,
+      "default": "www.codebuddy.cn",
+      "placeholder": "www.codebuddy.cn",
+      "hint": "可选。登录态文件里 auth.domain 的值；中国站填 www.codebuddy.cn（默认），国际站填 www.codebuddy.ai。留空按中国站处理。"
+    },
+    {
+      "key": "expires_at",
+      "label": "过期时间戳",
+      "type": "text",
+      "required": false,
+      "placeholder": "留空即可（可选）",
+      "hint": "可选。登录态文件里 auth.expiresAt 的值（unix 时间戳，秒或毫秒均可）。仅在 accessToken 解不出 exp 时用于判断是否过期。"
     },
     {
       "key": "notes",

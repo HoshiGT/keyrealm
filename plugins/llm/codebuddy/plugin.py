@@ -1,11 +1,23 @@
 """腾讯 CodeBuddy 客户端登录态验证插件（plugins/llm/codebuddy/，自包含实现）。
 
 CodeBuddy 是腾讯的 AI 编程助手（中国站 www.codebuddy.cn / 国际站 www.codebuddy.ai）。
-这里的「凭据」不是 API Key，而是**客户端登录态文件**：一份含 ``account``（企业 ID / 昵称 /
-用户 ID）与 ``auth``（accessToken / refreshToken / 有效期 / realm）两段的 JSON，
-两个 token 都是 Keycloak 风格的 JWT（``iss`` = ``…/auth/realms/copilot``）。
+这里的「凭据」不是 API Key，而是**客户端登录态**——两个 Keycloak 风格的 JWT
+（``iss`` = ``…/auth/realms/copilot``）。
 
-验证策略（**全程只读**，绝不调用任何刷新/轮换接口）：
+登录态**按字段分开填**，不要求粘贴整份登录态文件（那样既难维护、又把不必要的字段一起存了）。
+字段一一对应登录态文件里的位置：
+
+- ``access_token``（必需）：``auth.accessToken``，本地判过期 + 联网校验都用它；
+- ``uid``（必需）：``account.uid``，联网校验请求头 ``X-User-Id`` 的值；
+- ``refresh_token``（可选）：``auth.refreshToken``，**只保存、从不使用**；
+- ``enterprise_id``（可选）：``account.enterpriseId``，个人账号为空；
+- ``domain``（可选）：``auth.domain``，默认 ``www.codebuddy.cn``；
+- ``expires_at``（可选）：``auth.expiresAt``（unix 时间戳，秒/毫秒均可）。
+
+**``refresh_token`` 只存不用**：CodeBuddy 的刷新会**轮换**刷新令牌，属写副作用，
+本插件整条验证路径绝不调用任何刷新/轮换接口，全程只发一次只读的额度查询。
+
+验证策略（**全程只读**）：
 
 1. 本地解析 JWT（base64url 解 payload，**不验签**）取出账号信息与到期时间；
 2. 联网校验：向上游 ``POST /v2/billing/meter/get-user-resource``（套餐/额度查询，只读）。
@@ -37,6 +49,8 @@ NAME = "腾讯 CodeBuddy"
 # （来源：第三方协议转换器 IceeAn/codebuddy2api 的默认配置 CODEBUDDY_API_ENDPOINT
 #  与 CODEBUDDY_ALLOWED_API_ENDPOINTS，见 docs 记录）。
 DEFAULT_ENDPOINT = "https://copilot.tencent.com"
+# 登录态里 auth.domain 的缺省值：留空按中国站处理
+DEFAULT_DOMAIN = "www.codebuddy.cn"
 _ENDPOINT_BY_DOMAIN = {
     "www.codebuddy.cn": "https://copilot.tencent.com",
     "www.codebuddy.ai": "https://www.codebuddy.ai",
@@ -145,44 +159,34 @@ def _short_id(value) -> str:
     return f"{text[:8]}…" if len(text) > 8 else text
 
 
-def _parse_auth_json(raw) -> tuple[Optional[dict], str]:
-    """解析登录态 JSON，返回 ``(payload, 错误说明)``；成功时错误说明为空串。
+# ── 分字段读取 ──────────────────────────────────────────
 
-    只做结构校验（顶层对象 → auth 对象 → auth.accessToken 非空），
-    错误信息是给用户看的人话，**不含任何 token 内容**。
+def _read(data: dict) -> dict:
+    """把用户**分字段**填的登录态摊平成内部结构（只做取值，不做任何判定）。
+
+    不再要求粘贴整份登录态文件：字段一一对应文件里的位置——
+
+    - ``access_token``：必需（= ``auth.accessToken``，JWT）
+    - ``uid``：必需（= ``account.uid``；联网探针请求头 ``X-User-Id`` 的值）
+    - ``refresh_token``：可选（= ``auth.refreshToken``）——**只存不用**（见模块说明）
+    - ``enterprise_id``：可选（= ``account.enterpriseId``，个人账号为空）
+    - ``domain``：可选（= ``auth.domain``），留空取 ``DEFAULT_DOMAIN``
+    - ``expires_at``：可选（= ``auth.expiresAt``），accessToken 解不出 ``exp`` 时兜底
     """
-    text = str(raw or "").strip()
-    if text.startswith("﻿"):       # 客户端写文件可能带 BOM
-        text = text.lstrip("﻿").strip()
-    if not text:
-        return None, "登录态 JSON 不能为空"
-    try:
-        payload = json.loads(text)
-    except Exception:  # noqa: BLE001 - 用户粘贴内容不可控
-        return None, "不是合法 JSON（请粘贴 CodeBuddy 客户端登录态文件的全部内容）"
-    if not isinstance(payload, dict):
-        return None, "登录态 JSON 顶层应为对象"
-    auth = payload.get("auth")
-    if not isinstance(auth, dict):
-        return None, "登录态缺少 auth 字段（应含 accessToken / refreshToken）"
-    if not str(auth.get("accessToken") or "").strip():
-        return None, "登录态缺少 auth.accessToken"
-    return payload, ""
+    data = data or {}
 
+    def _text(key: str) -> str:
+        value = data.get(key)
+        return str(value).strip() if value is not None else ""
 
-def _split(payload: dict) -> tuple[dict, dict, str, str, str, str, str]:
-    """从登录态里取出常用字段，返回 (auth, account, access, refresh, domain, uid, enterprise_id)。"""
-    auth = payload.get("auth") if isinstance(payload.get("auth"), dict) else {}
-    account = payload.get("account") if isinstance(payload.get("account"), dict) else {}
-    return (
-        auth,
-        account,
-        str(auth.get("accessToken") or "").strip(),
-        str(auth.get("refreshToken") or "").strip(),
-        str(auth.get("domain") or "").strip(),
-        str(account.get("uid") or "").strip(),
-        str(account.get("enterpriseId") or "").strip(),
-    )
+    return {
+        "access_token": _text("access_token"),
+        "refresh_token": _text("refresh_token"),
+        "uid": _text("uid"),
+        "enterprise_id": _text("enterprise_id"),
+        "domain": _text("domain") or DEFAULT_DOMAIN,
+        "expires_at": _text("expires_at"),
+    }
 
 
 # ── 联网：只读额度/套餐查询（同时充当即时鉴权探针） ──────
@@ -366,17 +370,23 @@ def _account_info(claims: dict, phone: str, uid: str, plan: str = "",
 # ── 验证 ────────────────────────────────────────────────
 
 def _verify(data: dict) -> VerifyResult:
-    payload, err = _parse_auth_json((data or {}).get("auth_json"))
-    if err:
-        return VerifyResult(status="invalid", message=err)
+    auth = _read(data)
+    access = auth["access_token"]
+    uid = auth["uid"]
+    refresh = auth["refresh_token"]
+    domain = auth["domain"]
+    enterprise_id = auth["enterprise_id"]
+    if not access:
+        return VerifyResult(status="invalid", message="缺少 access_token（＝登录态里的 auth.accessToken）")
+    if not uid:
+        return VerifyResult(status="invalid", message="缺少 uid（＝登录态里的 account.uid）")
 
-    auth, account, access, refresh, domain, uid, enterprise_id = _split(payload)
     claims = _decode_jwt_payload(access) or {}
     refresh_claims = _decode_jwt_payload(refresh) or {}
 
-    phone = str(account.get("nickname") or "").strip() or str(claims.get("preferred_username") or "").strip()
+    phone = str(claims.get("preferred_username") or "").strip()
     now = time.time()
-    access_exp = _normalize_epoch(claims.get("exp")) or _normalize_epoch(auth.get("expiresAt"))
+    access_exp = _normalize_epoch(claims.get("exp")) or _normalize_epoch(auth["expires_at"])
     refresh_exp = _normalize_epoch(refresh_claims.get("exp"))
 
     endpoint = _endpoint_for(domain)
@@ -444,26 +454,28 @@ def verify(data: dict) -> VerifyResult:
 
 
 def validate(data: dict) -> list[str]:
-    """表单校验：JSON 结构与必需字段（空列表 = 通过）。"""
-    _, err = _parse_auth_json((data or {}).get("auth_json"))
-    return [err] if err else []
+    """表单校验：access_token 与 uid 必填（空列表 = 通过）。"""
+    auth = _read(data)
+    errors: list[str] = []
+    if not auth["access_token"]:
+        errors.append("access_token 不能为空（＝登录态里的 auth.accessToken）")
+    if not auth["uid"]:
+        errors.append("uid 不能为空（＝登录态里的 account.uid）")
+    return errors
 
 
 def get_display_summary(data: dict) -> str:
     """凭据列表中的简短展示文本（只出现打码后的账号名）。"""
-    payload, err = _parse_auth_json((data or {}).get("auth_json"))
-    if err:
-        return NAME
-    account = payload.get("account") if isinstance(payload.get("account"), dict) else {}
-    masked = _mask_phone(account.get("nickname"))
+    claims = _decode_jwt_payload(_read(data)["access_token"]) or {}
+    masked = _mask_phone(claims.get("preferred_username"))
     return f"{NAME} | {masked}" if masked else NAME
 
 
 # ── 可选操作：登录态信息（纯本地、只读、无副作用） ──────
 
 def actions(data: dict) -> list[dict]:
-    """声明可用操作（凭据里填了登录态 JSON 才提供）。"""
-    if not str((data or {}).get("auth_json") or "").strip():
+    """声明可用操作（凭据里填了 access_token 才提供）。"""
+    if not str((data or {}).get("access_token") or "").strip():
         return []
     return [
         {
@@ -482,11 +494,12 @@ def actions(data: dict) -> list[dict]:
     ]
 
 
-def _token_info_rows(payload: dict) -> list[dict]:
+def _token_info_rows(data: dict) -> list[dict]:
     """把 JWT 里的**非敏感**信息摊平成表格行；任何 token 原文都不出现。"""
-    auth, account, access, refresh, _, uid, _ = _split(payload)
-    claims = _decode_jwt_payload(access) or {}
-    refresh_claims = _decode_jwt_payload(refresh) or {}
+    auth = _read(data)
+    claims = _decode_jwt_payload(auth["access_token"]) or {}
+    refresh_claims = _decode_jwt_payload(auth["refresh_token"]) or {}
+    uid = auth["uid"]
 
     rows: list[dict] = []
 
@@ -506,13 +519,13 @@ def _token_info_rows(payload: dict) -> list[dict]:
     add("签发者 (iss)", claims.get("iss"))
     add("客户端 (azp)", claims.get("azp"))
     add("令牌类型 (typ)", claims.get("typ"))
-    add("认证域 (realm)", auth.get("realm"))
+    add("登录域 (domain)", auth["domain"])
     add("令牌来源 (token_source)", claims.get("token_source"))
-    add("账号 (preferred_username)", _mask_phone(claims.get("preferred_username") or account.get("nickname")))
+    add("账号 (preferred_username)", _mask_phone(claims.get("preferred_username")))
     add("用户 ID (uid)", _short_id(uid))
     add("主体 (sub)", _short_id(claims.get("sub")))
     add("邮箱 (email)", claims.get("email"))
-    add("企业 ID (enterpriseId)", account.get("enterpriseId"))
+    add("企业 ID (enterpriseId)", auth["enterprise_id"])
     add("领域角色 (realm_access.roles)", roles(claims.get("realm_access")))
     add("资源角色 (resource_access.account.roles)", roles((claims.get("resource_access") or {}).get("account")
                                                          if isinstance(claims.get("resource_access"), dict) else None))
@@ -522,7 +535,7 @@ def _token_info_rows(payload: dict) -> list[dict]:
     add("认证时间 (auth_time)", _fmt_time(_normalize_epoch(claims.get("auth_time"))))
 
     now = time.time()
-    access_exp = _normalize_epoch(claims.get("exp")) or _normalize_epoch(auth.get("expiresAt"))
+    access_exp = _normalize_epoch(claims.get("exp")) or _normalize_epoch(auth["expires_at"])
     if access_exp:
         tail = "（已过期）" if access_exp <= now else f"（剩余 {_human_delta(access_exp - now)}）"
         add("访问令牌过期 (exp)", f"{_fmt_time(access_exp)} {tail}")
@@ -537,8 +550,7 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
     """执行操作：登录态信息（纯本地解析，不联网）。"""
     if action_id != "token_info":
         return {"ok": False, "error": "未知操作"}
-    payload, err = _parse_auth_json((data or {}).get("auth_json"))
-    if err:
-        return {"ok": False, "error": err}
-    rows = _token_info_rows(payload)
+    if not _read(data)["access_token"]:
+        return {"ok": False, "error": "缺少 access_token（＝登录态里的 auth.accessToken）"}
+    rows = _token_info_rows(data)
     return {"ok": True, "rows": rows, "total": len(rows)}
