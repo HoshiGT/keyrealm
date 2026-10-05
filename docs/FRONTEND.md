@@ -258,7 +258,7 @@ App.vue
 **点「验证」之后：后台跑，界面不阻塞**
 
 - 顶部出现一条**非阻塞横幅**：运行中显示 `正在批量验证 12/83 · 当前：<凭据名>` + 「查看任务」按钮（直达 `/tasks`）；
-  完成后同一位置变成结果摘要（`有效 73 · 无效 0 · 异常 7（跳过 3）`，有异常用 warning 色；被取消时显示
+  完成后同一位置变成结果摘要（`批量验证完成：有效 73 · 无效 0 · 异常 7（跳过 3）`，有异常用 warning 色；被取消时显示
   `已取消（已处理 n/m）`），可手动关掉。
 - **不再用模态弹窗**：以前是一个不可关闭的 dialog，等于把整个界面按在前台、切页都做不到。
   现在横幅只提示，用户可以照常切页、看别的凭据、去「任务」页看进度。
@@ -758,7 +758,7 @@ await window.pywebview.api.confirm_close_action('quit', true)
 | `vault:credential_updated` | 凭据状态变化 | `{id, status, status_detail}` |
 | `vault:credentials_changed` | 凭据增删 | `{}` |
 | `vault:batch_verify_started` | 批量验证开始 | `{total, skipped, credentials:[凭据id…]}`——前端据此把对应行的「验证」按钮置成 loading |
-| `vault:batch_verify_progress` | 批量验证进度 | `{done, total, current_id}` |
+| `vault:batch_verify_progress` | 批量验证进度 | `{current, total, credential_name, status}` |
 | `vault:batch_verify_done` | 批量验证完成 | `{total, valid, invalid, error, skipped}`（skipped = 因 `batch_verify=false` 被跳过的条数）；被取消时额外带 `canceled: true` 与 `done: <已处理条数>` |
 | `vault:mcp_status` | MCP 服务状态变化 | `{status, port}` |
 | `vault:close_confirm` | 用户点击关闭且关闭行为为"询问" | `{}`（前端弹出退出/后台选择框） |
