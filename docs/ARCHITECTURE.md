@@ -382,7 +382,6 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
 - `quit` → 停止所有后台服务，真正退出进程
 - `background` → 隐藏窗口，最小化到托盘（不退出）
 - 托盘菜单"退出" → 无论设置如何，均停止所有后台服务并退出
-- 首次最小化时弹出气泡提示："Credential Vault 已最小化到托盘，MCP 服务持续运行"
 
 **托盘线程**：`pystray` 在独立守护线程中运行，通过线程安全队列与主线程通信。
 

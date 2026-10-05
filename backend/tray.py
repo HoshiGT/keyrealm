@@ -17,7 +17,6 @@ _show_window_cb: Optional[Callable] = None
 _lock_vault_cb: Optional[Callable] = None
 _quit_cb: Optional[Callable] = None
 _get_status_cb: Optional[Callable] = None
-_first_minimize_shown = False
 
 
 def _make_icon_image(color: str) -> Image.Image:
@@ -162,21 +161,6 @@ def start_tray(
 def update_tray():
     """刷新托盘图标状态"""
     _update_icon()
-
-
-def show_first_minimize_bubble():
-    """首次最小化时显示气泡提示"""
-    global _first_minimize_shown
-    if _first_minimize_shown or not _tray_icon:
-        return
-    _first_minimize_shown = True
-    try:
-        _tray_icon.notify(
-            "Credential Vault 已最小化到托盘，MCP 服务保持运行。\n右键托盘图标可恢复窗口或退出。",
-            title="Credential Vault",
-        )
-    except Exception:
-        pass
 
 
 def stop_tray():

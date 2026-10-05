@@ -240,8 +240,8 @@ async function handleLock() {
 
 async function handleMinimize() {
   try {
+    // 成功不弹提示：缩到托盘是常规操作，窗口随即隐藏、提示也看不到，纯粹是噪音
     await appStore.minimizeToTray()
-    ElMessage.success('已最小化到系统托盘，后台任务继续运行')
   } catch (err) {
     ElMessage.error(err.message || '最小化失败')
   }

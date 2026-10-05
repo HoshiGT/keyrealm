@@ -283,10 +283,9 @@ def _shutdown_services():
 
 
 def _hide_to_tray():
-    """隐藏窗口到系统托盘（后台运行）。"""
+    """隐藏窗口到系统托盘（后台运行）。**不弹任何提示**——缩到托盘是常规操作，弹一次反而吵。"""
     if _window:
         _window.hide()
-        tray.show_first_minimize_bubble()
 
 
 def _on_closing():

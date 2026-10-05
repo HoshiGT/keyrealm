@@ -997,10 +997,10 @@ def delete_schedule(schedule_id: int) -> dict:
 # ── Tray ──────────────────────────────────────────────────
 
 def minimize_to_tray() -> dict:
+    """最小化到托盘。**不弹系统通知**（缩到托盘是常规操作，每次提示只是噪音）。"""
     if _window:
         try:
             _window.hide()
-            tray.show_first_minimize_bubble()
         except Exception as e:
             _log.warning("隐藏窗口失败: %s", e)
     return {"ok": True}
