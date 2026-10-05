@@ -10,7 +10,7 @@
 - **MCP 服务**：内置 MCP Server，AI Agent 可直接管理与验证凭据，支持按工具粒度控制权限
 - **多模式验证**：保存时自动验证 / 手动验证 / 定时批量验证；批量验证可**手动勾选**（支持一键全选）并**并发**执行；有写副作用或无法自动化的类型可声明 `batch_verify: false`，仅允许手动单个验证
 - **可读的附加信息**：凭据列表「附加信息」列以「标签 值」展示——LLM 显示余额（plan 类显示使用率），云厂商显示账号信息，无效字段自动隐藏
-- **验证代理 + 连通性诊断**：可为所有插件的校验请求配置 http/https/socks5 代理（也可用环境变量 `VAULT_PROXY` 覆盖）；「网络与代理」里可一键**对照测试**——同一批探测分别走直连与代理，比对出口 IP 归属与国内外站点可达性，直接给出「代理是否真的生效」的结论
+- **验证代理 + 连通性诊断**：可为所有插件的校验请求配置 http/https/socks5 代理（也可用环境变量 `VAULT_PROXY` 覆盖）；「网络与代理」里可一键**对照测试**——同一批探测分别走直连与代理，比对出口 IP 归属与国内外站点可达性，直接给出「代理是否真的生效」的结论。socks5 需 `socksio`（`requirements.txt` 已声明 `httpx[socks]`）：环境缺它时不再甩英文异常，而是直接给中文处理办法
 - **独立日志模块**：插件与后端的 INFO/告警/异常统一落盘（`data/logs/credential_vault.log`，1MB×5 轮转），独立页面可调级别、按关键词**搜索**（支持 AND 多词、含 traceback 的整条记录匹配）、清空与刷新
 - **凭据简易操作**：插件可声明可选操作，凭据行出现「操作」按钮——如 LLM 凭据可直接发起简单对话；由插件自行维护、可逐步扩展（DNS 调解析 / SMTP 看信箱等）
 - **备份 / 恢复**：导出为单个 JSON 文件（可选加密——默认保持敏感字段密文、需同一主密码导入；或明文导出、可跨主密码导入），导入自动识别二者并按敏感值去重
@@ -60,6 +60,7 @@ python scripts/build.py --frontend
 #   --frontend            先执行 npm run build 再打包
 #   --console             保留控制台窗口（调试用）
 #   --smoke               构建后运行 --print-paths 校验冻结路径（隐含 --console）
+#   --allow-missing-deps  依赖缺失时仍继续构建（默认中止）
 ```
 
 > **exe 图标**：由 `assets/icon.ico` 提供（`scripts/make_icon.py` 生成，已入库）。构建日志会打印
@@ -120,6 +121,13 @@ release/
 > 在 `data/` 下仅清理旧版遗留的 `data/installed_plugins/`（zip 安装时代的运行期缓存）。
 > 其余内容一律不碰——`data/webview/` 是界面偏好、`data/logs/` 是日志，升级前后都不用手工维护。
 
+> **构建前的依赖检查**：`scripts/build.py` 一上来就按 `requirements.txt`（含 extras 展开）核对
+> 当前 Python 环境，缺包就打印清单并**中止**，提示 `pip install -r requirements.txt`
+> （确实要忽略可加 `--allow-missing-deps`）。之所以要查 extras：httpx 是在**函数体内**
+> `import socksio` 的，构建机没装时 PyInstaller 既不报错也不打包，问题直到 exe 里用 socks5
+> 代理才暴露（`the 'socksio' package is not installed`）。`CredentialVault.spec` 里也显式
+> `collect_all("socksio")`，直接用 `pyinstaller CredentialVault.spec` 打包时同样会警告。
+>
 > Windows 运行前提：需已安装 WebView2 Runtime（Windows 10/11 通常已内置）。
 
 ### 打包源码归档

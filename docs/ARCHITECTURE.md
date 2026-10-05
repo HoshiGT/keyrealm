@@ -163,6 +163,16 @@ plugins/
 
 两个刻意的设计：`trust_env=False` 屏蔽系统 `HTTP(S)_PROXY`/`ALL_PROXY`，否则「直连」对照组会被环境代理污染；出口 IP **只认无国内 CDN 的 HTTPS 见证源**（ipify / icanhazip / ifconfig.me / ipinfo.io）——最初首选 ip-api.com，实测它在国内有 CDN 且被规则型代理客户端判为直连，导致「挂代理」读到本机真实 IP、结论反向，故 ip-api 仅用于查归属地（IP 写在路径里，与路由无关）。六项探测并发执行，单项失败不影响其它项。
 
+**缺 SOCKS 依赖的处理**：httpx 走 socks 需要独立的 `socksio` 包，而它是在 httpx 内部**函数体内** `import` 的——打包时构建机没装，PyInstaller 既不报错也不打包，直到运行时用 socks5 代理才抛一句英文 `ImportError`。这条链路做成三层兜底：
+
+| 层 | 位置 | 行为 |
+|----|------|------|
+| 构建期 | `scripts/build.py` / `CredentialVault.spec` | 构建前按 `requirements.txt`（**含 extras 展开**）核对当前环境，缺包就打印清单并**中止**（`--allow-missing-deps` 可放行），提示 `pip install -r requirements.txt`；spec 里显式 `collect_all("socksio")`，直接用 `pyinstaller CredentialVault.spec` 时也会警告 |
+| 诊断 | `backend/proxy_test.py` | `proxy_config.needs_socks()` + `socks_available()` 提前判定，socks 代理 + 缺依赖时**不发请求直接短路**，给出 `fail` 结论与中文处理办法（伪造一份代理侧探测结构，界面两列卡片照常渲染） |
+| 插件 | `backend/plugin_base.py` | `_friendly_error()` 把异常文本里的 socksio 报错换成中文处理办法；原始异常仍完整写入日志，不缺排查线索 |
+
+判定与文案集中在 `backend/proxy.py`：`needs_socks()` / `socks_available()` / `SOCKS_HINT`（单一事实来源，三层共用）。
+
 **备份 / 恢复**：`backend/backup.py` 负责构建/导入备份文档（JSON）。加密备份的敏感字段直接沿用库中密文，只能用同一主密码导入；明文备份可跨主密码导入（以当前主密钥重新加密写库）。导入按「类型 + 敏感值」去重，并跳过插件未安装的条目；文件读写通过 pywebview 的原生文件对话框（`api._file_dialog`）。
 
 ---

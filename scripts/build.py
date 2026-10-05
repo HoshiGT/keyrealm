@@ -19,12 +19,21 @@ release/CredentialVault。**要生成 Windows exe，必须在 Windows 上运行�
     python scripts/build.py --frontend    # 先执行 npm run build 再打包
     python scripts/build.py --console     # 保留控制台窗口（调试用）
     python scripts/build.py --smoke       # 构建后跑 --print-paths 校验路径（自动开控制台）
+
+构建前置检查
+------------
+开始打包前按 requirements.txt（**含 extras 展开**）核对当前 Python 环境，缺包就打印清单
+并中止，提示 pip install -r requirements.txt；确实要忽略可加 --allow-missing-deps。
+extras 必须查：httpx 是在函数体内 import socksio 的，构建机没装时 PyInstaller 既不报错
+也不打包，问题要到 exe 里真的用 socks5 代理才暴露。
 """
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +41,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC = ROOT / "CredentialVault.spec"
+REQUIREMENTS = ROOT / "requirements.txt"
 FRONTEND = ROOT / "frontend"
 FRONTEND_DIST = FRONTEND / "dist"
 RELEASE = ROOT / "release"
@@ -50,6 +60,119 @@ def _run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> No
         sys.exit(f"命令失败（退出码 {result.returncode}）：{' '.join(map(str, cmd))}")
 
 
+def _extra_deps(dist: str, extra: str) -> list[str]:
+    """取某发行包在指定 extra 下声明的依赖名（如 ``httpx[socks]`` → ``socksio``）。
+
+    为什么必须展开 extras：httpx 是在**函数体内** ``import socksio`` 的，构建机没装时
+    PyInstaller 既不报错也不打包，问题要到 exe 里真的用 socks5 代理才暴露（表现为
+    ``the 'socksio' package is not installed``）。这类「隐性依赖」只能顺着 requirements
+    的 extras 找出来提前检查。
+    """
+    from importlib.metadata import PackageNotFoundError, metadata
+
+    try:
+        meta = metadata(dist)
+    except PackageNotFoundError:
+        return []
+    names = []
+    for line in meta.get_all("Requires-Dist") or []:
+        if not re.search(rf"""extra\s*==\s*['"]{re.escape(extra)}['"]""", line):
+            continue
+        m = re.match(r"\s*([A-Za-z0-9._-]+)", line)
+        if m:
+            names.append(m.group(1))
+    return names
+
+
+def required_distributions() -> list[str]:
+    """requirements.txt 声明的发行包名（extras 展开），按出现顺序去重。"""
+    out: list[str] = []
+    if not REQUIREMENTS.exists():
+        return out
+    for raw in REQUIREMENTS.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or line.startswith("-"):   # 跳过 -r / -e / --index-url 等指令行
+            continue
+        m = re.match(r"^([A-Za-z0-9._-]+)\s*(?:\[([^\]]*)\])?", line)
+        if not m:
+            continue
+        base, extras = m.group(1), m.group(2) or ""
+        out.append(base)
+        for extra in (e.strip() for e in extras.split(",")):
+            if extra:
+                out += _extra_deps(base, extra)
+
+    seen, uniq = set(), []
+    for name in out:
+        key = name.lower().replace("_", "-")
+        if key not in seen:
+            seen.add(key)
+            uniq.append(name)
+    return uniq
+
+
+def missing_distributions() -> list[str]:
+    """当前 Python 环境里没装的依赖。
+
+    用 importlib.metadata 判定「发行包是否已安装」，而不是 import 探测——发行名与
+    顶层模块名常常不同（pywebview 的模块叫 webview），按发行名才准。
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    missing = []
+    for name in required_distributions():
+        try:
+            version(name)
+        except PackageNotFoundError:
+            missing.append(name)
+    return missing
+
+
+def fail_missing_deps(missing: list[str], allow_missing: bool) -> None:
+    """打显眼的缺依赖清单 + 安装命令；默认中止，``--allow-missing-deps`` 可强行继续。"""
+    print()
+    print("!" * 62)
+    print(f"依赖检查未通过：当前 Python 环境缺少 {len(missing)} 个依赖 ——")
+    for name in missing:
+        print(f"  · {name}")
+    print()
+    print("  这些包装不上，打出的程序就会缺功能或在运行时报错，请先安装：")
+    print("      pip install -r requirements.txt")
+    print('  （socks5 代理等 extras 依赖也在其中，如 httpx[socks] → socksio）')
+    if allow_missing:
+        print()
+        print("  --allow-missing-deps 已指定：忽略缺失，继续构建（产物可能不完整）。")
+        print("!" * 62)
+        print()
+        return
+    print()
+    print("  装好后重新运行本脚本。确实要忽略缺失可加 --allow-missing-deps")
+    print("!" * 62)
+    print()
+    sys.exit(1)
+
+
+def check_environment(allow_missing: bool) -> None:
+    """构建前置检查：打包工具 + 依赖齐全。缺依赖默认中止（可被 flag 放行）。
+
+    放在最前：缺包时先停下来，别白跑一遍前端构建 + PyInstaller 打包。
+    """
+    if importlib.util.find_spec("PyInstaller") is None:
+        sys.exit("当前 Python 环境未安装 PyInstaller：pip install pyinstaller")
+
+    total = required_distributions()
+    missing = missing_distributions()
+    if missing:
+        print(f"依赖检查   : {len(total) - len(missing)}/{len(total)} 已安装，"
+              f"缺少 {len(missing)} 个（见下）")
+    else:
+        print(f"依赖检查   : {len(total)}/{len(total)} 已安装 ✅")
+    print("=" * 60)
+
+    if missing:
+        fail_missing_deps(missing, allow_missing)
+
+
 def build_frontend() -> None:
     """执行 npm run build 生成 frontend/dist。"""
     if not (FRONTEND / "package.json").exists():
@@ -64,11 +187,6 @@ def build_frontend() -> None:
 
 def run_pyinstaller(console: bool) -> None:
     """调用当前解释器的 PyInstaller，按 spec 打包到 dist/。"""
-    import importlib.util
-
-    if importlib.util.find_spec("PyInstaller") is None:
-        sys.exit("当前 Python 环境未安装 PyInstaller：pip install pyinstaller")
-
     if not FRONTEND_DIST.exists():
         sys.exit(
             "未找到 frontend/dist —— 前端尚未构建。\n"
@@ -192,6 +310,8 @@ def main() -> None:
     ap.add_argument("--console", action="store_true", help="保留控制台窗口（调试）")
     ap.add_argument("--smoke", action="store_true", help="构建后运行 --print-paths 校验（隐含 --console）")
     ap.add_argument("--keep-intermediates", action="store_true", help="保留 dist/ 与 build/ 中间产物")
+    ap.add_argument("--allow-missing-deps", action="store_true",
+                    help="依赖缺失时仍继续构建（产物可能缺功能，默认中止）")
     args = ap.parse_args()
 
     console = args.console or args.smoke
@@ -202,6 +322,8 @@ def main() -> None:
     print(f"产物名     : {EXE_NAME}")
     print(f"控制台模式 : {console}")
     print("=" * 60)
+
+    check_environment(args.allow_missing_deps)
 
     if args.frontend:
         build_frontend()

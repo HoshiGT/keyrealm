@@ -19,10 +19,47 @@ _applied: str | None = None
 
 _ALLOWED_SCHEMES = {"http", "https", "socks4", "socks5", "socks5h"}
 
+# httpx 走 SOCKS 依赖独立的 socksio 包（由 httpx[socks] 提供）。
+# 它在 httpx 内部是「函数体内的静态 import」，打包时若构建机没装，PyInstaller 不会报错，
+# 直到运行时用 socks5 代理才炸出一句英文 ImportError——所以这里显式探测并给中文提示。
+_SOCKS_SCHEMES = {"socks4", "socks5", "socks5h"}
+
+SOCKS_HINT = (
+    "当前 Python 环境缺少 SOCKS 支持：httpx 走 socks 需要 socksio 包，但没装。"
+    "处理办法——开发机执行 pip install \"httpx[socks]\" 后重启应用；"
+    "若是打包好的 exe，需在构建机上装好后用 python scripts/build.py --frontend 重新打包。"
+)
+
 
 def normalize(value: str | None) -> str:
     """去空白，返回规范化后的代理串（可能为空）。"""
     return (value or "").strip()
+
+
+def scheme(value: str | None) -> str:
+    """取代理串的协议名（小写）；无 ``://`` 前缀时返回空串。"""
+    text = normalize(value)
+    if "://" not in text:
+        return ""
+    return text.split("://", 1)[0].lower()
+
+
+def needs_socks(value: str | None) -> bool:
+    """该代理串是否需要 SOCKS 支持（socks4 / socks5 / socks5h）。"""
+    return scheme(value) in _SOCKS_SCHEMES
+
+
+def socks_available() -> bool:
+    """当前环境能否走 SOCKS。
+
+    真去 ``import socksio``（而非 find_spec）：冻结进 exe 的模块只有被真正导入过才可靠，
+    顺带把它塞进 sys.modules，后面 httpx 再导入就是命中缓存。
+    """
+    try:
+        import socksio  # noqa: F401
+    except Exception:
+        return False
+    return True
 
 
 def is_valid(value: str | None) -> bool:

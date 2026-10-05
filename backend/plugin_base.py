@@ -12,7 +12,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from .proxy import SOCKS_HINT
+
 _log = logging.getLogger("plugin")
+
+
+def _friendly_error(e: Exception) -> str:
+    """插件异常 → 展示给用户的文本。
+
+    只做一处替换：httpx 在缺 socksio 时抛英文 ImportError（"…'socksio' package is not
+    installed…"），这句话对用户没有可操作性，换成中文处理办法。原始异常仍由调用方
+    完整写入日志（见 call_verify 的 _log.exception），不会丢排查线索。
+    """
+    if "socksio" in str(e):
+        return SOCKS_HINT
+    return str(e)
 
 
 def _plugin_name(module: Any) -> str:
@@ -179,7 +193,7 @@ def call_verify(module: Any, data: dict) -> VerifyResult:
         # 插件内部异常必须留痕：否则只会以 status=error 的形式回到界面，
         # 日志里查不到任何线索（排查线上证书/网络问题时的常见盲区）。
         _log.exception("插件 %s 的 verify 执行异常: %s", name, e)
-        return VerifyResult(status="error", message=f"插件执行异常: {e}")
+        return VerifyResult(status="error", message=f"插件执行异常: {_friendly_error(e)}")
 
 
 def call_validate(module: Any, data: dict) -> list[str]:
@@ -233,7 +247,7 @@ def call_run_action(module: Any, action_id: str, params: dict, data: dict) -> di
         return result if isinstance(result, dict) else {"ok": False, "error": "插件返回了非预期结果"}
     except Exception as e:
         _log.exception("插件 %s 的操作 %s 执行异常: %s", _plugin_name(module), action_id, e)
-        return {"ok": False, "error": f"操作失败: {e}"}
+        return {"ok": False, "error": f"操作失败: {_friendly_error(e)}"}
 
 
 def call_list_models(module: Any, data: dict) -> list:
@@ -262,4 +276,4 @@ def call_stream_action(module: Any, action_id: str, params: dict, data: dict, on
     except Exception as e:
         _log.exception("插件 %s 的流式操作 %s 执行异常: %s",
                        _plugin_name(module), action_id, e)
-        return {"ok": False, "error": f"操作失败: {e}"}
+        return {"ok": False, "error": f"操作失败: {_friendly_error(e)}"}

@@ -136,6 +136,14 @@ plugins/
 应用启动时把它写入环境变量 `VAULT_PROXY`，各插件在发起请求时读取该变量（见 `plugins/<类别>/<类别>_common.py` 的 `make_client()`）。
 解析优先级：`VAULT_PROXY` > `ALL_PROXY`/`all_proxy` > `HTTPS_PROXY`/`https_proxy`；
 若 `VAULT_PROXY` 由外部环境显式设置，则它优先于界面设置。socks5 需 `httpx[socks]`（`socksio`），已在 `requirements.txt` 声明。
+
+> **打包时注意**：httpx 是在**函数体内** `import socksio` 的，构建机没装这个包时
+> PyInstaller 既不报错也不会打包它，症状是 exe 里一用 socks5 代理就抛
+> `the 'socksio' package is not installed`。因此 `scripts/build.py` **构建前会按
+> `requirements.txt`（含 extras 展开，所以 `httpx[socks]` → `socksio` 会被查出来）核对环境**，
+> 缺包就打印清单并中止，提示 `pip install -r requirements.txt`（`--allow-missing-deps` 可强行继续）；
+> `CredentialVault.spec` 里也显式 `collect_all("socksio")`。
+
 注意：SMTP 插件（`mail_smtp`）走标准库 `smtplib`，不受该代理影响。
 
 **测试代理**：同一页有「测试代理」按钮，传当前输入框的值（可「先测再存」），调用

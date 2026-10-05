@@ -29,6 +29,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
+from . import proxy as proxy_config
+
 # 出口 IP 见证源：必须是「没有国内 CDN、HTTPS」的服务，否则测到的不是真实出口。
 _IP_WITNESSES: list[tuple[str, str]] = [
     ("api.ipify.org", "https://api.ipify.org?format=json"),
@@ -57,6 +59,17 @@ def _client(proxy: str | None) -> httpx.Client:
     return httpx.Client(proxy=proxy or None, timeout=_TIMEOUT, trust_env=False)
 
 
+def _explain(exc: Exception) -> str:
+    """异常 → 给人看的文本。
+
+    httpx 缺 SOCKS 依赖时抛的是英文 ImportError（"…'socksio' package is not installed…"），
+    直接甩给用户没用，换成中文处理办法；其它异常保持原样（类型名有助于排查）。
+    """
+    if "socksio" in str(exc):
+        return proxy_config.SOCKS_HINT
+    return f"{type(exc).__name__}: {exc}"
+
+
 def _check_site(client: httpx.Client, name: str, url: str) -> dict:
     """访问站点，返回可达性与耗时。4xx 以下视为可达。"""
     start = time.monotonic()
@@ -75,7 +88,7 @@ def _check_site(client: httpx.Client, name: str, url: str) -> dict:
             "ok": False,
             "ms": ms,
             "status": None,
-            "detail": f"{name} 不可达：{type(e).__name__}: {e}",
+            "detail": f"{name} 不可达：{_explain(e)}",
         }
 
 
@@ -116,7 +129,7 @@ def _fetch_ip(client: httpx.Client) -> dict:
                 "ms": int((time.monotonic() - start) * 1000),
             }
         except Exception as e:
-            last_err = f"{host}: {type(e).__name__}: {e}"
+            last_err = f"{host}: {_explain(e)}"
             continue
     return {"ok": False, "ip": "", "witness": "", "detail": last_err,
             "ms": int((time.monotonic() - start) * 1000)}
@@ -239,12 +252,42 @@ def _verdict(direct: dict, proxied: dict | None, proxy: str) -> dict:
     return {"level": level, "headline": headline, "details": details}
 
 
+def _missing_socks(proxy: str, direct: dict) -> dict:
+    """socksio 未安装时的短路结果：不发起网络请求，直接给结论。
+
+    伪造一份「代理侧」探测结构，让界面两个卡片照常渲染——左列直连真实数据，
+    右列三项都显示中文处理办法，而不是让卡片空着或抛一句英文异常。
+    """
+    hint = proxy_config.SOCKS_HINT
+    # 单项 detail 要进卡片窄格，用短句；完整处理办法在 verdict.details 里给
+    short = "未执行探测：当前环境缺少 socksio，socks 代理不可用"
+    return {
+        "ok": True,
+        "proxy": proxy,
+        "direct": direct,
+        "proxied": {
+            "domestic": {"ok": False, "ms": 0, "status": None, "detail": short},
+            "foreign": {"ok": False, "ms": 0, "status": None, "detail": short},
+            "ip": {"ok": False, "ip": "", "witness": "", "detail": short, "ms": 0},
+        },
+        "verdict": {
+            "level": "fail",
+            "headline": f"代理不可用：当前环境缺少 SOCKS 支持（socksio），{proxy} 无法连接",
+            "details": [hint, "本次未发起代理探测，左侧直连结果仍然有效。"],
+        },
+    }
+
+
 def test_proxy(proxy: str = "") -> dict:
     """对照测试代理：返回直连/代理两组探测结果与综合结论。
 
     proxy 为空时只测直连（proxied 为 None）。
     """
     proxy = (proxy or "").strip()
+    if proxy and proxy_config.needs_socks(proxy) and not proxy_config.socks_available():
+        # 缺依赖是确定性问题，不必等国外站点超时——但直连那组仍照跑，便于对照
+        return _missing_socks(proxy, _probe(None))
+
     direct = _probe(None)
     proxied = _probe(proxy) if proxy else None
     return {

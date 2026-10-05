@@ -87,6 +87,25 @@ for _pkg in [
         # 平台特有的可选依赖（如 Windows 的 clr）在当前系统不存在，跳过即可
         pass
 
+# SOCKS 代理支持：httpx 在**函数体内**静态 import socksio（httpx/_transports/default.py），
+# 构建机没装这个包时 PyInstaller 既不报错也不会打包它，症状是 exe 里一用 socks5 代理
+# 就抛英文 ImportError("Using SOCKS proxy, but the 'socksio' package is not installed")。
+# 因此这里显式收集并大声警告——不中止构建：不用 SOCKS 代理的用户不受影响。
+try:
+    import socksio  # noqa: F401
+except Exception:
+    print(
+        "[spec] 警告：构建环境未安装 socksio → 打出的程序**无法使用 socks5 代理**。\n"
+        '[spec]       修复：pip install "httpx[socks]" 后重新构建。\n'
+        "[spec]       提示：改用 python scripts/build.py 会在构建前检查全部依赖并直接中止。"
+    )
+else:
+    _d, _b, _h = collect_all("socksio")
+    datas += _d
+    binaries += _b
+    hiddenimports += _h
+    print("[spec] SOCKS 代理支持：已收集 socksio")
+
 # 本地 backend 包的全部子模块（api/crypto/database/mcp_server/... ）
 try:
     hiddenimports += collect_submodules("backend")
