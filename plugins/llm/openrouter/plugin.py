@@ -7,12 +7,15 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from llm_common import VerifyResult, body_snippet, guarded, make_client, safe_json
+from llm_common import VerifyResult, body_snippet, guarded, make_client, make_quota_probe, plausible_amount, safe_json
 from llm_protocols import chat_completion, fetch_models, chat_completion_stream
 
 NAME = "OpenRouter"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 PROTOCOL = "openrouter"
+
+# 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费
+quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai")
 AUTH_KEY_PATH = "/auth/key"
 # 余额端点（best-effort，仅认证通过后查询）
 BALANCE_URL = "https://openrouter.ai/api/v1/credits"
@@ -69,7 +72,13 @@ def _parse_balance(payload: dict) -> Optional[dict]:
             return None
         if total <= 0:
             return None  # 免费额度账号无余额概念
-        result: dict[str, Any] = {"balance": round(total - used, 6), "currency": "USD"}
+        # 金额异常（如中转实现返回的哨兵值）宁可不显示
+        if not plausible_amount(total):
+            return None
+        balance = round(total - used, 6)
+        if not plausible_amount(balance):
+            return None
+        result: dict[str, Any] = {"balance": balance, "currency": "USD"}
         result["usage_rate"] = max(0.0, min(1.0, used / total))
         return result
     return None

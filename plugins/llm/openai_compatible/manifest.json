@@ -1,17 +1,26 @@
 {
-  "name": "第三方中转 (OpenAI 兼容)",
-  "version": "1.0.0",
+  "name": "第三方中转",
+  "version": "1.1.0",
   "credential_type": "llm_openai_compatible",
   "author": "Credential Vault",
-  "description": "验证 第三方中转 (OpenAI 兼容) API Key 有效性",
+  "description": "验证第三方中转站的 API Key 有效性（OpenAI / Anthropic 两种接口格式）",
   "icon": "logo.png",
   "fields": [
+    {
+      "key": "api_style",
+      "label": "接口格式",
+      "type": "select",
+      "required": false,
+      "default": "openai",
+      "options": ["openai", "anthropic"],
+      "hint": "按该中转站实际提供的调用格式选：OpenAI 兼容走 /chat/completions + Bearer，Anthropic 兼容走 /v1/messages + x-api-key。"
+    },
     {
       "key": "base_url",
       "label": "Base URL",
       "type": "url",
       "required": true,
-      "placeholder": "请输入服务地址"
+      "placeholder": "https://relay.example.com/v1"
     },
     {
       "key": "api_key",
@@ -20,6 +29,21 @@
       "required": true,
       "sensitive": true,
       "placeholder": "sk-..."
+    },
+    {
+      "key": "probe_chat",
+      "label": "余额未知时发一次对话探测",
+      "type": "checkbox",
+      "required": false,
+      "hint": "厂商无余额接口、或中转站令牌为「不限额度」时，验证会额外发一次 max_tokens=1 的对话请求实测账户是否可用（会消耗极少量额度）。默认关闭。"
+    },
+    {
+      "key": "probe_model",
+      "label": "探测使用的模型",
+      "type": "model",
+      "required": false,
+      "placeholder": "留空自动选择",
+      "hint": "留空 = 自动从该凭据的模型列表里挑一个便宜的（优先 flash / lite / mini 等）。"
     },
     {
       "key": "notes",

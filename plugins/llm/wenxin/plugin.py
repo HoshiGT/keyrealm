@@ -8,7 +8,19 @@ from __future__ import annotations
 import httpx
 from typing import Any, Optional
 
-from llm_common import TIMEOUT, VerifyResult, body_snippet, guarded, make_client, safe_json
+from llm_common import (
+    VerifyResult,
+    body_snippet,
+    guarded,
+    make_client,
+    probe_model,
+    probe_requested,
+    quota_insufficient,
+    quota_ok,
+    safe_json,
+    timeout,
+)
+from llm_protocols import is_insufficient_balance
 
 NAME = "百度文心"
 DEFAULT_BASE_URL = "https://aip.baidubce.com"
@@ -120,7 +132,7 @@ def _get_access_token(base_url: str, api_key: str) -> tuple[Optional[str], Optio
                 },
             )
     except httpx.TimeoutException:
-        return None, f"请求超时（{int(TIMEOUT)} 秒）"
+        return None, f"请求超时（{int(timeout())} 秒）"
     except httpx.HTTPError as exc:
         return None, f"网络请求失败（{type(exc).__name__}）"
     payload = safe_json(resp)
@@ -137,6 +149,11 @@ def actions(data: dict) -> list[dict]:
     if not (data or {}).get("api_key"):
         return []
     return [{"id": "chat", "name": "简单对话", "kind": "chat", "model": CHAT_MODEL}]
+
+
+def list_models(data: dict) -> list:
+    """可选模型即本插件内置的端点表（文心没有 OpenAI 式的 /models 列表接口）。"""
+    return list(_CHAT_ENDPOINTS)
 
 
 def run_action(action_id: str, params: dict, data: dict) -> dict:
@@ -168,7 +185,7 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
                 json={"messages": params.get("messages") or []},
             )
     except httpx.TimeoutException:
-        return {"ok": False, "error": f"请求超时（{int(TIMEOUT)} 秒）"}
+        return {"ok": False, "error": f"请求超时（{int(timeout())} 秒）"}
     except httpx.HTTPError as exc:
         return {"ok": False, "error": f"网络请求失败（{type(exc).__name__}）"}
     payload = safe_json(resp)
@@ -185,3 +202,69 @@ def get_display_summary(data: dict) -> str:
     data = data or {}
     base_url = data.get("base_url") or DEFAULT_BASE_URL
     return f"{NAME} | {base_url}"
+
+
+# ── 可选：欠费探测（鉴权非通用格式，故自行实现，不走 make_quota_probe）──────
+# 文心既要用 API_KEY|SECRET_KEY 换 access_token、聊天端点又按模型分路径，通用实现拼不出来。
+# 免费档模型（ernie-speed / lite / tiny）不计费，欠费时照样能对话、看不出问题，
+# 所以自动选型刻意只挑**付费档**（ernie-3.5-8k 最便宜，其次 4.0）。
+_PROBE_MODELS = ("ernie-3.5-8k", "ernie-4.0-8k")
+# 百度把「额度用尽」放在错误码里（HTTP 200 + error_code）：19 = 总请求量已达上限。
+# 17（当日额度）/ 18（QPS）既可能是欠费也可能是限流，故意不下结论，避免误报。
+_INSUFFICIENT_CODES = {19}
+
+
+def quota_probe(data: dict) -> Optional[dict]:
+    """余额未知时发一次最小对话请求，实测账户是否可用。
+
+    按 ``llm_common`` 的 ``quota_probe`` 契约返回：``None``（未开启 / 无结论）/
+    ``quota_ok()``（实测可用）/ ``quota_insufficient()``（实测欠费）。
+    """
+    data = data or {}
+    if not probe_requested(data):
+        return None
+
+    api_key = (data.get("api_key") or "").strip()
+    base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
+    if not api_key or not base_url:
+        return None
+
+    # 模型：用户指定的优先（须是本插件认识的端点），否则自动挑一个付费档
+    chosen = probe_model(data)
+    if chosen and chosen not in _CHAT_ENDPOINTS:
+        return None  # 指定了不支持的模型，无从探测
+    candidates = [chosen] if chosen else list(_PROBE_MODELS)
+    candidates = [m for m in candidates if m in _CHAT_ENDPOINTS]
+    if not candidates:
+        return None
+
+    token, err = _get_access_token(base_url, api_key)
+    if err or not token:
+        return None  # 换 token 失败不构成「欠费」结论（verify 已确认凭据有效）
+
+    for name in candidates[:2]:
+        url = (
+            f"{base_url.rstrip('/')}/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/"
+            f"{_CHAT_ENDPOINTS[name]}"
+        )
+        try:
+            with make_client() as client:
+                resp = client.post(
+                    url,
+                    params={"access_token": token},
+                    headers={"Content-Type": "application/json"},
+                    json={"messages": [{"role": "user", "content": "hi"}]},
+                )
+        except httpx.HTTPError:
+            return None  # 网络问题不构成欠费结论
+        payload = safe_json(resp)
+        if not isinstance(payload, dict):
+            continue
+        if "result" in payload:
+            return quota_ok()
+        code = payload.get("error_code")
+        message = str(payload.get("error_msg") or "")
+        if code in _INSUFFICIENT_CODES or is_insufficient_balance(message) or "欠费" in message:
+            return quota_insufficient()
+        # 其余（模型不可用 / 限流 / 参数错误）不下结论，换下一个候选
+    return None

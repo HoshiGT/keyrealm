@@ -1,0 +1,26 @@
+{
+  "name": "Codex（ChatGPT 登录态）",
+  "version": "1.0.0",
+  "credential_type": "llm_codex",
+  "author": "Credential Vault",
+  "description": "验证 Codex CLI 的 ChatGPT 登录态（~/.codex/auth.json），兼容 apikey 模式",
+  "icon": "logo.png",
+  "batch_verify": true,
+  "fields": [
+    {
+      "key": "auth_json",
+      "label": "auth.json 内容",
+      "type": "textarea",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "{\"auth_mode\": \"chatgpt\", \"tokens\": { ... }}",
+      "hint": "直接粘贴 ~/.codex/auth.json 的全部内容（Windows: %USERPROFILE%\\.codex\\auth.json；也可用 CODEX_HOME 指定的目录）。整份内容会加密存储、不在列表中展示。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

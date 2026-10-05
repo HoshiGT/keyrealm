@@ -7,12 +7,15 @@ from __future__ import annotations
 
 from typing import Optional
 
-from llm_common import VerifyResult, body_snippet, guarded, make_client, safe_json
+from llm_common import VerifyResult, body_snippet, guarded, make_client, make_quota_probe, safe_json
 from llm_protocols import chat_completion, fetch_models, chat_completion_stream
 
 NAME = "Google Gemini"
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 PROTOCOL = "gemini"
+
+# 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费
+quota_probe = make_quota_probe(DEFAULT_BASE_URL, "gemini")
 
 
 def validate(data: dict) -> list[str]:

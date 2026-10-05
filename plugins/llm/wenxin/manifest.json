@@ -23,6 +23,21 @@
       "placeholder": "API_KEY|SECRET_KEY"
     },
     {
+      "key": "probe_chat",
+      "label": "余额未知时发一次对话探测",
+      "type": "checkbox",
+      "required": false,
+      "hint": "验证会额外发一次对话请求实测账户是否可用（会消耗极少量额度）。默认关闭。文心的免费档模型不计费、看不出欠费，所以自动选型只用付费档（ernie-3.5-8k / 4.0-8k）。"
+    },
+    {
+      "key": "probe_model",
+      "label": "探测使用的模型",
+      "type": "model",
+      "required": false,
+      "placeholder": "留空自动选择",
+      "hint": "留空 = 自动用 ernie-3.5-8k（付费档里最便宜）。可填：ernie-4.0-8k、ernie-3.5-8k、ernie-speed-8k、ernie-lite-8k、ernie-tiny-8k。"
+    },
+    {
       "key": "notes",
       "label": "备注",
       "type": "textarea",

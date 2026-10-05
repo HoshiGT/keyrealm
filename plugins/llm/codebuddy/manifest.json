@@ -1,0 +1,26 @@
+{
+  "name": "腾讯 CodeBuddy",
+  "version": "1.0.0",
+  "credential_type": "llm_codebuddy",
+  "author": "Credential Vault",
+  "description": "验证 腾讯 CodeBuddy 客户端登录态有效性",
+  "icon": "logo.png",
+  "batch_verify": true,
+  "fields": [
+    {
+      "key": "auth_json",
+      "label": "登录态 JSON",
+      "type": "textarea",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "{\n  \"account\": { \"uid\": \"...\", \"nickname\": \"13500001355\" },\n  \"auth\": { \"accessToken\": \"eyJ...\", \"refreshToken\": \"eyJ...\", \"expiresAt\": 1793628000 }\n}",
+      "hint": "粘贴 CodeBuddy 客户端登录态文件的完整内容（含 account 与 auth 两段的整份 JSON）。内容等于长期登录凭据，将加密存储，验证过程只做只读查询、不会刷新或轮换 token。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

@@ -4,7 +4,10 @@
 
 - 校验探针：`probe_openai_models` / `probe_anthropic_models` /
   `probe_openai_chat` / `probe_anthropic_chat`
+  （统一经 `_request_with_retry` 发请求：上游 5xx 退避重试，避免把偶发故障误判为失败）
 - 简单对话：`chat_completion`（openai / anthropic / gemini 三种协议）
+- 欠费探测：`quota_chat_probe`（通用实现）、`is_insufficient_balance`（关键字判定，
+  供自建 `quota_probe` 的插件复用）
 
 厂商的默认地址、模型名、余额端点与解析等专属逻辑仍写在各
 plugins/llm/<厂商>/plugin.py 内。
@@ -12,11 +15,12 @@ plugins/llm/<厂商>/plugin.py 内。
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Optional
 
 import httpx
 
-from llm_common import TIMEOUT, VerifyResult, body_snippet, make_client, safe_json
+from llm_common import VerifyResult, body_snippet, make_client, safe_json, timeout
 
 # 欠费/余额不足判定关键字（出现在错误正文中）
 _INSUFFICIENT_BALANCE_KEYWORDS = (
@@ -27,6 +31,18 @@ _INSUFFICIENT_BALANCE_KEYWORDS = (
     "out of balance",
     "1113",  # 智谱错误码：余额不足
 )
+
+
+def _anthropic_root(base_url: str) -> str:
+    """Anthropic 协议的站点根：``/v1/messages`` 由本模块自己拼，Base URL 自带 ``/v1`` 要去掉。
+
+    各插件默认值不统一——Anthropic 官方是 ``…/v1``，智谱 Anthropic 端点是
+    ``…/api/anthropic``；不做归一就会拼出 ``…/v1/v1/messages``。
+    """
+    root = base_url.rstrip("/")
+    if root.endswith("/v1"):
+        root = root[:-3].rstrip("/")
+    return root
 
 
 # ── 简单对话 ─────────────────────────────────────────────
@@ -64,7 +80,7 @@ def chat_completion(base_url: str, api_key: str, model: str, messages: list,
                 )
             elif protocol == "anthropic":
                 resp = client.post(
-                    root + "/v1/messages",
+                    _anthropic_root(base_url) + "/v1/messages",
                     headers={
                         "x-api-key": api_key,
                         "anthropic-version": "2023-06-01",
@@ -79,7 +95,7 @@ def chat_completion(base_url: str, api_key: str, model: str, messages: list,
                     json={"model": model, "messages": messages, "max_tokens": max_tokens},
                 )
     except httpx.TimeoutException:
-        return {"ok": False, "error": f"请求超时（{int(TIMEOUT)} 秒）"}
+        return {"ok": False, "error": f"请求超时（{int(timeout())} 秒）"}
     except httpx.HTTPError as exc:
         return {"ok": False, "error": f"网络请求失败（{type(exc).__name__}）"}
     except Exception as exc:  # noqa: BLE001 - 操作边界兜底
@@ -189,7 +205,7 @@ def chat_completion_stream(base_url: str, api_key: str, model: str, messages: li
     elif protocol == "anthropic":
         request = dict(
             method="POST",
-            url=root + "/v1/messages",
+            url=_anthropic_root(base_url) + "/v1/messages",
             headers={
                 "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
@@ -223,7 +239,7 @@ def chat_completion_stream(base_url: str, api_key: str, model: str, messages: li
                         parts.append(text)
                         emit(text)
     except httpx.TimeoutException:
-        return {"ok": False, "error": f"请求超时（{int(TIMEOUT)} 秒）", "output": "".join(parts)}
+        return {"ok": False, "error": f"请求超时（{int(timeout())} 秒）", "output": "".join(parts)}
     except httpx.HTTPError as exc:
         return {"ok": False, "error": f"网络请求失败（{type(exc).__name__}）", "output": "".join(parts)}
     except Exception as exc:  # noqa: BLE001 - 操作边界兜底
@@ -284,13 +300,96 @@ def fetch_models(protocol: str, base_url: str, api_key: str) -> list:
     return sorted(names)
 
 
+# ── 欠费探测（可选项，由应用设置开关控制）───────────────
+
+# 便宜模型的命名线索（命中越靠前越优先）——「默认智能获取测试模型」的挑选依据
+_PROBE_MODEL_HINTS = (
+    "flash", "lite", "mini", "nano", "small", "haiku", "air", "turbo", "free", "8b", "7b",
+)
+# 不能用于对话的模型（嵌入 / 重排 / 语音 / 图像等），探测时排除
+_PROBE_MODEL_EXCLUDE = (
+    "embed", "rerank", "tts", "whisper", "moderation", "audio", "video", "image",
+    "dall", "flux", "stable-diffusion", "sd3", "veo", "sora",
+)
+# 一次探测最多尝试几个候选模型（模型不可用时换下一个）
+_PROBE_MAX_CANDIDATES = 3
+
+
+def _probe_model_candidates(base_url: str, api_key: str, protocol: str) -> list:
+    """挑探测用的候选模型：先选名字像「便宜款」的，再兜底其它可对话模型。"""
+    models = fetch_models(protocol, base_url, api_key)
+    usable = [m for m in models if not any(x in m.lower() for x in _PROBE_MODEL_EXCLUDE)]
+    hinted = [m for m in usable if any(h in m.lower() for h in _PROBE_MODEL_HINTS)]
+    ordered = hinted + [m for m in usable if m not in hinted]
+    return ordered
+
+
+def quota_chat_probe(base_url: str, api_key: str, protocol: str = "openai",
+                     preferred_model: str = "") -> Optional[dict]:
+    """发一次最小对话请求，判断账户是否真的可用（欠费探测）。
+
+    只在「凭据有效但拿不到余额」时才有意义：``/v1/models`` 对欠费账户同样返回 200，
+    分不清「可用」与「账户欠费」，这里用 ``max_tokens=1`` 的一发请求换一个确定结论。
+
+    返回 ``None``（未发现异常 / 无法判定）或：
+
+    - ``{"account_info": {"chat_probe": "可用"}}``：实测通过；
+    - ``{"message": "..."}``：实测发现账户欠费或无可用额度。
+
+    模型选择：``preferred_model`` 优先（用户在设置里指定），否则自动挑一个便宜的；
+    候选模型不可用时换下一个，都不成则放弃（不误报）。
+    """
+    if not base_url or not api_key:
+        return None
+    candidates = [preferred_model] if preferred_model else _probe_model_candidates(
+        base_url, api_key, protocol
+    )
+    candidates = [c for c in candidates if c][:_PROBE_MAX_CANDIDATES]
+    if not candidates:
+        return None
+
+    for model in candidates:
+        resp = chat_completion(
+            base_url, api_key, model,
+            [{"role": "user", "content": "hi"}],
+            protocol=protocol, max_tokens=1,
+        )
+        if resp.get("ok"):
+            return {"account_info": {"chat_probe": "可用"}}
+        error = str(resp.get("error") or "")
+        # 402 / 欠费关键字 = 账户没钱（模型本身是能用的，说明请求已到计费环节）
+        if "402" in error or is_insufficient_balance(error):
+            return {"message": "凭证有效，但账户欠费或无可用额度（已用最小对话实测）"}
+        # 其它错误（模型不存在 / 鉴权 / 限流）不构成欠费结论，换下一个候选
+    return None
+
+
 # ── 校验探针 ─────────────────────────────────────────────
+
+# 上游偶发的 5xx：实测智谱 Anthropic 端点在免费模型上约 1/3 概率返回
+# 500 Internal Network Failure，同一请求重试即成功——不重试会把好 key 误判为失败。
+# 只重试 5xx：429（限流）与 4xx 重试没有意义，反而加重对端负担。
+_TRANSIENT_STATUS = (500, 502, 503, 504)
+_PROBE_ATTEMPTS = 3
+
+
+def _request_with_retry(client: httpx.Client, method: str, url: str, **kwargs) -> httpx.Response:
+    """发一次请求；上游返回 5xx 时退避重试，最多 ``_PROBE_ATTEMPTS`` 次。"""
+    resp = client.request(method, url, **kwargs)
+    for attempt in range(1, _PROBE_ATTEMPTS):
+        if resp.status_code not in _TRANSIENT_STATUS:
+            return resp
+        time.sleep(0.4 * attempt)
+        resp = client.request(method, url, **kwargs)
+    return resp
+
 
 def probe_openai_models(base_url: str, api_key: str) -> VerifyResult:
     """OpenAI 协议：GET {base}/models，Bearer 认证。"""
     url = base_url.rstrip("/") + "/models"
     with make_client() as client:
-        resp = client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+        resp = _request_with_retry(client, "GET", url,
+                                   headers={"Authorization": f"Bearer {api_key}"})
     return _interpret_simple(resp)
 
 
@@ -298,8 +397,8 @@ def probe_anthropic_models(base_url: str, api_key: str, verify_path: str = "/mod
     """Anthropic 协议：GET {base}{verify_path}，x-api-key 认证。"""
     url = base_url.rstrip("/") + verify_path
     with make_client() as client:
-        resp = client.get(
-            url,
+        resp = _request_with_retry(
+            client, "GET", url,
             headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
         )
     return _interpret_simple(resp)
@@ -310,8 +409,8 @@ def probe_openai_chat(base_url: str, api_key: str, model: str) -> VerifyResult:
     url = base_url.rstrip("/") + "/chat/completions"
     body = {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}
     with make_client() as client:
-        resp = client.post(
-            url,
+        resp = _request_with_retry(
+            client, "POST", url,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json=body,
         )
@@ -319,12 +418,12 @@ def probe_openai_chat(base_url: str, api_key: str, model: str) -> VerifyResult:
 
 
 def probe_anthropic_chat(base_url: str, api_key: str, model: str) -> VerifyResult:
-    """Anthropic 协议：POST {base}/v1/messages（可识别欠费）。"""
-    url = base_url.rstrip("/") + "/v1/messages"
+    """Anthropic 协议：POST {root}/v1/messages（可识别欠费）。"""
+    url = _anthropic_root(base_url) + "/v1/messages"
     body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]}
     with make_client() as client:
-        resp = client.post(
-            url,
+        resp = _request_with_retry(
+            client, "POST", url,
             headers={
                 "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
@@ -360,7 +459,7 @@ def _interpret_chat(resp: httpx.Response) -> VerifyResult:
     if status in (401, 403):
         return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
     if status == 429:
-        if _looks_insufficient_balance(snippet):
+        if is_insufficient_balance(snippet):
             # 欠费不算失效：密钥本身有效，仅账户余额不足
             return VerifyResult(status="valid", message="凭证有效，但账户欠费或无可用资源包")
         return VerifyResult(status="valid", message="凭证有效，但触发速率限制 (HTTP 429)")
@@ -377,9 +476,14 @@ def _unconfirmed(status: int, snippet: str) -> VerifyResult:
     return VerifyResult(status="error", message=message)
 
 
-def _looks_insufficient_balance(snippet: str) -> bool:
-    text = (snippet or "").lower()
-    return any(kw in text for kw in _INSUFFICIENT_BALANCE_KEYWORDS)
+def is_insufficient_balance(text: str) -> bool:
+    """文本里是否含「欠费 / 余额不足」类关键字。
+
+    各协议通用；子插件自己实现 ``quota_probe`` 时直接复用这个判定（另可按需叠加厂商
+    专属错误码，如百度文心的 17/18/19）。
+    """
+    lowered = (text or "").lower()
+    return any(kw in lowered for kw in _INSUFFICIENT_BALANCE_KEYWORDS)
 
 
 def _extract_account_info(payload: Any) -> Optional[dict]:

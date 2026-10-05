@@ -1,16 +1,34 @@
-"""智谱 GLM (Anthropic) API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
+"""商汤 SenseNova（日日新）API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
 
-智谱提供的 Anthropic 兼容端点，走 /v1/messages 协议。
+OpenAI 协议探针 ``GET {base}/models``。**没有公开的账户余额/用量接口**，所以欠费判定
+交给可选的 ``quota_probe``（最小对话实测，见 PLUGIN_GUIDE §2.4）。
+
+关于地址——商汤有两套互不相通的入口，模型名也不通用：
+
+- ``https://token.sensenova.cn/v1``（**本插件默认值**）：SenseNova 平台的 OpenAI 兼容
+  网关（Token Plan，按 5 小时滑动窗口计次而非计费）。实测 ``GET /v1/models`` 返回 200 +
+  标准 ``{"data":[{"id":…}]}``，模型 id 形如 ``sensenova-6.8-flash-lite``。
+  **该网关同时转挂三方模型**（实测列表里还有 ``deepseek-v4-flash`` / ``glm-5.2`` /
+  ``kimi-k3`` 等），所以 ``list_models()`` 返回的未必都是商汤自家模型——只有
+  ``sensenova-*`` 前缀的是自家；默认模型刻意选自家款，避免看起来像串了厂商。
+- ``https://api.sensenova.cn/compatible-mode/v2``：大装置 ModelStudio，模型名形如
+  ``SenseChat-5``；实测其 ``/compatible-mode/v1/models`` 返回 404，做不了模型探针。
+
+用户若改用第二套地址，需同时把模型名换成 ``SenseChat-5`` 一类（对话框里的模型下拉
+走的是 ``list_models()`` 实时列表，地址正确时会自动填上可用模型）。
 """
 from __future__ import annotations
 
-from llm_common import VerifyResult, guarded
-from llm_protocols import probe_anthropic_chat, chat_completion, fetch_models, chat_completion_stream
+from llm_common import VerifyResult, guarded, make_quota_probe
+from llm_protocols import chat_completion, chat_completion_stream, fetch_models, probe_openai_models
 
-NAME = "智谱 GLM (Anthropic)"
-DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/anthropic"
-PROTOCOL = "anthropic_chat"
-CHAT_MODEL = "claude-sonnet-4"
+NAME = "商汤 SenseNova"
+DEFAULT_BASE_URL = "https://token.sensenova.cn/v1"
+PROTOCOL = "openai"
+
+# 余额拿不到（商汤无公开余额接口）时的可选项（凭据字段，默认关闭）：
+# 发一次 max_tokens=1 的最小对话请求，实测账户额度是否真的还能用
+quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai")
 
 
 def validate(data: dict) -> list[str]:
@@ -35,7 +53,8 @@ def _verify(data: dict) -> VerifyResult:
     if not base_url:
         return VerifyResult(status="error", message=f"厂商「{NAME}」需要填写 Base URL")
 
-    return probe_anthropic_chat(base_url, api_key, CHAT_MODEL)
+    # 认证通过只能证明 Key 有效；Token Plan 的额度耗尽要靠 quota_probe 实测
+    return probe_openai_models(base_url, api_key)
 
 
 @guarded
@@ -48,10 +67,14 @@ def list_models(data: dict) -> list:
     """获取该厂商可用模型列表（供「简单对话」选择模型）。"""
     data = data or {}
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
-    return fetch_models("anthropic", base_url, (data.get("api_key") or "").strip())
+    return fetch_models("openai", base_url, (data.get("api_key") or "").strip())
 
 
 # ── 可选操作：简单对话 ──────────────────────────────────
+# 商汤自家在 token.sensenova.cn/v1 上的轻量主力对话模型（flash = 便宜档，256K 上下文、多模态）。
+# 该网关还转挂 deepseek / glm / kimi 等三方模型，默认值刻意只取 sensenova-* 自家款。
+CHAT_MODEL = "sensenova-6.8-flash-lite"
+
 
 def actions(data: dict) -> list[dict]:
     """声明可用操作（凭据含 API Key 时才提供简单对话）。"""
@@ -74,9 +97,8 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
         (data.get("api_key") or "").strip(),
         params.get("model") or CHAT_MODEL,
         params.get("messages") or [],
-        protocol="anthropic",
+        protocol="openai",
     )
-
 
 
 def stream_action(action_id: str, params: dict, data: dict, on_delta) -> dict:
@@ -93,7 +115,7 @@ def stream_action(action_id: str, params: dict, data: dict, on_delta) -> dict:
         (data.get("api_key") or "").strip(),
         params.get("model") or CHAT_MODEL,
         params.get("messages") or [],
-        protocol="anthropic",
+        protocol="openai",
         on_delta=on_delta,
     )
 

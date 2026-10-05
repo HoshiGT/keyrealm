@@ -6,12 +6,15 @@ from __future__ import annotations
 
 from typing import Optional
 
-from llm_common import VerifyResult, guarded, make_client, safe_json
+from llm_common import VerifyResult, guarded, make_client, make_quota_probe, plausible_amount, safe_json
 from llm_protocols import probe_openai_models, chat_completion, fetch_models, chat_completion_stream
 
 NAME = "月之暗面 Moonshot"
 DEFAULT_BASE_URL = "https://api.moonshot.cn/v1"
 PROTOCOL = "openai_models"
+
+# 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费
+quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai")
 # 余额端点（best-effort，仅认证通过后查询）
 BALANCE_URL = "https://api.moonshot.cn/v1/users/me/balance"
 
@@ -34,12 +37,13 @@ def _parse_balance(payload: dict) -> Optional[dict]:
     data = payload.get("data")
     if isinstance(data, dict):
         try:
-            return {
-                "balance": float(data.get("available_balance", 0)),
-                "currency": "CNY",
-            }
+            balance = float(data.get("available_balance", 0))
         except (TypeError, ValueError):
             return None
+        # 金额异常（如中转实现返回的哨兵值）宁可不显示
+        if not plausible_amount(balance):
+            return None
+        return {"balance": balance, "currency": "CNY"}
     return None
 
 

@@ -4,12 +4,15 @@ NIM 无 /models 公开列表，改用 chat 探针（消耗极小额度，可识�
 """
 from __future__ import annotations
 
-from llm_common import VerifyResult, guarded
+from llm_common import VerifyResult, guarded, make_quota_probe
 from llm_protocols import probe_openai_chat, chat_completion, fetch_models, chat_completion_stream
 
 NAME = "NVIDIA NIM"
 DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
 PROTOCOL = "openai_chat"
+
+# 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费
+quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai")
 CHAT_MODEL = "deepseek-ai/deepseek-v4.1-flash"
 
 
