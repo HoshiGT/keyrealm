@@ -1113,7 +1113,8 @@ def set_global_proxy(proxy_id=None) -> dict:
         result = proxy_store.set_global_proxy(None)
         _log.info("全局代理已设为直连")
     else:
-        result = proxy_store.set_global_proxy(int(proxy_id))
+        # 代理 id 是 UUID 字符串，**不要**转 int（一转换就成了一个不存在的代理）
+        result = proxy_store.set_global_proxy(str(proxy_id))
         if not result.get("ok"):
             return {"ok": False, "message": result.get("message") or "设置失败"}
         _log.info("全局代理已设为 #%s", proxy_id)

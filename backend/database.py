@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import uuid
 from datetime import datetime, timezone
 from typing import Optional, Union
 
@@ -18,7 +19,7 @@ BASE_DIR = app_dir()
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "credentials.db"
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _lock = threading.Lock()
 _conn: Optional[sqlite3.Connection] = None
@@ -130,9 +131,12 @@ def init_db():
             created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
-        -- 代理注册表：可维护多个代理、各自取名，其它地方一律按 id 引用
+        -- 代理注册表：可维护多个代理、各自取名，其它地方一律按 id 引用。
+        -- id 用 **UUID 而不是自增整数**：自增 id 只在单个库里唯一，一旦导出/导入（代理表是
+        -- 「按地址去重」重建的）就对不上，凭据与预设里存的引用会**静默悬空 → 回落直连**，
+        -- 界面上却看不出任何异常。UUID 跨库稳定，导入时原样沿用即可。
         CREATE TABLE IF NOT EXISTS proxies (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            id          TEXT PRIMARY KEY,
             name        TEXT NOT NULL,
             url         TEXT NOT NULL,
             sort_order  INTEGER DEFAULT 0,
@@ -194,6 +198,26 @@ def _migrate(conn: sqlite3.Connection):
         plugin_cols = {r["name"] for r in conn.execute("PRAGMA table_info(plugins)")}
         if "is_builtin" in plugin_cols:
             conn.execute("ALTER TABLE plugins DROP COLUMN is_builtin")
+        conn.commit()
+
+    if from_version < 5:
+        # v5: 代理 id 由自增整数改成 UUID（见建表处的注释）。
+        # 旧表 id 是 ``INTEGER PRIMARY KEY``（rowid 别名），**塞不进 uuid 文本**，必须重建。
+        # 1.0 前不写数据迁移：旧的代理行直接丢弃，重加一次即可；引用旧 id 的凭据/预设
+        # 会解析成「未配置」→ 回落直连，运行时有 WARNING 点名（见 plugin_manager._log_proxy_outlet）。
+        cols = {r["name"]: str(r["type"] or "").upper() for r in conn.execute("PRAGMA table_info(proxies)")}
+        if cols and cols.get("id") != "TEXT":
+            conn.execute("DROP TABLE proxies")
+            conn.executescript("""
+                CREATE TABLE proxies (
+                    id          TEXT PRIMARY KEY,
+                    name        TEXT NOT NULL,
+                    url         TEXT NOT NULL,
+                    sort_order  INTEGER DEFAULT 0,
+                    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            conn.execute("UPDATE settings SET value='' WHERE key='global_proxy_id'")
         conn.commit()
 
 
@@ -664,15 +688,17 @@ def get_proxy(proxy_id: int) -> Optional[dict]:
     return dict(row) if row else None
 
 
-def create_proxy(name: str, url: str) -> dict:
+def create_proxy(name: str, url: str, proxy_id: Optional[str] = None) -> dict:
+    """新建代理。``proxy_id`` 用于**导入备份时原样沿用源库的 UUID**（默认现生成一个）。"""
+    pid = str(proxy_id or "").strip() or uuid.uuid4().hex
     with _lock:
         conn = get_conn()
-        cur = conn.execute(
-            "INSERT INTO proxies (name, url, created_at) VALUES (?,?,?)",
-            (name, url, _now()),
+        conn.execute(
+            "INSERT INTO proxies (id, name, url, created_at) VALUES (?,?,?,?)",
+            (pid, name, url, _now()),
         )
         conn.commit()
-        row = conn.execute("SELECT * FROM proxies WHERE id=?", (cur.lastrowid,)).fetchone()
+        row = conn.execute("SELECT * FROM proxies WHERE id=?", (pid,)).fetchone()
     return dict(row)
 
 

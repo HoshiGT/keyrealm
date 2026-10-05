@@ -40,7 +40,7 @@ CREATE TABLE settings (
 | `auto_verify` | 保存时自动验证 | `"true"` |
 | `log_level` | 日志级别 | `"INFO"` |
 | `verify_proxy` | **全局代理地址的快照**（由 `global_proxy_id` 解析后写入，供 `VAULT_PROXY` 环境变量那条老通道用） | `"socks5://127.0.0.1:10808"` |
-| `global_proxy_id` | 全局默认代理在 `proxies` 表里的 id（空 = 直连） | `"2"` |
+| `global_proxy_id` | 全局默认代理在 `proxies` 表里的 id（**UUID 字符串**，空 = 直连） | `"a1eb5c2ac79c42af96011e770b7d78ca"` |
 | `batch_concurrency` | 批量验证并发线程数（1–32，空 = 默认 8） | `"8"` |
 | `verify_timeout` | 验证请求超时秒数（5–300，空 = 默认 20） | `"20"` |
 | `close_action` | 关闭主窗口行为（ask / quit / background） | `"ask"` |
@@ -172,7 +172,7 @@ CREATE TABLE plugins (
 
 ```sql
 CREATE TABLE IF NOT EXISTS proxies (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id          TEXT PRIMARY KEY,       -- UUID（见下）；**不是**自增整数
     name        TEXT NOT NULL,          -- 用户取的名字，仅用于展示
     url         TEXT NOT NULL,          -- http:// / https:// / socks4:// / socks5:// / socks5h://
     sort_order  INTEGER DEFAULT 0,
@@ -183,6 +183,12 @@ CREATE TABLE IF NOT EXISTS proxies (
 > **其它模块一律按 `id` 引用代理**，不传名字、也不传地址：全局默认存
 > `settings.global_proxy_id`，每条凭据存自己 `data` 里的 `_proxy_mode` / `_proxy_id`。
 > 删除某个代理后，引用它的凭据会在解析时回退到全局（不报错）。
+>
+> **id 为什么用 UUID 而不是自增整数**：自增只在单个库里唯一。备份导入时代理是**原样沿用
+> 源库 id** 重建的，一旦 id 变了，凭据/预设里的 `_proxy_id` 就会静默悬空 → 回落直连
+> ——界面上代理名还好好显示着，症状是「配了代理却完全不生效」。UUID 跨库稳定，这类问题从根上消失。
+> 老库（整型主键）在 `init_db` 的 v5 迁移里**重建该表**（旧行丢弃，`global_proxy_id` 一并清空；
+> 1.0 前不做数据迁移，重加一次代理即可）。
 
 ---
 

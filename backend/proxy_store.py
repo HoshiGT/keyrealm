@@ -47,14 +47,15 @@ def list_proxies() -> list[dict]:
     return items
 
 
-def create_proxy(name: str, url: str) -> dict:
+def create_proxy(name: str, url: str, proxy_id: Optional[str] = None) -> dict:
+    """新建代理；``proxy_id`` 只在**导入备份时**用来原样沿用源库的 UUID。"""
     name = (name or "").strip()
     url = proxy_config.normalize(url or "")
     if not name:
         return {"error": "invalid_name", "message": "代理名称不能为空"}
     if not proxy_config.is_valid(url):
         return {"error": "invalid_url", "message": f"代理地址不合法：{url}"}
-    return db.create_proxy(name, url)
+    return db.create_proxy(name, url, proxy_id)
 
 
 def update_proxy(proxy_id: int, name: Optional[str] = None, url: Optional[str] = None) -> dict:
@@ -72,7 +73,7 @@ def update_proxy(proxy_id: int, name: Optional[str] = None, url: Optional[str] =
 
 def delete_proxy(proxy_id: int) -> dict:
     """删除代理。引用它的凭据会在下次解析时回退到全局（不报错）。"""
-    if global_proxy_id() == proxy_id:
+    if str(global_proxy_id() or "") == str(proxy_id or ""):
         set_global_proxy(None)
     removed = db.delete_proxy(proxy_id)
     return {"ok": removed, "id": proxy_id}
@@ -81,23 +82,21 @@ def delete_proxy(proxy_id: int) -> dict:
 # ── 解析 ─────────────────────────────────────────────────
 
 def get_proxy_url(proxy_id) -> Optional[str]:
-    """id → 代理地址。这是「取用代理」的唯一入口（绝不按名字/裸值传）。"""
-    try:
-        pid = int(proxy_id)
-    except (TypeError, ValueError):
+    """id → 代理地址。这是「取用代理」的唯一入口（绝不按名字/裸值传）。
+
+    id 是 UUID 字符串。这里**不做 int 转换**——旧实现 `int(uuid)` 会抛异常被吞掉、
+    返回 None，那正是「配了代理却静默直连」的成因之一。
+    """
+    pid = str(proxy_id or "").strip()
+    if not pid:
         return None
     record = db.get_proxy(pid)
     return (record or {}).get("url") or None
 
 
-def global_proxy_id() -> Optional[int]:
-    raw = db.get_setting(SETTING_GLOBAL_ID, "").strip()
-    if not raw:
-        return None
-    try:
-        return int(raw)
-    except ValueError:
-        return None
+def global_proxy_id() -> Optional[str]:
+    """全局默认代理的 id（UUID 字符串）；未设置返回 None。"""
+    return db.get_setting(SETTING_GLOBAL_ID, "").strip() or None
 
 
 def global_url() -> Optional[str]:
@@ -110,7 +109,7 @@ def global_url() -> Optional[str]:
     return db.get_setting(SETTING_LEGACY_URL, "").strip() or None
 
 
-def set_global_proxy(proxy_id: Optional[int]) -> dict:
+def set_global_proxy(proxy_id: Optional[str]) -> dict:
     """设置全局默认代理（``None`` = 直连），并立即把值同步进 ``VAULT_PROXY``。
 
     ``verify_proxy`` 一并写好：进程环境变量那条老通道（以及没走 ctx 的场景）仍然依赖它。
@@ -124,10 +123,10 @@ def set_global_proxy(proxy_id: Optional[int]) -> dict:
     url = get_proxy_url(proxy_id)
     if not url:
         return {"ok": False, "message": "代理不存在"}
-    db.set_setting(SETTING_GLOBAL_ID, str(int(proxy_id)))
+    db.set_setting(SETTING_GLOBAL_ID, str(proxy_id))
     db.set_setting(SETTING_LEGACY_URL, url)
     proxy_config.apply_proxy(url)
-    return {"ok": True, "proxy_id": int(proxy_id), "url": url}
+    return {"ok": True, "proxy_id": str(proxy_id), "url": url}
 
 
 def _resolve_spec(mode, proxy_id) -> Union[object, str, None]:

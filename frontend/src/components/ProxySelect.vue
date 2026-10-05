@@ -41,7 +41,8 @@ const value = computed({
       emit('update:proxyId', null)
     } else if (typeof next === 'string' && next.startsWith('proxy:')) {
       emit('update:mode', 'proxy')
-      emit('update:proxyId', Number(next.slice('proxy:'.length)))
+      // 代理 id 是 UUID 字符串，**不要** Number() 转换（转了就是 NaN/不存在的代理）
+      emit('update:proxyId', next.slice('proxy:'.length))
     } else {
       emit('update:mode', 'global')
       emit('update:proxyId', null)

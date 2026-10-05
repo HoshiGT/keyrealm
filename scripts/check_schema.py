@@ -119,6 +119,28 @@ def main() -> int:
         assert {"proxies", "preset_defaults"} <= rebuilt, rebuilt
         print("✓ 老库补建新表（升级路径）")
 
+        # 9) 代理 id 由「自增整数」改成「UUID」的升级路径：老表必须被重建，
+        #    否则 uuid 文本塞不进 INTEGER PRIMARY KEY（rowid 别名）→ 建代理直接报类型错。
+        conn.execute("DROP TABLE proxies")
+        conn.execute(
+            "CREATE TABLE proxies (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,"
+            " url TEXT NOT NULL, sort_order INTEGER DEFAULT 0,"
+            " created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        conn.execute("INSERT INTO proxies (name, url) VALUES ('老代理','socks5://127.0.0.1:1080')")
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('global_proxy_id','1')")
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version','4')")
+        conn.commit()
+        db.init_db()
+        cols = {r["name"]: str(r["type"] or "").upper()
+                for r in conn.execute("PRAGMA table_info(proxies)")}
+        assert cols.get("id") == "TEXT", cols
+        assert db.list_proxies() == [], "旧的自增 id 行应被丢弃（1.0 前不做数据迁移）"
+        assert db.get_setting("global_proxy_id", "") == "", "旧引用必须清掉，否则指向不存在的代理"
+        created = db.create_proxy("新代理", "socks5://127.0.0.1:10808")
+        assert isinstance(created["id"], str) and len(created["id"]) == 32, created
+        print("✓ 代理 id 改 UUID（老库重建 + 引用清理）")
+
         print("\n全部通过：建表脚本与各表 SQL 都可用。")
         return 0
     finally:
