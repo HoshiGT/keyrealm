@@ -152,6 +152,38 @@ def fail_missing_deps(missing: list[str], allow_missing: bool) -> None:
     sys.exit(1)
 
 
+def run_capture(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """跑子进程并捕获输出，**两边都按 UTF-8**。
+
+    Windows 上 ``subprocess.run(text=True)`` 默认用本地编码解码子进程输出（简体中文环境是
+    GBK），而 Python 子进程写出来的是 UTF-8 —— 子进程只要输出一个 ``✓`` 或中文，父进程就会在
+    读取线程里抛 ``UnicodeDecodeError``（表现为一段看不懂的 traceback，构建看起来"莫名失败"）。
+    这里显式指定 ``encoding``，并用 ``PYTHONIOENCODING``/``PYTHONUTF8`` 把子进程也钉成 UTF-8，
+    再加 ``errors="replace"`` 兜底：宁可显示成问号，也不能因为一个字符把整个构建搞崩。
+    """
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    env.update(kwargs.pop("env", None) or {})
+    return subprocess.run(cmd, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", env=env, **kwargs)
+
+
+def check_schema() -> None:
+    """构建前置检查：在临时库上真跑一遍建表 + 各表 CRUD。
+
+    建表语句写在 backend/database.py 里，只有**真连上 SQLite** 才会被解析；而单元测试
+    通常把 database 模块整个打桩，于是「SQL 写错」这类问题一路测试全绿、打包后运行才崩
+    （真实案例：把 SQLite 保留字 `values` 当列名 → 建表 syntax error）。
+    所以放在打包前跑。
+    """
+    script = ROOT / "scripts" / "check_schema.py"
+    result = run_capture([sys.executable, str(script)])
+    if result.returncode != 0:
+        sys.stdout.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        sys.exit("建表自检未通过：上面是具体错误（数据库 SQL 有问题，修好再打包）")
+    print("建表自检   : 通过 ✅")
+
+
 def check_environment(allow_missing: bool) -> None:
     """构建前置检查：打包工具 + 依赖齐全。缺依赖默认中止（可被 flag 放行）。
 
@@ -273,7 +305,7 @@ def assemble_release() -> Path:
 def smoke_test(exe: Path) -> None:
     """运行 exe --print-paths 校验冻结后的路径解析（需控制台构建）。"""
     print("\n=== 冒烟校验：--print-paths ===", flush=True)
-    result = subprocess.run([str(exe), "--print-paths"], capture_output=True, text=True, timeout=120)
+    result = run_capture([str(exe), "--print-paths"], timeout=120)
     print(result.stdout, end="")
     if result.stderr:
         print("[stderr]", result.stderr, end="")
@@ -324,6 +356,7 @@ def main() -> None:
     print("=" * 60)
 
     check_environment(args.allow_missing_deps)
+    check_schema()
 
     if args.frontend:
         build_frontend()
