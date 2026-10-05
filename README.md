@@ -10,7 +10,8 @@
 - **MCP 服务**：内置 MCP Server，AI Agent 可直接管理与验证凭据，支持按工具粒度控制权限
 - **多模式验证**：保存时自动验证 / 手动验证 / 定时批量验证；批量验证可**手动勾选**（支持一键全选）并**并发**执行；有写副作用或无法自动化的类型可声明 `batch_verify: false`，仅允许手动单个验证
 - **可读的附加信息**：凭据列表「附加信息」列以「标签 值」展示——LLM 显示余额（plan 类显示使用率），云厂商显示账号信息，无效字段自动隐藏
-- **验证代理**：可为所有插件的校验请求配置 http/https/socks5 代理（也可用环境变量 `VAULT_PROXY` 覆盖）
+- **验证代理 + 连通性诊断**：可为所有插件的校验请求配置 http/https/socks5 代理（也可用环境变量 `VAULT_PROXY` 覆盖）；「网络与代理」里可一键**对照测试**——同一批探测分别走直连与代理，比对出口 IP 归属与国内外站点可达性，直接给出「代理是否真的生效」的结论
+- **独立日志模块**：插件与后端的 INFO/告警/异常统一落盘（`data/logs/credential_vault.log`，1MB×5 轮转），独立页面可调级别、按关键词**搜索**（支持 AND 多词、含 traceback 的整条记录匹配）、清空与刷新
 - **凭据简易操作**：插件可声明可选操作，凭据行出现「操作」按钮——如 LLM 凭据可直接发起简单对话；由插件自行维护、可逐步扩展（DNS 调解析 / SMTP 看信箱等）
 - **备份 / 恢复**：导出为单个 JSON 文件（可选加密——默认保持敏感字段密文、需同一主密码导入；或明文导出、可跨主密码导入），导入自动识别二者并按敏感值去重
 - **分组管理**：平面分组，凭据按项目或用途归类
@@ -64,6 +65,16 @@ python scripts/build.py --frontend
 > `[spec] 应用图标：…`；若打印的是警告，则图标缺失，exe 会回退 PyInstaller 默认图标。
 > 构建已关闭 UPX（UPX 会破坏 exe 内嵌图标资源）。若替换 exe 后资源管理器仍显示旧图标，
 > 属 Windows 图标缓存，可执行 `ie4uinit.exe -show`，或把 exe 复制到新目录后再查看。
+> 分不清是「图标没进 exe」还是「图标缓存」时，先跑 `python scripts/check_exe_icon.py`
+> ——它按字节在 exe 里搜各图标条目，直接给出结论和对应修法。
+>
+> `icon.ico` 为**混合格式**：16–128 存 BMP(DIB)、256 存 PNG。Windows 仅对 256×256 保证支持
+> PNG 压缩条目，小尺寸用 PNG 时任务栏/资源管理器可能解码失败而回退默认图标——故
+> `make_icon.py` 手工组装并自检条目格式，**勿**改回 `Image.save(format="ICO")` 默认行为（它把所有帧都写成 PNG）。
+>
+> **运行时窗口/任务栏图标**：`assets/` 随包进 `resource_dir()/assets/`，`main.py` 启动时显式
+> `webview.start(icon=<...>/assets/icon.ico)`。不再依赖 pywebview 从 exe 提取（提取到的多为
+> 16px 小图，高 DPI 任务栏下模糊）。托盘图标是**状态色徽标**（绿/蓝/红/灰），非应用 logo。
 
 构建完成后 `release/` 结构：
 
@@ -131,13 +142,16 @@ API-Key-Checker/
 │   ├── paths.py             # 冻结感知路径解析（打包/开发统一）
 │   ├── plugin_base.py       # 插件接口定义
 │   ├── plugin_manager.py    # 插件目录扫描与自动加载
+│   ├── proxy.py             # 验证代理配置（写入 VAULT_PROXY 环境变量）
+│   ├── proxy_test.py        # 代理连通性诊断（直连/代理对照探测）
 │   ├── scheduler.py         # 定时验证调度器
-│   ├── logger.py            # 日志配置（轮转文件 + 级别可调）
+│   ├── logger.py            # 日志配置（轮转文件 + 级别可调 + 关键词搜索）
 │   ├── tray.py              # 系统托盘
 │   └── mcp_server.py        # MCP Server（SSE）
 ├── assets/                  # 应用图标资源（icon.ico / icon.png，由脚本生成）
 ├── scripts/
 │   ├── build.py             # 可执行文件打包脚本（输出到 release/）
+│   ├── check_exe_icon.py    # 校验 exe 是否真的嵌入了 assets/icon.ico（区分「没嵌」与「图标缓存」）
 │   ├── make_icon.py         # 生成应用图标（ICO/PNG/favicon）
 │   └── pack_source.py       # 源码归档脚本（生成 release/credential-vault-src.zip）
 ├── plugins/                 # 插件源码（打包时作为外部目录，不进 exe）
@@ -161,6 +175,7 @@ API-Key-Checker/
 ## 文档
 
 - [架构设计](docs/ARCHITECTURE.md)
+- [前端设计](docs/FRONTEND.md)
 - [插件开发指南](docs/PLUGIN_GUIDE.md)
 - [MCP 接口规范](docs/MCP_API.md)
 - [数据库设计](docs/DATABASE.md)

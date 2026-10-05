@@ -5,6 +5,7 @@ pywebview JS-API 桥接层
 from __future__ import annotations
 
 import json
+import os
 import threading
 import uuid
 from datetime import datetime
@@ -16,6 +17,7 @@ from . import logger
 from . import mcp_server
 from . import plugin_manager
 from . import proxy as proxy_config
+from . import proxy_test
 from . import scheduler
 from . import tray
 from .crypto import (
@@ -485,6 +487,16 @@ def run_credential_action(credential_id: int, action_id: str, params: Optional[d
     if secrets and isinstance(result, dict):
         for k in ("output", "error"):
             result[k] = _redact_secrets(result.get(k), secrets)
+    # 日志同样必须净化：插件回显的密钥不能落盘到日志文件
+    ok = bool(isinstance(result, dict) and result.get("ok"))
+    _log.info(
+        "执行操作 %s/%s [%s]：%s",
+        cred["credential_type"], action_id, cred.get("name", ""),
+        "成功" if ok else "失败",
+    )
+    if not ok and isinstance(result, dict) and result.get("error"):
+        _log.warning("操作 %s/%s 失败原因: %s", cred["credential_type"], action_id,
+                     _redact_secrets(str(result["error"]), secrets))
     return result
 
 
@@ -535,13 +547,20 @@ def stream_credential_action(credential_id: int, action_id: str, params: Optiona
         result = plugin_manager.stream_plugin_action(
             credential_type, action_id, params or {}, data, on_delta
         )
+        safe_output = _redact_secrets(result.get("output", ""), secrets)
+        safe_error = _redact_secrets(result.get("error", ""), secrets)
         push_event("vault:action_stream", {
             "stream_id": stream_id,
             "done": True,
             "ok": bool(result.get("ok")),
-            "output": _redact_secrets(result.get("output", ""), secrets),
-            "error": _redact_secrets(result.get("error", ""), secrets),
+            "output": safe_output,
+            "error": safe_error,
         })
+        ok = bool(result.get("ok"))
+        _log.info("流式操作 %s/%s [%s]：%s", credential_type, action_id,
+                  cred.get("name", ""), "成功" if ok else "失败")
+        if not ok and safe_error:
+            _log.warning("流式操作 %s/%s 失败原因: %s", credential_type, action_id, safe_error)
 
     threading.Thread(target=_run, daemon=True).start()
     return {"ok": True, "stream_id": stream_id}
@@ -796,6 +815,30 @@ def set_proxy(proxy: str) -> dict:
     return {"ok": True, "proxy": value, "effective": effective or ""}
 
 
+def test_proxy(proxy: str = "") -> dict:
+    """对照测试代理可用性：同一批探测分别走直连与代理，对比出口 IP 与站点可达性。
+
+    proxy 传空时使用当前生效的代理（界面设置或环境变量 VAULT_PROXY）。
+    """
+    value = (proxy or "").strip()
+    source = "传入值"
+    if not value:
+        value = proxy_config.normalize(os.environ.get(proxy_config.ENV_KEY, ""))
+        source = "环境变量 VAULT_PROXY" if value else ""
+    if not value:
+        value = db.get_setting("verify_proxy", "").strip()
+        source = "界面设置" if value else "未配置"
+    if value and not proxy_config.is_valid(value):
+        return {"ok": False, "message": "代理地址需带协议前缀，如 socks5://127.0.0.1:10808"}
+
+    _log.info("开始代理连通性测试（%s: %s）", source or "无", value or "直连")
+    result = proxy_test.test_proxy(value)
+    result["proxy_source"] = source
+    verdict = result.get("verdict", {})
+    _log.info("代理测试完成：%s", verdict.get("headline", ""))
+    return result
+
+
 # ── 备份 / 恢复 ────────────────────────────────────────────
 
 def _file_dialog(kind: str, default_name: str = "") -> Optional[str]:
@@ -898,8 +941,8 @@ def set_log_level(level: str) -> dict:
     return {"ok": True, "level": level}
 
 
-def get_logs(limit: int = 200, level: str = "") -> dict:
-    """读取日志文件末尾若干条记录，可按最低级别过滤。"""
+def get_logs(limit: int = 200, level: str = "", search: str = "") -> dict:
+    """读取日志文件末尾若干条记录，可按最低级别过滤 + 关键词搜索。"""
     try:
         limit = max(1, min(int(limit or 200), 2000))
     except (TypeError, ValueError):
@@ -907,7 +950,8 @@ def get_logs(limit: int = 200, level: str = "") -> dict:
     level = (level or "").strip().upper()
     if level and level not in logger.LEVELS:
         level = ""
-    entries = logger.read_logs(limit, level or None)
+    search = (search or "").strip()
+    entries = logger.read_logs(limit, level or None, search or None)
     return {
         "ok": True,
         "entries": entries,

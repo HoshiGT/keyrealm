@@ -211,6 +211,9 @@ export const api = {
   // ── 验证代理 ────────────────────────────────────────────
   getProxy: () => call('get_proxy'),
   setProxy: (proxy) => call('set_proxy', proxy),
+  // 连通性自检：传空串表示按当前生效的代理设置测试（可能是环境变量或已保存值）。
+  // 返回 { ok, proxy, proxy_source, direct, proxied, verdict }。
+  testProxy: (proxy = '') => call('test_proxy', proxy),
 
   // ── 备份 / 恢复 ─────────────────────────────────────────
   exportBackup: (scope = 'all', encrypted = true) => call('export_backup', scope, encrypted),
@@ -219,7 +222,9 @@ export const api = {
   // ── 日志 ────────────────────────────────────────────────
   getLogConfig: () => call('get_log_config'),
   setLogLevel: (level) => call('set_log_level', level),
-  getLogs: (limit = 200, level = '') => call('get_logs', limit, level),
+  // 参数顺序必须与 main.py 的 VaultApi.get_logs(limit, level, search) 严格一致。
+  // search 为空串时后端按"不过滤"处理，与传 null 等价。
+  getLogs: (limit = 200, level = '', search = '') => call('get_logs', limit, level, search),
   clearLogs: () => call('clear_logs'),
 }
 

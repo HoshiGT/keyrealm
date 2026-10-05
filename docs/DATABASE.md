@@ -39,8 +39,7 @@ CREATE TABLE settings (
 | `auto_verify` | 保存时自动验证 | `"true"` |
 | `log_level` | 日志级别 | `"INFO"` |
 | `verify_proxy` | 验证代理（空 = 直连；http/https/socks5） | `"socks5://127.0.0.1:10808"` |
-| `close_action` | 关闭主窗口行为 | `"ask"` |
-| `close_action` | 关闭窗口行为（ask / quit / background） | `"ask"` |
+| `close_action` | 关闭主窗口行为（ask / quit / background） | `"ask"` |
 
 ---
 

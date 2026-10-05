@@ -83,36 +83,57 @@ async function startPickedBatch() {
 }
 
 // ── 简易操作（插件可选能力，例如 LLM 简单对话）──
-const actionDialog = ref({
-  visible: false,
-  credentialId: null,
-  actionId: '',
-  kind: '',
-  title: '',
-  model: '',
-  models: [],
-  modelsLoading: false,
-  fields: [],
-  values: {},
-  submitLabel: '运行',
-  write: false,
-  output: '',
-  messages: [],
-  input: '',
-  busy: false,
-  error: '',
-})
+/**
+ * 对话框的初始状态只在这里定义一份。
+ *
+ * 模板会直接读 models / modelsLoading 等字段（如 `!actionDialog.models.length`），
+ * 字段缺失会在渲染时抛 TypeError 让整个弹窗内容渲染失败、看起来像卡死，
+ * 所以「初始化」和「打开对话框」必须共用同一份字段定义，避免再次漏字段。
+ */
+function blankActionDialog() {
+  return {
+    visible: false,
+    credentialId: null,
+    actionId: '',
+    kind: '',
+    title: '',
+    model: '',
+    models: [],
+    modelsLoading: false,
+    streamId: null,
+    fields: [],
+    values: {},
+    submitLabel: '运行',
+    write: false,
+    output: '',
+    messages: [],
+    input: '',
+    busy: false,
+    error: '',
+  }
+}
+
+const actionDialog = ref(blankActionDialog())
+
+/** 模型列表拉取失败的提示：不阻塞对话，只提示用户回退为手动输入模型名 */
+const MODELS_ERROR = '获取模型列表失败，请手动输入模型名'
 
 /** 拉取该凭据可用模型列表（失败则回退为手动输入模型名） */
 async function loadModels() {
   const dialog = actionDialog.value
-  if (!dialog.credentialId) return
+  if (!dialog.credentialId || dialog.modelsLoading) return
   dialog.modelsLoading = true
+  // 清掉上一次拉取留下的提示，避免重试成功后仍显示旧错误
+  if (dialog.error === MODELS_ERROR) dialog.error = ''
   try {
     const list = await api.listCredentialModels(dialog.credentialId)
     dialog.models = Array.isArray(list) ? list : []
+    // 后端取模型列表失败时是静默返回空数组的（见 plugin_base.call_list_models），
+    // 不提示的话用户只会看到一个空下拉框，不知道可以直接手动填模型名。
+    if (!dialog.models.length) dialog.error = MODELS_ERROR
   } catch {
     dialog.models = []
+    dialog.error = MODELS_ERROR
   } finally {
     dialog.modelsLoading = false
   }
@@ -136,7 +157,9 @@ async function openActions(row) {
   fields.forEach((f) => {
     values[f.key] = f.default !== undefined && f.default !== null ? f.default : ''
   })
+  // 基于初始状态展开，保证 fields 之外的字段（models / modelsLoading / streamId …）一个都不少
   actionDialog.value = {
+    ...blankActionDialog(),
     visible: true,
     credentialId: row.id,
     actionId: action.id,
@@ -147,12 +170,9 @@ async function openActions(row) {
     values,
     submitLabel: action.submit || '运行',
     write: !!action.write,
-    output: '',
-    messages: [],
-    input: '',
-    busy: false,
-    error: '',
   }
+  // 模型列表要联网拉取，这里刻意不 await：先让弹窗渲染出来，加载过程由 modelsLoading 表达，
+  // 否则网络慢时用户看到的是一个迟迟不出现的弹窗（表现为「卡住」）。
   if (actionDialog.value.kind === 'chat') loadModels()
 }
 

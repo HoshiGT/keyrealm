@@ -46,6 +46,12 @@ hiddenimports = []
 if FRONTEND_DIST.exists():
     datas.append((str(FRONTEND_DIST), "frontend/dist"))
 
+# 应用图标 → 包内 assets/。运行时以 resource_dir()/assets/icon.ico 显式
+# 设置窗口/任务栏图标（不依赖 pywebview 从 exe 提取的 16px 小图标）。
+ASSETS_DIR = ROOT / "assets"
+if ASSETS_DIR.exists():
+    datas.append((str(ASSETS_DIR), "assets"))
+
 # 逐个收集第三方依赖的数据文件、二进制与隐藏子模块。
 # 这些库大量使用动态导入 / 平台特定后端，手工列 hiddenimports 极易漏，交给 collect_all。
 for _pkg in [
@@ -95,6 +101,8 @@ hiddenimports += [
     "backend.paths",
     "backend.plugin_base",
     "backend.plugin_manager",
+    "backend.proxy",
+    "backend.proxy_test",
     "backend.scheduler",
     "backend.tray",
 ]

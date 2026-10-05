@@ -95,11 +95,14 @@ def log_file_path() -> str:
     return str(LOG_FILE)
 
 
-def read_logs(limit: int = 200, level: str | None = None) -> list[str]:
+def read_logs(limit: int = 200, level: str | None = None,
+              search: str | None = None) -> list[str]:
     """读取当前日志文件末尾若干条记录。
 
     - 以「时间戳起始行」为一条记录，后续无时间戳的行（如 traceback）并入同一条；
     - level 给定时只保留级别 >= 该阈值的记录；
+    - search 给定时只保留**整条记录**（含 traceback 等续行）包含该子串的记录，
+      大小写不敏感；多个空白分隔的关键词需全部命中（AND）。
     - 返回字符串列表，每项是一条完整记录（可能含换行）。
     """
     if not LOG_FILE.exists():
@@ -124,6 +127,13 @@ def read_logs(limit: int = 200, level: str | None = None) -> list[str]:
             if m and getattr(logging, m.group(1).upper(), 0) >= threshold:
                 kept.append(rec)
         records = kept
+
+    terms = [t for t in (search or "").lower().split() if t]
+    if terms:
+        records = [
+            rec for rec in records
+            if all(t in "\n".join(rec).lower() for t in terms)
+        ]
 
     limit = max(1, min(int(limit or 200), 2000))
     return ["\n".join(rec) for rec in records[-limit:]]

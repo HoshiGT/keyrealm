@@ -66,6 +66,8 @@ def verify_single_credential(cred_id: int, trigger_type: str = "schedule") -> di
     try:
         data = decrypt_dict(key, cred["data_encrypted"])
     except Exception as e:
+        # 解密失败通常是主密码变更或数据损坏，必须留痕而非只体现在界面上
+        _log.error("凭据 id=%s 解密失败: %s", cred_id, e)
         return {"status": "error", "message": f"解密失败: {e}"}
 
     start = time.monotonic()
@@ -78,6 +80,17 @@ def verify_single_credential(cred_id: int, trigger_type: str = "schedule") -> di
         "account_info": getattr(result, "account_info", None),
     }
     status_detail["duration_ms"] = duration_ms
+
+    # 验证结果落日志：插件内部的 print 在打包后不可见，这里是唯一的追责/排查线索
+    label = f"{cred['credential_type']}/{cred.get('name', '')} (id={cred_id})"
+    if result.status == "valid":
+        _log.info("验证通过 %s，耗时 %dms（触发: %s）", label, duration_ms, trigger_type)
+    elif result.status == "invalid":
+        _log.warning("验证无效 %s：%s（耗时 %dms，触发: %s）",
+                     label, result.message, duration_ms, trigger_type)
+    else:
+        _log.error("验证异常 %s：%s（耗时 %dms，触发: %s）",
+                   label, result.message, duration_ms, trigger_type)
 
     now = datetime.now(timezone.utc).isoformat()
     updates = {
@@ -164,6 +177,8 @@ def batch_verify(
         _push_event("vault:batch_verify_done", {
             "total": total, "valid": valid, "invalid": invalid, "error": error, "skipped": skipped,
         })
+        _log.info("批量验证完成（触发: %s）：共 %d 条，有效 %d，无效 %d，异常 %d，跳过 %d",
+                  trigger_type, total, valid, invalid, error, skipped)
 
     _executor.submit(_run)
 

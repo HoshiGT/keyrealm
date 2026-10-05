@@ -6,10 +6,18 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+_log = logging.getLogger("plugin")
+
+
+def _plugin_name(module: Any) -> str:
+    """取插件的可读标识（用于日志），去掉内部模块名前缀。"""
+    return getattr(module, "__name__", "?").replace("_vault_plugin_", "")
 
 
 @dataclass
@@ -150,6 +158,7 @@ def load_plugin_module(plugin_path: Path, credential_type: str) -> Any:
 
 def call_verify(module: Any, data: dict) -> VerifyResult:
     """调用插件的 verify 函数，捕获异常"""
+    name = _plugin_name(module)
     try:
         result = module.verify(data)
         if isinstance(result, VerifyResult):
@@ -164,8 +173,12 @@ def call_verify(module: Any, data: dict) -> VerifyResult:
         # 兼容直接返回 dict 的插件
         if isinstance(result, dict):
             return VerifyResult(**result)
+        _log.error("插件 %s 的 verify 返回了非预期类型: %s", name, type(result))
         return VerifyResult(status="error", message=f"插件返回了非预期类型: {type(result)}")
     except Exception as e:
+        # 插件内部异常必须留痕：否则只会以 status=error 的形式回到界面，
+        # 日志里查不到任何线索（排查线上证书/网络问题时的常见盲区）。
+        _log.exception("插件 %s 的 verify 执行异常: %s", name, e)
         return VerifyResult(status="error", message=f"插件执行异常: {e}")
 
 
@@ -177,6 +190,7 @@ def call_validate(module: Any, data: dict) -> list[str]:
         errors = module.validate(data)
         return errors if isinstance(errors, list) else []
     except Exception as e:
+        _log.exception("插件 %s 的 validate 执行异常: %s", _plugin_name(module), e)
         return [f"validate 异常: {e}"]
 
 
@@ -186,7 +200,10 @@ def call_display_summary(module: Any, data: dict) -> str:
         return ""
     try:
         return str(module.get_display_summary(data))
-    except Exception:
+    except Exception as e:
+        # 仅影响列表「附加信息」列的展示，降为 warning 不打断主流程
+        _log.warning("插件 %s 的 get_display_summary 执行异常: %s",
+                     _plugin_name(module), e)
         return ""
 
 
@@ -202,7 +219,8 @@ def call_actions(module: Any, data: dict) -> list:
     try:
         result = module.actions(data or {})
         return result if isinstance(result, list) else []
-    except Exception:
+    except Exception as e:
+        _log.warning("插件 %s 的 actions 执行异常: %s", _plugin_name(module), e)
         return []
 
 
@@ -214,6 +232,7 @@ def call_run_action(module: Any, action_id: str, params: dict, data: dict) -> di
         result = module.run_action(action_id, params or {}, data or {})
         return result if isinstance(result, dict) else {"ok": False, "error": "插件返回了非预期结果"}
     except Exception as e:
+        _log.exception("插件 %s 的操作 %s 执行异常: %s", _plugin_name(module), action_id, e)
         return {"ok": False, "error": f"操作失败: {e}"}
 
 
@@ -227,7 +246,9 @@ def call_list_models(module: Any, data: dict) -> list:
     try:
         result = module.list_models(data or {})
         return [str(x) for x in result] if isinstance(result, list) else []
-    except Exception:
+    except Exception as e:
+        # 取模型列表失败会让前端对话框回退为手动输入，用户看不到原因，必须留痕
+        _log.warning("插件 %s 的 list_models 执行异常: %s", _plugin_name(module), e)
         return []
 
 
@@ -239,4 +260,6 @@ def call_stream_action(module: Any, action_id: str, params: dict, data: dict, on
         result = module.stream_action(action_id, params or {}, data or {}, on_delta)
         return result if isinstance(result, dict) else {"ok": False, "error": "插件返回了非预期结果"}
     except Exception as e:
+        _log.exception("插件 %s 的流式操作 %s 执行异常: %s",
+                       _plugin_name(module), action_id, e)
         return {"ok": False, "error": f"操作失败: {e}"}

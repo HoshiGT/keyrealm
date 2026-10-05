@@ -14,7 +14,7 @@ plugins/mail/<服务>/plugin.py（服务之间允许重复，刻意为之）；
 """
 from __future__ import annotations
 
-import sys
+import logging
 from dataclasses import dataclass
 from typing import Optional
 
@@ -35,8 +35,17 @@ class VerifyResult:
         }
 
 
+_logger = logging.getLogger("plugin.mail")
+
+
 def log(message: str) -> None:
-    print(f"[mail] {message}", file=sys.stderr)
+    """插件日志 → 应用统一日志（根 logger 落盘到 data/logs/credential_vault.log）。
+
+    不要改回 print(..., file=sys.stderr)：打包成 GUI 程序后没有 stdio，
+    输出会被静默丢弃（在 windowed 模式下写 stderr 甚至直接抛异常），
+    结果就是插件的告警与异常在系统日志里完全不可见。
+    """
+    _logger.info("%s", message)
 
 
 def guarded(fn):

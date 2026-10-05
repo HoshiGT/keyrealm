@@ -138,6 +138,12 @@ plugins/
 若 `VAULT_PROXY` 由外部环境显式设置，则它优先于界面设置。socks5 需 `httpx[socks]`（`socksio`），已在 `requirements.txt` 声明。
 注意：SMTP 插件（`mail_smtp`）走标准库 `smtplib`，不受该代理影响。
 
+**测试代理**：同一页有「测试代理」按钮，传当前输入框的值（可「先测再存」），调用
+`backend/proxy_test.py` 做一次对照实验——同一批探测分别在直连与走代理下各跑一遍，比对
+国内站点（baidu.com）可达性、国外站点（gstatic.com/generate_204）可达性与出口 IP 归属地，
+综合给出「代理是否真的生效」的结论并在界面展示。排查「代理配了但插件仍走本地出口」时先用它。
+详见 `docs/ARCHITECTURE.md` 第 2.4 节。
+
 ---
 
 ## 2.2 附加信息（account_info）

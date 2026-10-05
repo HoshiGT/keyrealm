@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   Connection,
+  Document,
   Download,
   Expand,
   Fold,
@@ -36,6 +37,7 @@ const navItems = [
   { path: '/plugins', title: '插件管理', icon: Grid },
   { path: '/groups', title: '分组管理', icon: FolderOpened },
   { path: '/mcp', title: 'MCP 设置', icon: Connection },
+  { path: '/logs', title: '日志', icon: Document },
   { path: '/settings', title: '系统设置', icon: Setting },
   { path: '/backup', title: '备份', icon: Download },
   { path: '/about', title: '关于', icon: InfoFilled },

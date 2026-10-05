@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Edit, Key, Lock, Plus, Refresh, Timer, VideoPlay } from '@element-plus/icons-vue'
+import { Connection, Delete, Edit, Key, Lock, Plus, Refresh, Timer, VideoPlay } from '@element-plus/icons-vue'
 
 import { api } from '@/api'
 import { useAppStore } from '@/stores/app'
@@ -370,64 +370,6 @@ async function removeSchedule(row) {
   }
 }
 
-/* ── 日志 ───────────────────────────────────────────── */
-
-const LOG_LIMITS = [
-  { label: '最近 100 条', value: 100 },
-  { label: '最近 200 条', value: 200 },
-  { label: '最近 500 条', value: 500 },
-  { label: '最近 1000 条', value: 1000 },
-]
-
-const logConfig = ref({ level: 'INFO', levels: ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], log_file: '' })
-const selectedLevel = ref('INFO')
-const levelSaving = ref(false)
-
-const logs = ref([])
-const logsLoading = ref(false)
-const logFilterLevel = ref('')
-const logLimit = ref(200)
-
-const logFilterOptions = computed(() => [
-  { label: '全部级别', value: '' },
-  ...logConfig.value.levels.map((level) => ({ label: `${level} 及以上`, value: level })),
-])
-
-const logCount = computed(() => logs.value.length)
-
-function logLineClass(entry) {
-  const match = /\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]/.exec(entry)
-  return match ? `lvl-${match[1].toLowerCase()}` : ''
-}
-
-async function loadLogConfig() {
-  try {
-    const config = await api.getLogConfig()
-    logConfig.value = {
-      level: config.level || 'INFO',
-      levels: Array.isArray(config.levels) && config.levels.length ? config.levels : logConfig.value.levels,
-      log_file: config.log_file || '',
-    }
-    selectedLevel.value = logConfig.value.level
-  } catch (err) {
-    ElMessage.error(err.message || '加载日志配置失败')
-  }
-}
-
-async function applyLogLevel() {
-  levelSaving.value = true
-  try {
-    await api.setLogLevel(selectedLevel.value)
-    logConfig.value.level = selectedLevel.value
-    ElMessage.success(`日志级别已设置为 ${selectedLevel.value}`)
-    await loadLogs()
-  } catch (err) {
-    ElMessage.error(err.message || '设置日志级别失败')
-  } finally {
-    levelSaving.value = false
-  }
-}
-
 /* ── 验证代理 ───────────────────────────────────────── */
 const proxyValue = ref('')
 const proxySaving = ref(false)
@@ -446,6 +388,8 @@ async function saveProxy() {
   try {
     const res = await api.setProxy(proxyValue.value)
     ElMessage.success(res && res.proxy ? '验证代理已保存' : '已切换为直连（不使用代理）')
+    // 代理变了，旧的测试结论即失效，避免用户误读
+    proxyTest.value = null
   } catch (err) {
     ElMessage.error(err.message || '保存代理失败')
   } finally {
@@ -453,37 +397,48 @@ async function saveProxy() {
   }
 }
 
-async function loadLogs() {
-  logsLoading.value = true
+/* 代理连通性测试：后端同一批探测分别走直连与代理，前端只负责展示对照结果 */
+const proxyTesting = ref(false)
+const proxyTest = ref(null)
+
+async function runProxyTest() {
+  proxyTesting.value = true
+  proxyTest.value = null
   try {
-    const result = await api.getLogs(logLimit.value, logFilterLevel.value)
-    logs.value = Array.isArray(result.entries) ? result.entries : []
-    if (result.log_file) logConfig.value.log_file = result.log_file
+    // 传当前输入框的值：允许「先测再存」，不用为了测试先保存一次配置
+    const result = await api.testProxy(proxyValue.value)
+    if (result && result.ok === false) {
+      ElMessage.error(result.message || '代理地址无效')
+      return
+    }
+    proxyTest.value = result
   } catch (err) {
-    ElMessage.error(err.message || '加载日志失败')
+    ElMessage.error(err.message || '代理测试失败')
   } finally {
-    logsLoading.value = false
+    proxyTesting.value = false
   }
 }
 
-async function clearLogs() {
-  try {
-    await ElMessageBox.confirm('确定清空全部日志吗？此操作不可撤销。', '清空日志', {
-      type: 'warning',
-      confirmButtonText: '清空',
-      cancelButtonText: '取消',
-      confirmButtonClass: 'el-button--danger',
-    })
-  } catch {
-    return
-  }
-  try {
-    await api.clearLogs()
-    ElMessage.success('日志已清空')
-    await loadLogs()
-  } catch (err) {
-    ElMessage.error(err.message || '清空日志失败')
-  }
+function verdictType(level) {
+  return level === 'ok' ? 'success' : level === 'fail' ? 'error' : 'warning'
+}
+
+function probeClass(section) {
+  if (!section) return ''
+  return section.ok ? 'probe-ok' : 'probe-bad'
+}
+
+function probeSiteText(section) {
+  if (!section) return '—'
+  return section.ok ? `可达（${section.ms}ms）` : '不可达'
+}
+
+function probeIpText(info) {
+  if (!info) return '—'
+  if (!info.ok) return `查询失败：${info.detail || '未知原因'}`
+  const geo = [info.country, info.region, info.city].filter(Boolean).join(' ')
+  const isp = info.isp ? ` · ${info.isp}` : ''
+  return geo ? `${info.ip}（${geo}${isp}）` : info.ip
 }
 
 /* ── 关闭窗口行为 ───────────────────────────────────── */
@@ -523,8 +478,6 @@ async function applyCloseAction(value) {
 onMounted(async () => {
   await Promise.all([
     loadSchedules(),
-    loadLogConfig(),
-    loadLogs(),
     loadCloseAction(),
     loadProxy(),
     vaultStore.fetchGroups().catch(() => {}),
@@ -679,72 +632,80 @@ onMounted(async () => {
             clearable
           />
           <el-button type="primary" :loading="proxySaving" @click="saveProxy">保存</el-button>
-        </div>
-      </div>
-    </el-card>
-
-    <el-card shadow="never">
-      <template #header><span>日志</span></template>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">日志级别</div>
-          <div class="setting-desc">
-            记录到日志文件的最低级别。级别越低越详细（DEBUG 最详细，CRITICAL 最精简）。
-            设置立即生效并持久化，下次启动自动恢复。
-          </div>
-        </div>
-        <div class="inline-row">
-          <el-select v-model="selectedLevel" class="level-select">
-            <el-option v-for="level in logConfig.levels" :key="level" :label="level" :value="level" />
-          </el-select>
-          <el-button
-            type="primary"
-            :loading="levelSaving"
-            :disabled="selectedLevel === logConfig.level"
-            @click="applyLogLevel"
-          >
-            应用
+          <el-button :icon="Connection" :loading="proxyTesting" @click="runProxyTest">
+            测试代理
           </el-button>
         </div>
       </div>
 
-      <el-divider />
+      <!-- 测试结果：直连 / 代理两组对照，外加综合结论 -->
+      <template v-if="proxyTest || proxyTesting">
+        <el-divider />
 
-      <div class="log-toolbar">
-        <el-select v-model="logFilterLevel" class="level-select" @change="loadLogs">
-          <el-option
-            v-for="option in logFilterOptions"
-            :key="option.value"
-            :label="option.label"
-            :value="option.value"
-          />
-        </el-select>
-        <el-select v-model="logLimit" class="limit-select" @change="loadLogs">
-          <el-option
-            v-for="option in LOG_LIMITS"
-            :key="option.value"
-            :label="option.label"
-            :value="option.value"
-          />
-        </el-select>
-        <div class="spacer" />
-        <span class="log-count">共 {{ logCount }} 条</span>
-        <el-button :icon="Refresh" :loading="logsLoading" @click="loadLogs">刷新</el-button>
-        <el-button type="danger" plain :icon="Delete" @click="clearLogs">清空</el-button>
-      </div>
+        <div v-if="proxyTesting && !proxyTest" class="probe-loading">
+          正在探测直连与代理出口，最多约 10 秒…
+        </div>
 
-      <div v-loading="logsLoading" class="log-viewer">
-        <pre v-if="logs.length" class="log-content"><span
-          v-for="(entry, index) in logs"
-          :key="index"
-          class="log-line"
-          :class="logLineClass(entry)"
-        >{{ entry }}</span></pre>
-        <el-empty v-else description="暂无日志" :image-size="60" />
-      </div>
+        <el-alert
+          v-if="proxyTest && proxyTest.verdict"
+          :type="verdictType(proxyTest.verdict.level)"
+          :title="proxyTest.verdict.headline"
+          :closable="false"
+          show-icon
+        >
+          <ul class="verdict-list">
+            <li v-for="(line, index) in proxyTest.verdict.details" :key="index">{{ line }}</li>
+          </ul>
+        </el-alert>
 
-      <div v-if="logConfig.log_file" class="log-path text-muted">日志文件：{{ logConfig.log_file }}</div>
+        <div v-if="proxyTest" class="probe-grid">
+          <div class="probe-card">
+            <div class="probe-title">不挂代理（直连）</div>
+            <div class="probe-row">
+              <span class="probe-k">出口 IP</span>
+              <span class="probe-v">{{ probeIpText(proxyTest.direct && proxyTest.direct.ip) }}</span>
+            </div>
+            <div class="probe-row">
+              <span class="probe-k">国内站点</span>
+              <span class="probe-v" :class="probeClass(proxyTest.direct && proxyTest.direct.domestic)">
+                {{ probeSiteText(proxyTest.direct && proxyTest.direct.domestic) }}
+              </span>
+            </div>
+            <div class="probe-row">
+              <span class="probe-k">国外站点</span>
+              <span class="probe-v" :class="probeClass(proxyTest.direct && proxyTest.direct.foreign)">
+                {{ probeSiteText(proxyTest.direct && proxyTest.direct.foreign) }}
+              </span>
+            </div>
+          </div>
+
+          <div class="probe-card">
+            <div class="probe-title">
+              挂代理
+              <span v-if="proxyTest.proxy" class="text-muted">（{{ proxyTest.proxy_source || '已配置' }}）</span>
+            </div>
+            <template v-if="proxyTest.proxied">
+              <div class="probe-row">
+                <span class="probe-k">出口 IP</span>
+                <span class="probe-v">{{ probeIpText(proxyTest.proxied.ip) }}</span>
+              </div>
+              <div class="probe-row">
+                <span class="probe-k">国内站点</span>
+                <span class="probe-v" :class="probeClass(proxyTest.proxied.domestic)">
+                  {{ probeSiteText(proxyTest.proxied.domestic) }}
+                </span>
+              </div>
+              <div class="probe-row">
+                <span class="probe-k">国外站点</span>
+                <span class="probe-v" :class="probeClass(proxyTest.proxied.foreign)">
+                  {{ probeSiteText(proxyTest.proxied.foreign) }}
+                </span>
+              </div>
+            </template>
+            <el-empty v-else description="未配置代理" :image-size="48" />
+          </div>
+        </div>
+      </template>
     </el-card>
 
     <!-- 修改主密码 -->
@@ -1012,10 +973,6 @@ onMounted(async () => {
   text-align: right;
 }
 
-.level-select {
-  width: 150px;
-}
-
 .proxy-input {
   width: 280px;
 }
@@ -1024,65 +981,59 @@ onMounted(async () => {
   width: 220px;
 }
 
-.limit-select {
-  width: 150px;
+/* ── 代理测试结果 ───────────────────────────────────── */
+.verdict-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  line-height: 1.7;
 }
 
-.log-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
+.probe-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
 }
 
-.log-count {
-  font-size: 12px;
+.probe-loading {
+  font-size: 13px;
   color: var(--el-text-color-secondary);
 }
 
-.log-viewer {
-  max-height: 360px;
-  overflow: auto;
-  background: var(--el-fill-color-dark);
+.probe-card {
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
   padding: 10px 12px;
 }
 
-.log-content {
-  margin: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+.probe-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.probe-row {
+  display: flex;
+  gap: 8px;
   font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: var(--el-text-color-primary);
+  line-height: 1.8;
 }
 
-.log-line {
-  display: block;
-}
-
-.log-line.lvl-debug {
+.probe-k {
+  flex: 0 0 62px;
   color: var(--el-text-color-secondary);
 }
 
-.log-line.lvl-warning {
-  color: var(--el-color-warning);
-}
-
-.log-line.lvl-error {
-  color: var(--el-color-danger);
-}
-
-.log-line.lvl-critical {
-  color: var(--el-color-danger);
-  font-weight: 600;
-}
-
-.log-path {
-  margin-top: 10px;
-  font-size: 12px;
+.probe-v {
+  flex: 1;
   word-break: break-all;
+}
+
+.probe-v.probe-ok {
+  color: var(--el-color-success);
+}
+
+.probe-v.probe-bad {
+  color: var(--el-color-danger);
 }
 </style>

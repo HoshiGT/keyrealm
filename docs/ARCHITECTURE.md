@@ -159,6 +159,10 @@ plugins/
 
 **验证代理**：插件发起校验请求时的代理由 `backend/proxy.py` 统一管理——它把「系统设置」中的代理写入环境变量 `VAULT_PROXY`，各 `<类别>_common.py` 的 `make_client()` 读取该变量（外部同名环境变量优先）。见 `docs/PLUGIN_GUIDE.md` 第 2.1 节。
 
+**代理连通性诊断**（`backend/proxy_test.py`）：代理字符串本身看不出好坏，故做一次**对照实验**——同一批探测分别在「直连」与「走代理」下各跑一遍，再比对：① 国内站点（baidu.com）可达性 ② 国外站点（gstatic.com/generate_204）可达性 ③ 出口 IP 与归属地。综合给出 `ok / warn / fail` 结论（如「出口 IP 已切换」「经代理国内外站点均不可达」「出口 IP 与直连相同：代理可能未生效」）。
+
+两个刻意的设计：`trust_env=False` 屏蔽系统 `HTTP(S)_PROXY`/`ALL_PROXY`，否则「直连」对照组会被环境代理污染；出口 IP **只认无国内 CDN 的 HTTPS 见证源**（ipify / icanhazip / ifconfig.me / ipinfo.io）——最初首选 ip-api.com，实测它在国内有 CDN 且被规则型代理客户端判为直连，导致「挂代理」读到本机真实 IP、结论反向，故 ip-api 仅用于查归属地（IP 写在路径里，与路由无关）。六项探测并发执行，单项失败不影响其它项。
+
 **备份 / 恢复**：`backend/backup.py` 负责构建/导入备份文档（JSON）。加密备份的敏感字段直接沿用库中密文，只能用同一主密码导入；明文备份可跨主密码导入（以当前主密钥重新加密写库）。导入按「类型 + 敏感值」去重，并跳过插件未安装的条目；文件读写通过 pywebview 的原生文件对话框（`api._file_dialog`）。
 
 ---
@@ -274,6 +278,18 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
 **日志级别**：`DEBUG / INFO / WARNING / ERROR / CRITICAL`（默认 `INFO`），运行时可调整并持久化到
 `settings` 表的 `log_level` 键，下次启动自动恢复。`httpx` / `httpcore` 被压制到 `WARNING`，
 避免第三方库噪声。
+
+**检索**：`read_logs(limit, level, search)` 支持最低级别过滤 + 关键词搜索。搜索按「整条记录」
+匹配（含 traceback 续行），大小写不敏感，多个空白分隔的关键词需**全部命中**（AND）。
+
+**采集范围**：插件不再用 `print(..., file=sys.stderr)` 输出——打包为 windowed 模式时
+`sys.stdout`/`sys.stderr` 为 `None`，打印会静默丢失。改为各 `<类别>_common.py` 内的
+`_logger = logging.getLogger("plugin.<类别>")`，异常经 `backend/plugin_base.py` 的
+`call_*` 辅助函数统一 `_log.exception` 落盘（原先这些异常被静默吞掉，是插件报错不进日志的根因）。
+调度器 `scheduler.verify_single_credential` 逐条记录验证结果并在批量结束时汇总一条统计。
+
+**界面**：日志是独立页面（`frontend/src/views/Logs.vue`，侧栏「日志」），不再挂在「系统设置」下。
+页面提供级别筛选、关键词搜索、显示条数、清空与刷新。
 
 ---
 

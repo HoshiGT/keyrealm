@@ -170,6 +170,9 @@ class VaultApi:
     def set_proxy(self, proxy: str):
         return api.set_proxy(proxy)
 
+    def test_proxy(self, proxy: str = ""):
+        return api.test_proxy(proxy)
+
     # ── 备份 / 恢复 ───────────────────────────────────────
     def export_backup(self, scope: str = "all", encrypted: bool = True):
         return api.export_backup(scope, encrypted)
@@ -184,8 +187,8 @@ class VaultApi:
     def set_log_level(self, level: str):
         return api.set_log_level(level)
 
-    def get_logs(self, limit: int = 200, level: str = ""):
-        return api.get_logs(limit, level)
+    def get_logs(self, limit: int = 200, level: str = "", search: str = ""):
+        return api.get_logs(limit, level, search)
 
     def clear_logs(self):
         return api.clear_logs()
@@ -329,9 +332,17 @@ def main():
     # 启动 pywebview（阻塞主线程）。
     # private_mode=False + 固定 storage_path：持久化 localStorage（列顺序、
     # 目录树状态等用户偏好），否则每次启动 WebView2 使用临时配置全部丢失。
+    #
+    # 图标：显式传入 .ico。不传时 pywebview 会从 sys.executable 提取 exe 内嵌图标，
+    # 但提取到的通常是 16×16 小图，在高 DPI 任务栏/标题栏下模糊甚至回退为默认图标。
+    # 图标随包在 resource_dir()/assets/（见 CredentialVault.spec）。
     webview_dir = db.DATA_DIR / "webview"
     webview_dir.mkdir(parents=True, exist_ok=True)
-    webview.start(debug=False, private_mode=False, storage_path=str(webview_dir))
+    _icon_file = resource_dir() / "assets" / "icon.ico"
+    _icon = str(_icon_file) if _icon_file.is_file() else None
+    webview.start(
+        debug=False, private_mode=False, storage_path=str(webview_dir), icon=_icon
+    )
     log.info("应用退出")
 
 
