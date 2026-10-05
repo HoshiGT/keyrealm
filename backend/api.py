@@ -21,6 +21,7 @@ from . import preset_store
 from . import proxy as proxy_config
 from . import proxy_store
 from . import scheduler
+from . import tasks
 from . import tray
 from . import verify_options
 from .crypto import (
@@ -103,6 +104,8 @@ def get_tray_status() -> dict:
 def init_callbacks():
     scheduler.set_callbacks(push_event, _get_key)
     mcp_server.set_callbacks(_get_key, push_event)
+    # 后台任务状态一变就推给前端（任务列表与侧栏角标据此刷新）
+    tasks.set_notifier(lambda snapshot: push_event("vault:tasks", snapshot))
 
 
 # ── Auth / Lock ───────────────────────────────────────────
@@ -643,12 +646,17 @@ def list_draft_models(credential_type: str, data: Optional[dict] = None) -> list
     return plugin_manager.plugin_models(credential_type, data or {})
 
 
-def stream_credential_action(credential_id: int, action_id: str, params: Optional[dict] = None) -> dict:
+def stream_credential_action(credential_id: int, action_id: str, params: Optional[dict] = None,
+                             title: str = "") -> dict:
     """流式执行某凭据的插件操作：后台线程边收边推送 vault:action_stream 事件。
 
     事件 detail：
       - {"stream_id": ..., "delta": "…"}                        逐段增量
+      - {"stream_id": ..., "progress": {current,total,text}}    进度（长操作）
       - {"stream_id": ..., "done": true, "ok": .., "output": .., "error": ..}  结束
+
+    同时登记成一条**后台任务**（``backend/tasks.py``）：弹窗关掉后任务照跑，可以在「任务」页
+    看进度、随时取消。``title`` 由前端传（操作的显示名 + 凭据名），缺省时退化成 action_id。
     """
     key = _get_key()
     if key is None:
@@ -664,6 +672,14 @@ def stream_credential_action(credential_id: int, action_id: str, params: Optiona
     stream_id = str(uuid.uuid4())
     credential_type = cred["credential_type"]
     secrets = _credential_secrets(credential_type, data)
+    task = tasks.create(
+        "action",
+        str(title or "").strip() or f"{action_id} · {cred.get('name', '')}",
+        credential_id=credential_id,
+        credential_type=credential_type,
+        action_id=action_id,
+    )
+    task_id = task["id"]
 
     def _run():
         def on_delta(text: str) -> None:
@@ -677,6 +693,7 @@ def stream_credential_action(credential_id: int, action_id: str, params: Optiona
 
             进度是**尽力而为**——数值先夹到合法区间，推送本身出错也绝不能把操作搞失败。
             """
+            tasks.progress(task_id, current, total, text)
             try:
                 cur = max(0, int(current))
                 tot = max(0, int(total or 0))
@@ -692,25 +709,49 @@ def stream_credential_action(credential_id: int, action_id: str, params: Optiona
             })
 
         result = plugin_manager.stream_plugin_action(
-            credential_type, action_id, params or {}, data, on_delta, on_progress
+            credential_type, action_id, params or {}, data, on_delta, on_progress,
+            tasks.should_cancel(task_id),
         )
         safe_output = _redact_secrets(result.get("output", ""), secrets)
         safe_error = _redact_secrets(result.get("error", ""), secrets)
+        ok = bool(result.get("ok"))
+        # 「是不是被取消的」由框架自己判断（它持有取消标志），不靠插件猜错误文案：
+        # 只有确实按过取消、且这次没成功，才标成「已取消」——刚好在取消前跑完的仍算成功。
+        canceled = tasks.should_cancel(task_id)() and not ok
+        tasks.finish(task_id, ok=ok, output=safe_output, error=safe_error, canceled=canceled)
         push_event("vault:action_stream", {
             "stream_id": stream_id,
             "done": True,
-            "ok": bool(result.get("ok")),
+            "ok": ok,
             "output": safe_output,
             "error": safe_error,
+            "task_id": task_id,
         })
-        ok = bool(result.get("ok"))
         _log.info("流式操作 %s/%s [%s]：%s", credential_type, action_id,
                   cred.get("name", ""), "成功" if ok else "失败")
         if not ok and safe_error:
             _log.warning("流式操作 %s/%s 失败原因: %s", credential_type, action_id, safe_error)
 
     threading.Thread(target=_run, daemon=True).start()
-    return {"ok": True, "stream_id": stream_id}
+    return {"ok": True, "stream_id": stream_id, "task_id": task_id}
+
+
+# ── 后台任务（长操作的可见性与取消）──────────────────────
+
+def list_tasks() -> list[dict]:
+    """全部后台任务（进行中在前）。"""
+    return tasks.list_tasks()
+
+
+def cancel_task(task_id: str) -> dict:
+    """请求取消一个正在跑的任务（协作式：插件在下一个检查点停下）。"""
+    ok = tasks.cancel(task_id)
+    return {"ok": ok} if ok else {"ok": False, "error": "任务不存在或已结束"}
+
+
+def clear_finished_tasks() -> dict:
+    """清掉已结束的任务记录，返回清掉的条数。"""
+    return {"ok": True, "removed": tasks.clear_finished()}
 
 
 def delete_plugin(credential_type: str) -> dict:

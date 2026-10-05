@@ -337,18 +337,19 @@ def _accepts_keyword(fn: Any, name: str) -> bool:
 
 
 def call_stream_action(module: Any, action_id: str, params: dict, data: dict, on_delta,
-                       on_progress: Any = None) -> dict:
+                       on_progress: Any = None, should_cancel: Any = None) -> dict:
     """流式执行插件的操作；插件未实现 `stream_action` 时回退到 `run_action`（无分段）。
 
-    ``on_progress(current, total, text)`` 是**可选**的进度回调（``total <= 0`` 表示总量未知）：
-    只有插件把 ``on_progress`` 写进自己 `stream_action` 的签名里才会传给它。
+    两个**可选**回调按关键字传给插件，且只有它把名字写进自己 `stream_action` 的签名里才传：
+      - ``on_progress(current, total, text)``：进度上报（``total <= 0`` 表示总量未知）；
+      - ``should_cancel() -> bool``：取消查询，返回 True 表示该停了（协作式取消，见 backend/tasks.py）。
     """
     if not hasattr(module, "stream_action"):
         return call_run_action(module, action_id, params, data)
     try:
-        kwargs = {}
-        if on_progress is not None and _accepts_keyword(module.stream_action, "on_progress"):
-            kwargs["on_progress"] = on_progress
+        optional = {"on_progress": on_progress, "should_cancel": should_cancel}
+        kwargs = {name: fn for name, fn in optional.items()
+                  if fn is not None and _accepts_keyword(module.stream_action, name)}
         result = module.stream_action(action_id, params or {}, data or {}, on_delta, **kwargs)
         return result if isinstance(result, dict) else {"ok": False, "error": "插件返回了非预期结果"}
     except Exception as e:

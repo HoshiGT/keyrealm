@@ -124,8 +124,18 @@ class VaultApi:
     def list_draft_models(self, credential_type: str, data=None):
         return api.list_draft_models(credential_type, data)
 
-    def stream_credential_action(self, credential_id: int, action_id: str, params=None):
-        return api.stream_credential_action(credential_id, action_id, params)
+    def stream_credential_action(self, credential_id: int, action_id: str, params=None, title: str = ""):
+        return api.stream_credential_action(credential_id, action_id, params, title)
+
+    # ── 后台任务 ──
+    def list_tasks(self):
+        return api.list_tasks()
+
+    def cancel_task(self, task_id: str):
+        return api.cancel_task(task_id)
+
+    def clear_finished_tasks(self):
+        return api.clear_finished_tasks()
 
     def install_plugin(self, category: str, service: str):
         return api.install_plugin(category, service)
