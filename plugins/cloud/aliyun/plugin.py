@@ -19,8 +19,8 @@
 - ``download_prefix``  把某个前缀（文件夹）下的对象并发拉取后打包成 zip 下载
 
 下载类操作全部走签名 GET 流式读取，磁盘上限见 ``MAX_ZIP_*``。
-两个下载操作都声明了 ``progress``，由 ``stream_action`` 边下边回调进度
-（``run_action`` 三个参数调用时不上报，行为与以前一致）。
+两个下载操作都声明了 ``progress``，由 ``stream_action`` 边下边回调进度、并响应取消
+（``run_action`` 三个参数调用时不上报也不可取消，行为与以前一致）。
 """
 from __future__ import annotations
 
@@ -720,12 +720,15 @@ def actions(data: dict) -> list[dict]:
     ]
 
 
-def run_action(action_id: str, params: dict, data: dict, progress=None) -> dict:
+def run_action(action_id: str, params: dict, data: dict, progress=None, should_cancel=None) -> dict:
     """执行操作（全部只读，绝不产生远端变更）。
 
-    ``progress`` 是**可选**的下载进度回调（见 ``stream_action``）：
-    ``(current, total, text) -> None``，``total <= 0`` 表示总大小未知。
-    只有 ``stream_action`` 会传它，框架直接调用 ``run_action`` 时保持三个参数不变。
+    ``progress`` / ``should_cancel`` 都是**可选**的下载钩子（见 ``stream_action``）：
+
+    - ``progress(current, total, text)``：上报进度，``total <= 0`` 表示总大小未知；
+    - ``should_cancel() -> bool``：返回 True 表示用户点了「取消」，下载循环会尽快干净地停下。
+
+    只有 ``stream_action`` 会传它们，框架直接调用 ``run_action`` 时保持三个参数不变。
     """
     data = data or {}
     params = params or {}
@@ -746,22 +749,29 @@ def run_action(action_id: str, params: dict, data: dict, progress=None) -> dict:
         if action_id == "list_objects":
             return _run_list_objects(ak, sk, params)
         if action_id == "download_object":
-            return _run_download_object(ak, sk, params, progress)
+            return _run_download_object(ak, sk, params, progress, should_cancel)
         if action_id == "download_prefix":
-            return _run_download_prefix(ak, sk, params, progress)
+            return _run_download_prefix(ak, sk, params, progress, should_cancel)
         return {"ok": False, "error": "未知操作"}
     except Exception as exc:  # noqa: BLE001 - 操作边界兜底，绝不抛出
         return {"ok": False, "error": f"执行异常：{type(exc).__name__}"}
 
 
-def stream_action(action_id: str, params: dict, data: dict, on_delta, on_progress=None) -> dict:
-    """下载类操作的流式执行：边下边上报进度。其它操作回退到 run_action。
+def stream_action(
+    action_id: str,
+    params: dict,
+    data: dict,
+    on_delta,
+    on_progress=None,
+    should_cancel=None,
+) -> dict:
+    """下载类操作的流式执行：边下边上报进度、并响应取消。其它操作回退到 run_action。
 
-    ``on_progress(current, total, text)`` 由框架按关键字传入（声明了才会传），
-    为 None 时下载路径与 ``run_action`` 完全一致，不做任何额外上报。
+    ``on_progress(current, total, text)`` 与 ``should_cancel()`` 都由框架按关键字传入
+    （写进签名才会传），都为 None 时下载路径与 ``run_action`` 完全一致。
     """
     if action_id in ("download_object", "download_prefix"):
-        return run_action(action_id, params, data, on_progress)
+        return run_action(action_id, params, data, on_progress, should_cancel)
     return run_action(action_id, params, data)
 
 
@@ -973,6 +983,18 @@ def _run_list_objects(ak: str, sk: str, params: dict) -> dict:
     }
 
 
+class _Cancelled(Exception):
+    """协作式取消（用户点了「取消」）：内部信号，只在插件内部传播，不会逃出边界。"""
+
+
+def _remove_quietly(path: str) -> None:
+    """删除临时文件；不存在 / 删不掉都不抛（清理不能盖过真正的失败原因）。"""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 def _content_length(response) -> int:
     """响应的 ``Content-Length``；拿不到 / 非法 / 非正数一律返回 0（= 总大小未知）。"""
     try:
@@ -983,24 +1005,33 @@ def _content_length(response) -> int:
     return value if value > 0 else 0
 
 
-def _download_with_progress(response, path: str, progress, key: str) -> tuple[bool, str]:
-    """带进度上报的流式落盘（``.part`` + 原子替换的语义与 ``download_to_file`` 一致）。
+def _download_with_progress(
+    response, path: str, key: str, progress=None, should_cancel=None
+) -> tuple[bool, str]:
+    """带进度上报 / 取消响应的流式落盘（``.part`` + 原子替换语义与 ``download_to_file`` 一致）。
 
-    **只在调用方拿到进度回调时才走这里**：没有回调时仍调用 ``download_to_file``，
-    保证「不上报」路径的行为与以前逐字节一致。
+    **只在调用方拿到 ``progress`` 或 ``should_cancel`` 时才走这里**：两个钩子都没有时仍调用
+    ``download_to_file``，保证「不上报也不可取消」路径的行为与以前逐字节一致。
+
+    取消时删掉 ``.part`` 后返回 ``(False, "下载已取消")``——目标路径始终没被写过。
     """
     target = str(path or "").strip()
     if not target:
         return False, "未指定保存路径"
     total = _content_length(response)
-    progress(0, total, f"开始下载 {key.rsplit('/', 1)[-1] or key}")
 
-    def _text(current: int) -> str:
+    def _emit(current: int, text: str) -> None:
+        """上报一次进度；没接回调（例如只传了 should_cancel）时静默。"""
+        if progress is not None:
+            progress(current, total, text)
+
+    def _amount(current: int) -> str:
         """给用户看的量：``12.3 MB / 45.0 MB``；总大小未知（total<=0）时只写已下载量。"""
         if total > 0:
             return f"{_human_size(current)} / {_human_size(total)}"
         return _human_size(current)
 
+    _emit(0, f"开始下载 {key.rsplit('/', 1)[-1] or key}")
     tmp = target + ".part"
     written = 0
     reported = 0
@@ -1008,27 +1039,31 @@ def _download_with_progress(response, path: str, progress, key: str) -> tuple[bo
     try:
         with open(tmp, "wb") as handle:
             for chunk in response.iter_bytes(65536):
+                if should_cancel is not None and should_cancel():
+                    raise _Cancelled
                 handle.write(chunk)
                 written += len(chunk)
                 now = time.monotonic()
                 # 节流：攒够 256 KiB 或过了 0.2 秒才回调一次
                 if written - reported >= _PROGRESS_STEP or now - last >= _PROGRESS_INTERVAL:
                     reported, last = written, now
-                    progress(written, total, _text(written))
+                    _emit(written, _amount(written))
         os.replace(tmp, target)      # 同目录内的替换是原子的
+    except _Cancelled:
+        _remove_quietly(tmp)
+        return False, "下载已取消"
     except Exception as exc:  # noqa: BLE001 - 插件边界兜底
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+        _remove_quietly(tmp)
         return False, f"写入失败：{type(exc).__name__}"
     if written != reported:          # 不足一个节流阈值的小文件也补报终值，别让进度条停在 0
-        progress(written, total, _text(written))
+        _emit(written, _amount(written))
     return True, target
 
 
-def _run_download_object(ak: str, sk: str, params: dict, progress=None) -> dict:
-    """下载单个对象（流式写入 save_to 指定的路径）；给了 ``progress`` 就边写边上报。"""
+def _run_download_object(
+    ak: str, sk: str, params: dict, progress=None, should_cancel=None
+) -> dict:
+    """下载单个对象（流式写入 save_to 指定的路径）；给了钩子就边写边上报 / 响应取消。"""
     target, error = _oss_target(params)
     if error:
         return {"ok": False, "error": error}
@@ -1047,10 +1082,10 @@ def _run_download_object(ak: str, sk: str, params: dict, progress=None) -> dict:
             if resp.status_code != 200:
                 resp.read()                       # 错误体很小，读出来好给出原因
                 return {"ok": False, "error": _oss_failure(resp, ak, sk)}
-            if progress is None:
+            if progress is None and should_cancel is None:
                 ok, message = download_to_file(resp, path)
             else:
-                ok, message = _download_with_progress(resp, path, progress, key)
+                ok, message = _download_with_progress(resp, path, key, progress, should_cancel)
     if not ok:
         return {"ok": False, "error": message}
     return {"ok": True, "output": f"已保存到 {message}"}
@@ -1103,10 +1138,13 @@ def _zip_entry_name(key: str, prefix: str) -> str | None:
     return rel
 
 
-def _run_download_prefix(ak: str, sk: str, params: dict, progress=None) -> dict:
+def _run_download_prefix(
+    ak: str, sk: str, params: dict, progress=None, should_cancel=None
+) -> dict:
     """把某个前缀下的所有对象并发拉取后打包成 zip（本地临时文件 → 原子落盘）。
 
-    给了 ``progress`` 时按**对象个数**上报（跨对象累加字节数对用户不直观）。
+    给了 ``progress`` 时按**对象个数**上报（跨对象累加字节数对用户不直观）；
+    给了 ``should_cancel`` 时在**每个对象开始前**查一次，取消即停止后续下载并清干净临时文件。
     """
     target, error = _oss_target(params)
     if error:
@@ -1161,6 +1199,8 @@ def _run_download_prefix(ak: str, sk: str, params: dict, progress=None) -> dict:
 
     def _fetch(index: int, key: str) -> tuple[str, str, str]:
         """把一个对象流式拉到本地临时文件，返回 (key, local_path, error)。"""
+        if should_cancel is not None and should_cancel():
+            raise _Cancelled              # 每个对象开始前查一次：取消后不再有新下载
         local = os.path.join(tmpdir, f"{index}.bin")
         try:
             url = f"https://{bucket}.{endpoint}/{quote(key, safe='/~')}"
@@ -1181,7 +1221,9 @@ def _run_download_prefix(ak: str, sk: str, params: dict, progress=None) -> dict:
             futures = [pool.submit(_fetch, i, key) for i, (key, _size) in enumerate(objects)]
             with zipfile.ZipFile(part_path, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
                 for future in as_completed(futures):
-                    key, local, fetch_error = future.result()
+                    key, local, fetch_error = future.result()   # 取消会以 _Cancelled 抛出
+                    if should_cancel is not None and should_cancel():
+                        raise _Cancelled
                     done += 1
                     if progress is not None:
                         # 上报「已处理对象数 / 对象总数」，text 带当前对象名
@@ -1207,11 +1249,11 @@ def _run_download_prefix(ak: str, sk: str, params: dict, progress=None) -> dict:
         if written == 0:
             raise RuntimeError("没有对象写入 zip")
         os.replace(part_path, path)      # 同目录内的替换是原子的
+    except _Cancelled:                    # 取消：清干净半成品，目标路径始终没被写过
+        _remove_quietly(part_path)
+        return {"ok": False, "error": "打包已取消"}
     except Exception as exc:  # noqa: BLE001 - 打包失败不留半成品
-        try:
-            os.remove(part_path)
-        except OSError:
-            pass
+        _remove_quietly(part_path)
         detail = f"，失败 {len(failed)} 个" if failed else ""
         return {"ok": False, "error": f"打包失败（{type(exc).__name__}{detail}）"}
     finally:
