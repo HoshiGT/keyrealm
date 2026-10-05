@@ -21,7 +21,9 @@ const selectedIds = ref([])
 const credSearch = ref('')
 const loadingCreds = ref(false)
 
-const credentials = computed(() => vaultStore.credentials || [])
+// 目录树始终展示**全部**凭据：不能复用 vaultStore.credentials——那份是「凭据管理」页
+// 按当前分组/筛选查出来的结果，会随那边的选择变化，导致这里只看到过滤后的子集。
+const credentials = ref([])
 const credentialCount = computed(() => credentials.value.length)
 
 /** 只保留「有凭据」的服务节点，避免一堆空节点把树撑长 */
@@ -104,9 +106,11 @@ watch(credSearch, (value) => {
 async function loadCredentials() {
   loadingCreds.value = true
   try {
-    await vaultStore.fetchCredentials()
+    // 空 filters → 后端返回全部凭据；结果只放本地，不写回 store，免得影响「凭据管理」页。
+    const items = await api.listCredentials({})
+    credentials.value = Array.isArray(items) ? items : []
   } catch {
-    // 拉取失败时下方显示「没有可选凭据」，导出按钮对「仅选中的」保持禁用
+    credentials.value = []
   } finally {
     loadingCreds.value = false
   }

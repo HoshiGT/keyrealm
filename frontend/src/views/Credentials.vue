@@ -222,6 +222,23 @@ function filterActions(actions, caps) {
   return actions.filter((a) => allowed.has(String(a.id)))
 }
 
+/**
+ * 找出「只该被行内下钻调用」的操作 id：
+ * 既被别的操作在 `row_actions` 里引用，自身又没有任何可填 `fields`。
+ * 这类操作在顶层菜单里点了没参数可填，只会回一句「缺少 xxx」，所以不进菜单；
+ * 但它们仍要留在完整 actions 列表里，供行内按钮 `$row.*` 解析目标用。
+ */
+function rowOnlyActionIds(actions) {
+  const targets = new Set()
+  actions.forEach((a) => (a.row_actions || []).forEach((ra) => targets.add(String(ra.id))))
+  const ids = new Set()
+  actions.forEach((a) => {
+    const hasFields = Array.isArray(a.fields) && a.fields.length > 0
+    if (targets.has(String(a.id)) && !hasFields) ids.add(String(a.id))
+  })
+  return ids
+}
+
 const actionMenu = ref({ visible: false, x: 0, y: 0, row: null, items: [], all: [], note: '', pending: false })
 
 function closeActionMenu() {
@@ -239,13 +256,17 @@ async function openActions(row, event) {
     return
   }
   actions = Array.isArray(actions) ? actions : []
-  if (!actions.length) {
+  // 只被行内下钻用、自身又无可填字段的操作（github「仓库详情」、dnspod「解析记录」等）
+  // 不进顶层菜单；完整的 actions 仍经 all 传给对话框，供行内按钮解析下钻目标。
+  const rowOnly = rowOnlyActionIds(actions)
+  const topLevel = actions.filter((a) => !rowOnly.has(String(a.id)))
+  if (!topLevel.length) {
     ElMessage.info('该凭据暂无可用操作')
     return
   }
 
   // 单个操作直接进，保住原有的一键体验；只有实现 capabilities 的插件才会真的联网探测
-  if (actions.length === 1) {
+  if (topLevel.length === 1) {
     const caps = await loadCapabilities(row.id)
     if (caps.available !== null && caps.available.length === 0) {
       ElMessageBox.alert(caps.note || '当前凭据没有任何可用操作权限', '无可用操作', {
@@ -254,11 +275,11 @@ async function openActions(row, event) {
       }).catch(() => {})
       return
     }
-    openAction(row, actions[0], {}, { actions })
+    openAction(row, topLevel[0], {}, { actions })
     return
   }
 
-  const sorted = [...actions].sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
+  const sorted = [...topLevel].sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
   const rect = event && event.currentTarget ? event.currentTarget.getBoundingClientRect() : null
   actionMenu.value = {
     visible: true,
@@ -266,7 +287,7 @@ async function openActions(row, event) {
     y: rect ? rect.bottom + 4 : (event?.clientY ?? 0),
     row,
     items: sorted,
-    all: sorted,
+    all: actions,
     note: '',
     pending: true,
   }
@@ -1646,6 +1667,13 @@ onMounted(async () => {
       @click="closeCtxMenu"
       @contextmenu.prevent="closeCtxMenu"
     />
+    <!-- 操作选择菜单的「点击外部关闭」层：原先没有，导致不选中某一项菜单就一直挂着 -->
+    <div
+      v-if="actionMenu.visible"
+      class="ctx-mask"
+      @click="closeActionMenu"
+      @contextmenu.prevent="closeActionMenu"
+    />
     <!-- 多个操作时的选择菜单（单个操作会直接进，不经过这里） -->
     <div
       v-if="actionMenu.visible"
@@ -1660,7 +1688,6 @@ onMounted(async () => {
         @click="pickFromMenu(item)"
       >
         <div>{{ item.name || item.id }}</div>
-        <div v-if="item.description" class="ctx-desc">{{ item.description }}</div>
       </div>
       <div v-if="actionMenu.pending" class="ctx-hint">正在检测权限…</div>
       <div v-else-if="actionMenu.note" class="ctx-hint">{{ actionMenu.note }}</div>
