@@ -15,7 +15,7 @@ if str(BASE_DIR) not in sys.path:
 
 import webview  # pywebview
 
-from backend import api, database as db, logger, mcp_server, plugin_manager, proxy as proxy_config, scheduler, single_instance, tray, verify_options
+from backend import api, database as db, idle_lock, logger, mcp_server, plugin_manager, proxy as proxy_config, scheduler, single_instance, tray, verify_options
 from backend import vault_proxy_ctx
 from backend.paths import app_dir, is_frozen, resource_dir
 
@@ -199,6 +199,16 @@ class VaultApi:
     def confirm_close_action(self, action: str, remember: bool = False):
         return api.confirm_close_action(action, remember)
 
+    # ── 空闲自动锁定 ──────────────────────────────────────
+    def get_auto_lock(self):
+        return api.get_auto_lock()
+
+    def set_auto_lock(self, minutes):
+        return api.set_auto_lock(minutes)
+
+    def touch_activity(self):
+        return api.touch_activity()
+
     # ── 验证代理 ──────────────────────────────────────────
     # ── 验证代理（注册表） ─────────────────────────────────
     def list_proxies(self):
@@ -278,6 +288,7 @@ def _shutdown_services():
     logger.get_logger("main").info("用户请求退出应用")
     _quitting = True
     scheduler.stop_scheduler()
+    idle_lock.stop()
     mcp_server.stop_server()
     tray.stop_tray()
 
@@ -366,6 +377,9 @@ def main():
 
     # 启动调度器
     scheduler.start_scheduler()
+
+    # 启动空闲自动锁定看门狗（是否真的锁由 settings.auto_lock_minutes 决定，默认关闭）
+    idle_lock.start()
 
     # MCP 不随应用自动启动（避免每次启动都监听 8765 端口），
     # 由用户在「MCP 设置」页手动开启；开启后最小化到托盘仍持续运行。

@@ -106,7 +106,7 @@ API-Key-Checker/
 
 **职责**：扫描 `plugins/` 目录、注册插件、按需加载插件模块。**放入即加载，删除目录即卸载**。
 
-**插件删除 / 添加（插件管理）**：`delete_plugin(credential_type)` 删除该插件的 `plugins/` 目录、卸载模块、删除插件记录，并（默认）删除该类型下全部凭据；`list_available_plugins()` / `install_plugin()` 从内置纯净源 `plugins_builtin/`（发行包随 exe 同级提供）把插件复制回 `plugins/` 并加载。目录删除有路径越界保护。
+**插件删除 / 添加（插件管理）**：`delete_plugin(credential_type)` 删除该插件的 `plugins/` 目录、卸载模块、删除插件记录，并（默认）删除该类型下全部凭据；`list_available_plugins()` / `install_plugin()` 从「可添加」来源把插件复制回 `plugins/` 并加载。来源有两个（`ADDABLE_SOURCE_DIRS`）：`plugins_builtin/`（全量纯净副本，用于恢复被删掉的插件，发行包随 exe 同级提供）与 `plugins_optin/`（**默认不启用**的新插件——缺乏实例验证，故不随 `plugins/` 上架，只在「可添加」里露面，用户点「添加」或日后验证通过再挪进 `plugins/` 才算启用）。两者同名时只出一条（`plugins_builtin/` 优先）。目录删除有路径越界保护。
 
 **插件目录**：`<app>/plugins/` 是唯一事实来源，采用两层结构：
 
@@ -121,21 +121,29 @@ plugins/
 │   │   └── plugin.py
 │   ├── deepseek/
 │   └── …                     # 共 19 个 LLM 子插件
-├── api/                      # API 服务类别（firecrawl / tavily / metaso / coze，共 4 个）
+├── api/                      # API 服务类别：firecrawl / tavily / metaso / coze / dify / app_secret / gateway（共 7 个）
 ├── dns/                      # 域名解析：dnspod / duckdns / godaddy / cloudflare
 ├── dev/                      # 开发者平台：github / huggingface / wandb
-├── im/                       # 即时通讯：feishu / dingtalk / telegram / discord / qq_bot / wechat_ilink
-├── cloud/                    # 云服务商：aliyun / tencentcloud
+├── im/                       # 即时通讯：feishu / dingtalk / telegram / telegram_apihash / discord / qq_bot / wechat_ilink / webhook
+├── cloud/                    # 云服务商：aliyun / tencentcloud / aws / gcp / huaweicloud / firebase（另含 google_sa.py 协议级共享模块）
 ├── exchange/                 # 交易所：okx / binance
 └── mail/                     # 邮箱：smtp（通用 SMTP，覆盖 Gmail/QQ/163/126）
 ```
+
+> `api/gateway` 是短信网关 / 接码服务商（一个插件内按 manifest 的 `vendor` 分派校验），它调用的就是普通
+> HTTPS API，与 api/ 其余服务同形，故并入 api/ 而不单开类别——新建类别要连带克隆一份 `*_common.py`，
+> 代价大于收益。
+
+> 八个类别共 50 个子插件：llm 19 / im 8 / api 7 / cloud 6 / dns 4 / dev 3 / exchange 2 / mail 1。
+> 每个类别目录都带一个 `<类别>_common.py`（**类别共享模块**）；**协议级模块**另立——`cloud/google_sa.py`
+> （把服务账号的邮箱 + 私钥签成 RS256 JWT 换 token，gcp / firebase 共用）与 `llm/llm_protocols.py`。这些都不是子插件。
 
 每个类别目录结构一致：`category.json` + 可选 `<类别>_common.py` + 各服务子目录（`manifest.json` + `plugin.py`）。
 
 - **一个服务 = 一个独立子插件**：各自持有 `manifest.json`（字段 schema、credential_type）与薄 `plugin.py`；删除任一子插件目录不影响其他子插件运行。根目录下直接含 `manifest.json` 的目录视为无类别的平铺插件。
 - **类别共享模块**：`<类别>_common.py` 只放**底层通用工具 + 子插件原型接口**（`VerifyResult` / `make_client` / `safe_json` / `guarded` 等）；**协议级工具**（如 `plugins/llm/llm_protocols.py` 的探针与 `chat_completion`）另建独立工具模块供子插件按需引用。加载子插件时临时将其目录与类别目录注入 `sys.path`（见 plugin_base.load_plugin_module）。**服务专属逻辑在各子插件内自带，新增插件无需改动共享模块。**
 - **同步流程**：启动时 `sync_plugins()` 扫描两层结构 → upsert plugins 表（含 category / category_name / batch_verify）→ 清理已消失插件的记录与模块缓存。
-- **批量验证开关**：manifest 的 `batch_verify`（默认 true）落库到 plugins.batch_verify；调度器与前端批量时跳过为 false 的类型（无法自动化或有写副作用，如 duckdns / wechat_ilink）——前端在批量勾选弹窗中禁用其勾选。
+- **批量验证开关**：manifest 的 `batch_verify`（默认 true）落库到 plugins.batch_verify；调度器与前端批量时跳过为 false 的类型——**有写副作用或无法自动化**的（如 duckdns / wechat_ilink），以及**判定常为「未验证」、批量会刷掉人工结论**的（telegram_apihash / api/gateway）。前端在批量勾选弹窗中禁用其勾选，但单条手动验证仍可用。
 
 **插件模块约定**：必须暴露 `verify(data)`；可选 `validate(data)`、`get_display_summary(data)`。
 `verify` 返回值鸭子类型兼容 VerifyResult / dataclass / dict。
@@ -395,7 +403,43 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
 
 ---
 
-### 2.8 日志模块（logger.py）
+### 2.8 空闲自动锁定（idle_lock.py）
+
+**职责**：一段时间无用户操作后，自动清除内存中的解密密钥（等价于用户点「立即锁定」）。
+
+**设置项**：`settings` 表的 `auto_lock_minutes`（纯 K/V，**不涉及 DDL / schema_version**）。
+默认 `0` = 关闭；可选档位 `1 / 5 / 10 / 15 / 30 / 60` 分钟，非法值一律回落到 `0`。
+该键在 `backup.py` 的 `_PREF_KEYS` 里，随整库备份导出/导入。
+
+**为什么计时在后端而不是前端**：
+1. 「后台有任务在跑就顺延」这条规则的依据 `tasks.running_count()` 在后端；
+2. 应用常驻托盘运行（`close_action=background`）时窗口隐藏，WebView 会节流 JS 定时器，
+   前端计时不可靠；后端守护线程不受影响。
+
+**实现**：与调度器同款的常驻守护线程（`threading.Thread` + `threading.Event` 停止位），
+每 `WATCH_INTERVAL`（10s）醒来一次，**现读现判** `db.get_setting("auto_lock_minutes")`：
+
+- 纯函数 `should_lock(now, last_activity, minutes, running_count)` 承载判定逻辑，便于离线测试；
+- 时间基准用 `time.monotonic()`（不受系统时钟调整影响）；
+- 到达阈值时若 `tasks.running_count() > 0`（有 RUNNING 状态的后台任务），**本次跳过**，
+  下个周期再判——避免把批量验证的剩余条目全打成「保险库已锁定」；已开始的条目不受影响；
+- 命中且回调报告「已解锁」时，调用注入的 `lock_cb()`（= `api.lock_vault`）。
+
+**回调注入**：`set_callbacks(lock_cb, is_unlocked_cb)`，与 `scheduler.set_callbacks` 同范式——
+本模块只依赖 `backend.database` / `backend.tasks` / `backend.logger`，**不 import `api`**，避免循环依赖。
+
+**前端分工**：前端只做两件事——有用户操作时**节流上报**活动（`touch_activity`，约 30s 一次），
+以及收到 `vault:locked` 事件时清空明文并跳回解锁页。只有后端是计时的唯一权威。
+
+**与其它加锁入口的关系**：`api.lock_vault()` 是唯一加锁出口，界面按钮 / 托盘菜单 / 空闲自动锁
+全部汇入它，因此它统一广播 `vault:locked`，前端据此在各入口下都表现一致。
+
+**生命周期**：`main.py` 在 `scheduler.start_scheduler()` 之后 `idle_lock.start()`；
+`_shutdown_services()` 里 `idle_lock.stop()`（置停止位并 join，超时 2s）。
+
+---
+
+### 2.9 日志模块（logger.py）
 
 **职责**：统一日志配置，写入 `<app_dir>/data/logs/credential_vault.log`，并可按用户选择调整级别。
 
@@ -419,7 +463,7 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
 
 ---
 
-### 2.9 后台任务（tasks.py）
+### 2.10 后台任务（tasks.py）
 
 **职责**：让「点一下就开跑」的长操作（OSS 下载 / 前缀打包等）**看得见、能终止、关掉弹窗不丢结果**。
 
@@ -508,7 +552,7 @@ AI Agent（Claude Desktop / Cursor）
 > **注意**：
 > - pywebview 的 JS-API 调用在独立线程中执行，SQLite 操作需加线程锁
 > - 窗口隐藏后所有后台线程继续运行，MCP Server 不中断
-> - 应用真正退出时（托盘菜单"退出"）：停止调度器 → 关闭 MCP Server → 销毁托盘图标 → 退出进程
+> - 应用真正退出时（托盘菜单"退出"）：停止调度器 → 停止空闲锁定看门狗 → 关闭 MCP Server → 销毁托盘图标 → 退出进程
 
 ---
 
@@ -519,6 +563,7 @@ AI Agent（Claude Desktop / Cursor）
 | 数据库文件泄露 | AES-256-GCM 字段级加密，无主密码无法解密 |
 | 主密码暴力破解 | PBKDF2 100,000 次迭代，增加破解成本 |
 | 内存中密钥泄露 | 密钥仅存于进程内存，不写文件；托盘"锁定"可主动清除 |
+| 无人值守时密钥常驻 | 「空闲自动锁定」按 `auto_lock_minutes` 在无操作一段时间后自动清除内存密钥（[§2.8](ARCHITECTURE.md)） |
 | MCP 未授权访问 | Bearer Token 鉴权，Token 哈希存储，支持吊销和过期时间 |
 | MCP Token 泄露 | 每个 Token 可单独限定工具范围；吊销后立即失效；记录 last_used_at 便于审计 |
 | MCP 工具越权 | 双层权限：全局工具开关 + Token 级 tools_allowed，取交集 |

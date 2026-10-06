@@ -412,26 +412,27 @@ App.vue
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  系统设置                                                   │
+│  系统设置                                         [ 刷新 ]   │
 │                                                             │
 │  ── 安全 ──                                                 │
-│  [ 修改主密码 ]                                             │
-│  修改主密码将重新加密所有凭据，此过程不可中断。               │
+│  主密码                                              [ 修改主密码 ] │
+│     修改后将重新加密库中全部凭据，旧密码立即失效。           │
+│  锁定保险库                                          [ 立即锁定 ]   │
+│     立即清除内存中的解密密钥与明文数据。                     │
+│  空闲自动锁定：[ 5 分钟 ▼ ]                                  │
+│     一段时间无操作后自动清除内存密钥；若后台有验证任务        │
+│     在跑则顺延到任务结束。                                   │
 │                                                             │
-│  ── 验证行为 ──                                             │
-│  ☑ 保存凭据后自动验证                                       │
-│  （并发数与超时不在本页，见「凭据管理」的批量验证对话框）     │
+│  ── 窗口与关闭 ──                                           │
+│  关闭主窗口时：[ 后台运行（最小化到托盘） ▼ ]               │
 │                                                             │
-│  ── 定时验证 ──                          [ + 添加计划 ]     │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │ 每日全量验证    每天 02:00    全部凭据    ✅ 启用     │   │
-│  │ 上次运行：2026-10-03 02:00   下次：2026-10-04 02:00  │   │
-│  │                                       [ 编辑 ] [ 删除 ] │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-│  ── 数据 ──                                                 │
-│  数据库位置：./data/credentials.db（项目目录内）             │
-│  [ 导出备份（JSON） ]  [ 导入备份 ]                         │
+│  ── 定时验证计划 ──                      [ + 新建计划 ]     │
+│  ┌──────┬──────────┬─────────┬───────┬────────┬─────────┐  │
+│  │ 名称 │ 触发规则 │ 验证范围 │ 启用  │ 上次运行│ 下次运行 │  │
+│  ├──────┼──────────┼─────────┼───────┼────────┼─────────┤  │
+│  │ 全量 │ 每天02:00│ 全部凭据 │  ●──  │ 3 小时前│ 10-07 2:00│ │
+│  │  操作列： [ 立即运行 ] [ 编辑 ] [ 🗑 ]                 │  │
+│  └──────┴──────────┴─────────┴───────┴────────┴─────────┘  │
 │                                                             │
 │  ── 网络与代理 ──                                           │
 │  默认代理：[ 生产梯子（socks5://…:2333）        ▼ ] [测试当前]│
@@ -447,12 +448,21 @@ App.vue
 │  │ 国外站点：不可达      │ 国外站点：可达 364ms  │         │
 │  └───────────────────────┴───────────────────────┘         │
 │  ✅ 代理工作正常：出口已切换，国外站点由不可达变为可达       │
-│                                                             │
-│  ── 关于 ──                                                 │
-│  Credential Vault v0.1.0                                    │
-│  Python 3.11 | pywebview 5.1 | Vue 3.4                     │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+**四张卡片**：安全 / 窗口与关闭 / 定时验证计划 / 网络与代理。
+
+**「空闲自动锁定」**：下拉档位由后端下发（`api.getAutoLock()` → `options`），
+选中即 `api.setAutoLock(minutes)` 落库（`settings.auto_lock_minutes`，0 = 关闭）。
+计时完全在后端守护线程里，前端只负责两件事：**节流上报用户活动**
+（`App.vue` 的 mousemove / mousedown / wheel / touchstart / keydown / focus / visibilitychange
+→ `appStore.reportActivity()`，内部约 30s 节流一次），以及**收到 `vault:locked` 事件时锁定本页状态**
+（`appStore.applyLocked()` → 清空明文 → `watch(appStore.unlocked)` 推回 `/unlock`）。
+详见 [ARCHITECTURE.md §2.8](ARCHITECTURE.md)。
+
+**「立即锁定」** 与「空闲自动锁定」，以及托盘菜单的「锁定」，最终都走 `api.lock_vault()` 同一个出口，
+因此在三种入口下界面表现一致（都会清空明文并跳回解锁页）。
 
 **代理一律按 id 引用**：`proxyStore`（`stores/proxy.js`）持有代理列表与全局默认；
 「默认代理」下拉的值是 `proxy_id`（空串 = 直连），保存走 `api.setGlobalProxy(id)`。
@@ -469,7 +479,8 @@ App.vue
 > `pip install "httpx[socks]"` 的处理办法；右侧卡片照常渲染，三项显示「查询失败：未执行探测…」，
 > 左侧直连数据仍然真实。避免把一句英文 `ImportError` 直接甩给用户。
 
-日志相关配置（级别、条数、查看、清空）**已移出本页**，见第 7 节。
+日志相关配置（级别、条数、查看、清空）**已移出本页**，见第 7 节；
+备份/恢复见第 9 节，版本信息见第 10 节。
 
 ---
 
@@ -509,6 +520,11 @@ App.vue
 ### 8. 插件管理（PluginManager）
 
 两张卡片：**已安装插件**（按类别分组，每组可整组删除/单个删除）与**可添加（内置源）**。
+
+「可添加」的来源有两个（后端 `ADDABLE_SOURCE_DIRS`），前端不区分、统一按「内置源」呈现：
+`plugins_builtin/`（全量纯净副本，用于恢复被删掉的插件）与 `plugins_optin/`
+（**默认不启用**的新插件——缺乏实例验证，故不随 `plugins/` 上架，只在这里露面）。
+用户点「添加」后都走同一条路：复制进 `plugins/` 并立即加载。同名时只出一条。
 
 ```
 ┌────────────────────────────────────────────────────────┐
@@ -669,7 +685,7 @@ await window.pywebview.api.lock_vault()
 
 // 查询托盘/MCP 状态
 const status = await window.pywebview.api.get_tray_status()
-// → { mcp_running: true, port: 8765, active_tokens: 1, is_locked: false }
+// → { mcp_running: true, mcp_port: 8765, active_tokens: 1, is_locked: false }
 
 // 关闭行为：读取 / 持久化设置（"系统设置 → 窗口与关闭"）
 await window.pywebview.api.get_close_action()
@@ -677,7 +693,16 @@ await window.pywebview.api.set_close_action('background')
 
 // 关闭确认弹窗中用户做出选择后回调（action: 'quit' | 'background'，remember=是否记住）
 await window.pywebview.api.confirm_close_action('quit', true)
+
+// 空闲自动锁定（"系统设置 → 安全"）
+await window.pywebview.api.get_auto_lock()      // → { minutes: 5, options: [{value, label}, …] }
+await window.pywebview.api.set_auto_lock(10)    // 0 = 关闭；非法档位返回 {ok:false, message}
+await window.pywebview.api.touch_activity()     // 前端有用户操作时上报（内部约 30s 节流）
 ```
+
+> **锁定一律只看 `vault:locked` 事件**：`lock_vault()` 是唯一加锁出口，界面按钮 / 托盘菜单 /
+> 空闲自动锁都汇入它并由它广播。前端收到事件后调 `appStore.applyLocked()` 清空明文，
+> `watch(appStore.unlocked)` 负责跳回 `/unlock`。
 
 ---
 
@@ -737,19 +762,51 @@ await window.pywebview.api.confirm_close_action('quit', true)
 }
 ```
 
-### `useTrayStore`（托盘状态）
+### `useAppStore`（引导 / 解锁态 / 托盘状态）
 
 ```javascript
 {
-  mcpRunning: false,
-  activeTokens: 0,
-  isLocked: false,
-  
-  fetchStatus(),            // 调用 api.get_tray_status()
-  minimizeToTray(),
-  lockVault(),
+  // 状态
+  bootstrapped: false,       // 是否已问过后端「有没有初始化过」
+  initialized: false,        // 是否已设过主密码
+  unlocked: false,           // 当前是否已解锁
+  bridgeError: '',
+  tray: { mcp_running: false, mcp_port: 8765, active_tokens: 0, is_locked: true },
+
+  // 计算属性
+  ready,                     // bootstrapped && !bridgeError
+  locked,                    // initialized && !unlocked
+
+  // 操作
+  bootstrap(force),          // 读初始化/解锁状态（并发去重 + 结果缓存）
+  setupMasterPassword(pw), unlock(pw),
+  applyLocked(),             // 锁定后的**前端收尾**：清空明文 + 托盘置灰（不调后端）
+  lock(),                    // 调 api.lockVault()，finally 里走 applyLocked()
+  reportActivity(),          // 节流上报用户活动（约 30s 一次），供后端空闲锁定计时
+  refreshTray(), minimizeToTray(),
 }
 ```
+
+> **`applyLocked()` 为什么单独拆出来**：后端加锁有三个入口（界面按钮 / 托盘菜单 / 空闲自动锁），
+> 但它们最终都汇入 `api.lock_vault()` 并广播 `vault:locked`。界面点按钮走 `lock()`（调后端）；
+> 另外两个入口**后端已经锁好了**，前端只需 `onEvent(EVENTS.vaultLocked)` → `applyLocked()` 做收尾，
+> 不能再调一次 `lockVault()`。
+
+### `useProxyStore`（代理注册表）
+
+```javascript
+{
+  items: [], globalId: null, globalUrl: '', loading: false,
+  testing: false, testingId: null, result: null, resultFor: null,
+  // getters: byId(id), options
+  fetch(), create(name, url), update(id, name, url), remove(id), setGlobal(id),
+  runTest(id = null),        // id = null 表示测「当前全局生效的那个」
+  clearResult(),
+}
+```
+
+> 测试的进行态与结果放在 store 而不是页面局部 ref：`<router-view>` 没有 keep-alive，
+> 切页会卸载组件，后端跑完却写进已销毁的实例 → 用户看到「测试被中断」。
 
 ---
 
@@ -766,3 +823,10 @@ await window.pywebview.api.confirm_close_action('quit', true)
 | `vault:batch_verify_done` | 批量验证完成 | `{total, valid, invalid, error, skipped}`（skipped = 因 `batch_verify=false` 被跳过的条数）；被取消时额外带 `canceled: true` 与 `done: <已处理条数>` |
 | `vault:mcp_status` | MCP 服务状态变化 | `{status, port}` |
 | `vault:close_confirm` | 用户点击关闭且关闭行为为"询问" | `{}`（前端弹出退出/后台选择框） |
+| `vault:locked` | 保险库被锁定（界面按钮 / 托盘菜单 / 空闲自动锁**任一入口**） | `{}`（前端清空明文并跳回解锁页） |
+| `vault:tasks` | 某个后台任务状态变化 | 该条任务的快照（不是全量列表），前端就地更新/插入对应行 |
+| `vault:plugins_changed` | 插件目录扫描结果变化 | 由 `plugin_manager` 推送（前端重拉插件列表） |
+| `vault:action_stream` | 流式操作（如长输出动作）的增量输出 | 由 `stream_credential_action` 推送 |
+
+> **加锁事件只有一条 `vault:locked`**：三个加锁入口全部经 `api.lock_vault()`，由它统一广播，
+> 所以前端只需监听一个事件即可在任何入口下保持界面一致。

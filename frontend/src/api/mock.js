@@ -218,6 +218,7 @@ function createState() {
     ],
     logLevel: 'INFO',
     closeAction: 'ask',
+    autoLockMinutes: 0,
     proxy: '',
     logs: [
       { level: 'INFO', text: logLine('INFO', 'main', '应用启动（frozen=False，日志级别=INFO，数据目录=…）', minutesDate(32)) },
@@ -727,6 +728,36 @@ export function createMockApi() {
         state.closeAction = action
       }
       return { ok: true, action }
+    },
+
+    // ── 空闲自动锁定 ──────────────────────────────────────
+    async get_auto_lock() {
+      await delay(40)
+      return {
+        minutes: state.autoLockMinutes,
+        options: [
+          { value: 0, label: '关闭' },
+          { value: 1, label: '1 分钟' },
+          { value: 5, label: '5 分钟' },
+          { value: 10, label: '10 分钟' },
+          { value: 15, label: '15 分钟' },
+          { value: 30, label: '30 分钟' },
+          { value: 60, label: '60 分钟' },
+        ],
+      }
+    },
+
+    async set_auto_lock(minutes) {
+      await delay(40)
+      if (![0, 1, 5, 10, 15, 30, 60].includes(Number(minutes))) {
+        return { ok: false, message: `不支持的档位：${minutes} 分钟` }
+      }
+      state.autoLockMinutes = Number(minutes)
+      return { ok: true, minutes: state.autoLockMinutes }
+    },
+
+    async touch_activity() {
+      return { ok: true }
     },
 
     // ── 验证代理 ──────────────────────────────────────────

@@ -32,7 +32,7 @@ CREATE TABLE settings (
 
 | key | 说明 | 示例值 |
 |-----|------|--------|
-| `schema_version` | 数据库版本号 | `"4"` |
+| `schema_version` | 数据库版本号 | `"5"` |
 | `salt` | PBKDF2 盐值（base64） | `"a3f2..."` |
 | `verify_token` | 主密码验证密文（base64） | `"x9k1..."` |
 | `mcp_host` | MCP Server 监听地址（仅 IP / localhost，默认 `127.0.0.1`） | `"127.0.0.1"` |
@@ -44,6 +44,7 @@ CREATE TABLE settings (
 | `batch_concurrency` | 批量验证并发线程数（1–32，空 = 默认 8） | `"8"` |
 | `verify_timeout` | 验证请求超时秒数（5–300，空 = 默认 20） | `"20"` |
 | `close_action` | 关闭主窗口行为（ask / quit / background） | `"ask"` |
+| `auto_lock_minutes` | 空闲自动锁定的分钟数（0 = 关闭；仅允许 0/1/5/10/15/30/60，其余按 0 处理） | `"0"` |
 
 ---
 

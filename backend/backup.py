@@ -20,7 +20,7 @@ VERSION = 1
 
 # 仅备份/恢复这几项与主密码、与本机环境无关的偏好设置
 # （salt / verify_token 不备份；mcp_host / mcp_port 是本机监听配置，换台机器未必可用，不跟随备份）
-_PREF_KEYS = ("verify_proxy", "global_proxy_id", "log_level", "close_action")
+_PREF_KEYS = ("verify_proxy", "global_proxy_id", "log_level", "close_action", "auto_lock_minutes")
 
 
 def _iso() -> str:

@@ -43,8 +43,26 @@ function refreshOnActive() {
   guard(vaultStore.fetchGroups())
 }
 function handleVisibility() {
-  if (document.visibilityState === 'visible') refreshOnActive()
+  if (document.visibilityState !== 'visible') return
+  handleActivity()
+  refreshOnActive()
 }
+
+/** 用户活动上报（供后端「空闲自动锁定」计时）。
+ *  这里只做转发，节流在 store 内（30s）——本函数会被 mousemove 高频调用，
+ *  所以在 store 里拦截比在这里判断更省事，也不必给每个事件各配一套节流。 */
+function handleActivity() {
+  appStore.reportActivity()
+}
+
+// 覆盖键鼠/滚轮/触摸四类；mousemove 与 wheel 高频，标 passive 避免拖慢滚动。
+const ACTIVITY_EVENTS = [
+  ['mousemove', { passive: true }],
+  ['mousedown', { passive: true }],
+  ['wheel', { passive: true }],
+  ['touchstart', { passive: true }],
+  ['keydown', undefined],
+]
 
 onMounted(() => {
   disposers.push(
@@ -73,11 +91,23 @@ onMounted(() => {
       closeDialog.value = true
     }),
   )
+  // 后端加锁（界面按钮 / 托盘 / 空闲自动锁）都会广播此事件，统一在这里清空明文。
+  // 随后的 watch(appStore.unlocked) 会把路由推回 /unlock。
+  disposers.push(onEvent(EVENTS.vaultLocked, () => appStore.applyLocked()))
 
-  window.addEventListener('focus', refreshOnActive)
+  const handleFocus = () => {
+    handleActivity()
+    refreshOnActive()
+  }
+  window.addEventListener('focus', handleFocus)
   document.addEventListener('visibilitychange', handleVisibility)
-  disposers.push(() => window.removeEventListener('focus', refreshOnActive))
+  disposers.push(() => window.removeEventListener('focus', handleFocus))
   disposers.push(() => document.removeEventListener('visibilitychange', handleVisibility))
+
+  for (const [name, opts] of ACTIVITY_EVENTS) {
+    window.addEventListener(name, handleActivity, opts)
+    disposers.push(() => window.removeEventListener(name, handleActivity, opts))
+  }
 
   guard(appStore.refreshTray())
   // 页面重载会丢掉已推送的批量验证事件；这里从任务列表兜一次底，避免横幅「凭空消失」

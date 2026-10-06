@@ -522,10 +522,49 @@ async function applyCloseAction(value) {
   }
 }
 
+/* ── 空闲自动锁定 ───────────────────────────────────── */
+const autoLockMinutes = ref(0)
+const autoLockOptions = ref([
+  { value: 0, label: '关闭' },
+  { value: 1, label: '1 分钟' },
+  { value: 5, label: '5 分钟' },
+  { value: 10, label: '10 分钟' },
+  { value: 15, label: '15 分钟' },
+  { value: 30, label: '30 分钟' },
+  { value: 60, label: '60 分钟' },
+])
+const autoLockSaving = ref(false)
+
+async function loadAutoLock() {
+  try {
+    const config = await api.getAutoLock()
+    if (typeof config.minutes === 'number') autoLockMinutes.value = config.minutes
+    if (Array.isArray(config.options) && config.options.length) {
+      autoLockOptions.value = config.options
+    }
+  } catch (err) {
+    ElMessage.error(err.message || '加载空闲锁定设置失败')
+  }
+}
+
+async function applyAutoLock(value) {
+  autoLockSaving.value = true
+  try {
+    await api.setAutoLock(value)
+    ElMessage.success(value ? `已开启：空闲 ${value} 分钟后自动锁定` : '已关闭空闲自动锁定')
+  } catch (err) {
+    ElMessage.error(err.message || '设置空闲自动锁定失败')
+    await loadAutoLock()
+  } finally {
+    autoLockSaving.value = false
+  }
+}
+
 onMounted(async () => {
   await Promise.all([
     loadSchedules(),
     loadCloseAction(),
+    loadAutoLock(),
     proxyStore.fetch().catch(() => {}),
     vaultStore.fetchGroups().catch(() => {}),
     vaultStore.fetchPlugins().catch(() => {}),
@@ -563,6 +602,30 @@ onMounted(async () => {
           <div class="setting-desc">立即清除内存中的解密密钥与明文数据，需重新输入主密码才能访问。</div>
         </div>
         <el-button :icon="Lock" @click="lockNow">立即锁定</el-button>
+      </div>
+
+      <el-divider />
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">空闲自动锁定</div>
+          <div class="setting-desc">
+            一段时间无操作后自动清除内存中的密钥。若当时后台仍有验证任务在跑，则顺延到任务结束后再锁。
+          </div>
+        </div>
+        <el-select
+          v-model="autoLockMinutes"
+          class="close-select"
+          :loading="autoLockSaving"
+          @change="applyAutoLock"
+        >
+          <el-option
+            v-for="opt in autoLockOptions"
+            :key="opt.value"
+            :label="opt.label"
+            :value="opt.value"
+          />
+        </el-select>
       </div>
     </el-card>
 

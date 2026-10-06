@@ -14,6 +14,7 @@ from typing import Any, Optional, Union
 
 from . import backup
 from . import database as db
+from . import idle_lock
 from . import logger
 from . import mcp_server
 from . import plugin_manager
@@ -104,6 +105,8 @@ def get_tray_status() -> dict:
 def init_callbacks():
     scheduler.set_callbacks(push_event, _get_key)
     mcp_server.set_callbacks(_get_key, push_event)
+    # 空闲自动锁定：看门狗线程命中超时后回调 lock_vault；未解锁时不动它
+    idle_lock.set_callbacks(lock_vault, lambda: _get_key() is not None)
     # 后台任务状态一变就推给前端（任务列表与侧栏角标据此刷新）
     tasks.set_notifier(lambda snapshot: push_event("vault:tasks", snapshot))
 
@@ -130,6 +133,7 @@ def setup_master_password(password: str) -> dict:
     db.set_setting("salt", salt.hex())
     db.set_setting("verify_token", verify_token)
     _set_key(key)
+    idle_lock.touch()
     return {"ok": True, "message": "主密码设置成功"}
 
 
@@ -146,12 +150,20 @@ def unlock(password: str) -> dict:
     if not check_verify_token(key, verify_token):
         return {"ok": False, "message": "密码错误"}
     _set_key(key)
+    idle_lock.touch()
     tray.update_tray()
     return {"ok": True, "message": "解锁成功"}
 
 
 def lock_vault() -> dict:
+    """清除内存中的解密密钥。所有加锁入口（界面按钮 / 托盘 / 空闲自动锁）都走这里，
+    因此统一广播 `vault:locked`，前端据此清空明文并跳回解锁页。
+
+    先广播再刷托盘：刷新托盘要碰 GUI 后端（pystray），万一它抛异常，界面也不该还停在
+    「已解锁」的样子——密钥已经没了，前端必须知道。
+    """
     _set_key(None)
+    push_event("vault:locked")
     tray.update_tray()
     return {"ok": True}
 
@@ -1061,6 +1073,35 @@ def confirm_close_action(action: str, remember: bool = False) -> dict:
         if _close_hide_cb:
             _close_hide_cb()
     return {"ok": True, "action": action}
+
+
+# ── 空闲自动锁定 ──────────────────────────────────────────
+# "一段时间未操作后自动锁定数据库"。设置项 auto_lock_minutes 存 settings 表（0 = 关闭）；
+# 判定与看门狗线程在 backend/idle_lock.py，这里只负责读写设置、接收前端活动上报。
+
+def get_auto_lock() -> dict:
+    """返回当前空闲锁定分钟数与可选档位（供"系统设置"展示）。"""
+    return {"minutes": idle_lock.read_minutes(), "options": idle_lock.OPTIONS}
+
+
+def set_auto_lock(minutes) -> dict:
+    """持久化空闲自动锁定设置（0 = 关闭）。"""
+    try:
+        value = int(minutes)
+    except (TypeError, ValueError):
+        return {"ok": False, "message": f"无效的分钟数：{minutes!r}"}
+    if value not in idle_lock.ALLOWED_MINUTES:
+        return {"ok": False, "message": f"不支持的档位：{value} 分钟"}
+    db.set_setting(idle_lock.SETTING_KEY, str(value))
+    idle_lock.touch()  # 改设置时重置计时，免得刚设完就被锁
+    _log.info("空闲自动锁定已设置为 %s 分钟", value)
+    return {"ok": True, "minutes": value}
+
+
+def touch_activity() -> dict:
+    """前端在一段时间内有用户操作时（节流）上报，重置空闲计时。"""
+    idle_lock.touch()
+    return {"ok": True}
 
 
 # ── 验证代理（注册表 + 全局默认） ───────────────────────────

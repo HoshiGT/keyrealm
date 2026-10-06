@@ -113,6 +113,9 @@ export const EVENTS = {
   batchDone: 'vault:batch_verify_done',
   mcpStatus: 'vault:mcp_status',
   closeConfirm: 'vault:close_confirm',
+  // 保险库被锁定（界面按钮 / 托盘 / 空闲自动锁都会经 lock_vault 广播）。
+  // 消费方据此清空内存明文并跳回解锁页。
+  vaultLocked: 'vault:locked',
   // 后台任务变更。detail 是**发生变化的那一条任务快照**（不是全量列表），
   // 消费方就地更新/插入对应行即可；拿不到快照时才回退到 listTasks()。
   tasksChanged: 'vault:tasks',
@@ -225,6 +228,11 @@ export const api = {
   setCloseAction: (action) => call('set_close_action', action),
   confirmCloseAction: (action, remember = false) =>
     call('confirm_close_action', action, remember),
+
+  // ── 空闲自动锁定 ────────────────────────────────────────
+  getAutoLock: () => call('get_auto_lock'),
+  setAutoLock: (minutes) => call('set_auto_lock', minutes),
+  touchActivity: () => call('touch_activity'),
 
   // ── 验证代理（注册表，其它模块一律按 id 引用） ──────────
   listProxies: () => call('list_proxies'),
