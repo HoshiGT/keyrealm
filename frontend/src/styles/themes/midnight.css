@@ -1,0 +1,70 @@
+/* ─────────────────────────────────────────────────────────────
+ * 主题 4 · midnight —— 午夜玻璃（深色）
+ * 深墨蓝底 + 厚毛玻璃 + 长春花紫主色。安静、纵深、macOS 通透感。
+ * 参考：stylekit「macOS 毛玻璃 / macOS Vibrancy」「暗黑模式 / Dark Mode」。
+ * ───────────────────────────────────────────────────────────── */
+
+:root[data-theme='midnight'] {
+  color-scheme: dark;
+
+  --v-scheme: dark;
+
+  /* 品牌色 */
+  --v-primary: #7c8cf8;
+  --v-primary-ink: #0b0e17;
+  --v-accent: #67e8f9;
+  --v-accent-2: #c084fc;
+
+  /* 语义色（深色底上提亮） */
+  --v-success: #4ade80;
+  --v-warning: #fbbf24;
+  --v-danger: #fb7185;
+  --v-info: #94a3b8;
+
+  /* 背景层 */
+  --v-bg: #0b0e17;
+  --v-bg-elevated: rgba(28, 33, 51, 0.62);
+  --v-bg-overlay: #151a28;
+  --v-bg-sunken: #10141f;
+  --v-bg-hover: rgba(124, 140, 248, 0.12);
+
+  /* 文字 */
+  --v-text: #edf0f7;
+  --v-text-2: #a0a8bf;
+  /* 原 #6c7489 在 #0b0e17 上 4.13:1，差一点点够不着 AA；提到 5.75:1，
+     仍明显低于 --v-text-2（8.12:1），三级层次不乱。 */
+  --v-text-3: #848ca4;
+
+  /* 描边 */
+  --v-border: rgba(148, 163, 184, 0.14);
+  --v-border-strong: rgba(148, 163, 184, 0.26);
+
+  /* 毛玻璃：重头戏，模糊拉满 */
+  --v-glass-bg: rgba(22, 27, 43, 0.55);
+  --v-glass-border: rgba(148, 163, 184, 0.16);
+  --v-glass-blur: 26px;
+  --v-glass-saturate: 1.9;
+
+  /* 阴影：深色下靠「黑得更深」造层次，外加一点主色辉光 */
+  --v-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --v-shadow-md: 0 6px 18px -4px rgba(0, 0, 0, 0.5);
+  --v-shadow-lg: 0 28px 60px -18px rgba(0, 0, 0, 0.75);
+  --v-glow: 0 0 0 1px rgba(124, 140, 248, 0.35), 0 10px 34px -10px rgba(124, 140, 248, 0.6);
+
+  --v-radius-sm: 8px;
+  --v-radius-md: 12px;
+  --v-radius-lg: 16px;
+  --v-radius-xl: 22px;
+
+  --v-grad-brand: linear-gradient(135deg, #7c8cf8 0%, #a78bfa 50%, #67e8f9 100%);
+  --v-grad-brand-soft: linear-gradient(135deg, rgba(124, 140, 248, 0.22), rgba(103, 232, 249, 0.18));
+
+  /* 背景球 */
+  --v-mesh-1: radial-gradient(closest-side, rgba(124, 140, 248, 0.5), transparent);
+  --v-mesh-2: radial-gradient(closest-side, rgba(103, 232, 249, 0.32), transparent);
+  --v-mesh-3: radial-gradient(closest-side, rgba(192, 132, 252, 0.4), transparent);
+  --v-mesh-opacity: 1;
+
+  --v-font-display: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --v-title-tracking: -0.015em;
+}

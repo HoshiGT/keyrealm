@@ -1,0 +1,71 @@
+/* ─────────────────────────────────────────────────────────────
+ * 主题 3 · mint —— 薄荷（浅色）
+ * 青绿主色 + 大圆角 + 柔光投影，轻快、亲和、SaaS 落地页感。
+ * 参考：stylekit「柔和界面风 / Soft UI」、Boldo（vibrant colors）。
+ * ───────────────────────────────────────────────────────────── */
+
+:root[data-theme='mint'] {
+  color-scheme: light;
+
+  --v-scheme: light;
+
+  /* 品牌色 */
+  --v-primary: #0f9d8c;
+  --v-primary-ink: #ffffff;
+  --v-accent: #34d399;
+  --v-accent-2: #38bdf8;
+
+  /* 语义色。同 aurora：原值直接取 EP 默认亮色，在 #f2faf8 上不达 AA，压暗一档
+     到 4.7~5.4:1。 */
+  --v-success: #0d7a4e;
+  --v-warning: #b45309;
+  --v-danger: #c02b50;
+  --v-info: #64748b;
+
+  /* 背景层 */
+  --v-bg: #f2faf8;
+  --v-bg-elevated: rgba(255, 255, 255, 0.82);
+  --v-bg-overlay: #ffffff;
+  --v-bg-sunken: #e8f5f2;
+  --v-bg-hover: rgba(15, 157, 140, 0.08);
+
+  /* 文字 */
+  --v-text: #0f2621;
+  --v-text-2: #4f6b65;
+  /* 原 #87a49d 在 #f2faf8 上 2.71:1，几乎读不出来；压到 4.57:1。 */
+  --v-text-3: #587870;
+
+  /* 描边 */
+  --v-border: rgba(15, 38, 33, 0.09);
+  --v-border-strong: rgba(15, 38, 33, 0.18);
+
+  /* 毛玻璃 */
+  --v-glass-bg: rgba(255, 255, 255, 0.7);
+  --v-glass-border: rgba(255, 255, 255, 0.85);
+  --v-glass-blur: 16px;
+  --v-glass-saturate: 1.4;
+
+  /* 阴影：柔和、大扩散、低不透明度 */
+  --v-shadow-sm: 0 1px 3px rgba(15, 38, 33, 0.05);
+  --v-shadow-md: 0 6px 18px -6px rgba(15, 157, 140, 0.2), 0 2px 6px rgba(15, 38, 33, 0.05);
+  --v-shadow-lg: 0 24px 48px -18px rgba(15, 157, 140, 0.34), 0 6px 16px rgba(15, 38, 33, 0.06);
+  --v-glow: 0 0 0 1px rgba(15, 157, 140, 0.22), 0 10px 28px -10px rgba(15, 157, 140, 0.55);
+
+  /* 圆角：饱满 */
+  --v-radius-sm: 10px;
+  --v-radius-md: 14px;
+  --v-radius-lg: 20px;
+  --v-radius-xl: 28px;
+
+  --v-grad-brand: linear-gradient(135deg, #0f9d8c 0%, #34d399 55%, #38bdf8 100%);
+  --v-grad-brand-soft: linear-gradient(135deg, rgba(15, 157, 140, 0.14), rgba(56, 189, 248, 0.14));
+
+  /* 背景球 */
+  --v-mesh-1: radial-gradient(closest-side, rgba(52, 211, 153, 0.48), transparent);
+  --v-mesh-2: radial-gradient(closest-side, rgba(56, 189, 248, 0.42), transparent);
+  --v-mesh-3: radial-gradient(closest-side, rgba(15, 157, 140, 0.28), transparent);
+  --v-mesh-opacity: 1;
+
+  --v-font-display: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --v-title-tracking: -0.02em;
+}

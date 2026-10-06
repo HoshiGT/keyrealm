@@ -1,0 +1,79 @@
+/* ─────────────────────────────────────────────────────────────
+ * 主题 2 · paper —— 素笺（浅色）
+ * 暖白纸感 + 墨色主色 + 陶土/鼠尾草点缀。近乎扁平，细描边、小圆角、无辉光。
+ * 参考：stylekit「Notion 风格」「企业简洁风 / Corporate Clean」。
+ * ───────────────────────────────────────────────────────────── */
+
+:root[data-theme='paper'] {
+  color-scheme: light;
+
+  --v-scheme: light;
+
+  /* 品牌色 */
+  --v-primary: #2b2f36;
+  --v-primary-ink: #ffffff;
+  --v-accent: #c2703d;
+  --v-accent-2: #5b7a6b;
+
+  /* 语义色 */
+  --v-success: #3f7d58;
+  --v-warning: #a2620d;
+  --v-danger: #b4453f;
+  --v-info: #78808c;
+
+  /* 背景层 */
+  --v-bg: #faf9f6;
+  --v-bg-elevated: #ffffff;
+  --v-bg-overlay: #ffffff;
+  --v-bg-sunken: #f2f0ea;
+  --v-bg-hover: rgba(43, 47, 54, 0.055);
+
+  /* 文字 */
+  --v-text: #1c1e21;
+  --v-text-2: #5c6167;
+  /* 原来是 #8e939a，在 #faf9f6 上只有 2.76:1，连 AA 大字号的 3:1 都不到。
+     按色相不变压暗到 4.7:1，与 --v-text-2 仍拉开一档。 */
+  --v-text-3: #6b7285;
+
+  /* 描边 */
+  --v-border: rgba(28, 30, 33, 0.1);
+  --v-border-strong: rgba(28, 30, 33, 0.2);
+
+  /* 「毛玻璃」在素笺里退化为一层极轻的白纱——保持纸的实感 */
+  --v-glass-bg: rgba(255, 255, 255, 0.92);
+  --v-glass-border: rgba(28, 30, 33, 0.08);
+  --v-glass-blur: 8px;
+  --v-glass-saturate: 1.05;
+
+  /* 阴影：克制，只做「贴纸微翘」的层次，不做发光 */
+  --v-shadow-sm: 0 1px 1px rgba(28, 30, 33, 0.05);
+  --v-shadow-md: 0 2px 6px rgba(28, 30, 33, 0.07);
+  --v-shadow-lg: 0 12px 32px -14px rgba(28, 30, 33, 0.28);
+  --v-glow: 0 2px 10px -2px rgba(43, 47, 54, 0.28);
+
+  /* 圆角：小而方，编辑体气质 */
+  --v-radius-sm: 4px;
+  --v-radius-md: 6px;
+  --v-radius-lg: 9px;
+  --v-radius-xl: 12px;
+
+  --v-grad-brand: linear-gradient(135deg, #2b2f36 0%, #4a4034 60%, #c2703d 100%);
+  --v-grad-brand-soft: linear-gradient(135deg, rgba(194, 112, 61, 0.12), rgba(91, 122, 107, 0.12));
+
+  /* 背景球：两层暖色晕染，极淡 */
+  --v-mesh-1: radial-gradient(closest-side, rgba(194, 112, 61, 0.22), transparent);
+  --v-mesh-2: radial-gradient(closest-side, rgba(91, 122, 107, 0.18), transparent);
+  --v-mesh-3: radial-gradient(closest-side, rgba(43, 47, 54, 0.1), transparent);
+  /* 0.85 在这张近乎白的纸面上太重了，三团暖色晕染叠出来像一层擦不干净的黄渍。
+     压到 0.35 才是「纸的纹理」，而不是「脏」。
+     基座给的光晕色是拿 --v-primary 调的，可这里的主色近乎黑 —— 铺开只会在米白纸上
+     留一圈灰印，所以换成本主题的陶土/鼠尾草点缀色，并把不透明度再收一点。 */
+  --v-mesh-opacity: 0.35;
+
+  --v-halo-1: color-mix(in srgb, var(--v-accent) 14%, transparent);
+  --v-halo-2: color-mix(in srgb, var(--v-accent-2) 20%, transparent);
+  --v-halo-opacity: 0.5;
+
+  --v-font-display: 'Iowan Old Style', 'Songti SC', 'Georgia', 'PingFang SC', serif;
+  --v-title-tracking: 0.005em;
+}

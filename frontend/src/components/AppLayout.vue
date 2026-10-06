@@ -269,13 +269,15 @@ async function handleMinimize() {
 <template>
   <el-container class="layout">
     <el-aside
-      :width="collapsed ? '64px' : '152px'"
+      :width="collapsed ? '64px' : '176px'"
       class="layout-aside"
       :class="{ 'is-collapsed': collapsed }"
     >
       <div class="brand" :class="{ 'is-collapsed': collapsed }">
-        <img src="/favicon.svg" class="brand-logo" alt="Credential Vault" />
-        <span v-show="!collapsed" class="brand-text">Credential Vault</span>
+        <span class="brand-mark">
+          <img src="/favicon.svg" class="brand-logo" alt="Credential Vault" />
+        </span>
+        <span v-show="!collapsed" class="brand-text v-grad-text">Credential Vault</span>
       </div>
 
       <!-- 预留位：后续功能按钮加在这里 -->
@@ -319,14 +321,25 @@ async function handleMinimize() {
           >{{ runningCount }}</span>
         </el-menu-item>
       </el-menu>
+
+      <div v-show="!collapsed" class="aside-foot">
+        <span class="aside-foot-dot" />
+        <span>本地保险库</span>
+      </div>
     </el-aside>
 
     <el-container>
       <el-header class="layout-header">
-        <div class="header-title">{{ pageTitle }}</div>
+        <div class="header-title">
+          <span class="header-accent" />
+          {{ pageTitle }}
+        </div>
         <div class="header-actions">
           <el-tooltip :content="appStore.tray.mcp_running ? 'MCP 服务运行中' : 'MCP 服务已停止'" placement="bottom">
-            <span class="mcp-indicator" :class="appStore.tray.mcp_running ? 'is-on' : 'is-off'">
+            <span
+              class="mcp-indicator"
+              :class="[appStore.tray.mcp_running ? 'is-on v-pulse' : 'is-off']"
+            >
               <i class="dot" />
               MCP {{ appStore.tray.mcp_running ? '运行中' : '已停止' }}
             </span>
@@ -382,47 +395,166 @@ async function handleMinimize() {
 .layout {
   height: 100vh;
   overflow: hidden;
+  background: transparent;
 }
 
+/* ── 侧栏：一层薄玻璃，让背景极光透过来 ───────────────────────────── */
+
 .layout-aside {
+  position: relative;
   display: flex;
   flex-direction: column;
-  background: var(--el-bg-color-overlay);
-  border-right: 1px solid var(--el-border-color);
-  transition: width 0.22s ease;
+  background: var(--v-glass-bg);
+  -webkit-backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
+  backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
+  border-right: 1px solid var(--v-border);
+  transition: width 0.24s var(--v-ease);
   overflow: hidden;
 }
 
+/* 侧栏右缘一道竖直渐变，替代生硬的分割线 */
+.layout-aside::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 1px;
+  height: 100%;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in srgb, var(--v-primary) 30%, transparent),
+    transparent
+  );
+  pointer-events: none;
+}
+
+/* ── 品牌区 ─────────────────────────────────────────────────────── */
+
+/* 宽度 176px 是为了容下完整品牌名：152px 时 "Credential Vault" 会被截成
+   "Credential V…"（重构前靠更小的 logo 和更紧的内边距勉强塞下）。
+   宁可侧栏宽一点，也不要一个带省略号的品牌名。 */
 .brand {
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 60px;
-  padding: 0 8px;
-  font-weight: 700;
-  font-size: 13px;
+  gap: 8px;
+  height: 62px;
+  padding: 0 12px;
   white-space: nowrap;
-  border-bottom: 1px solid var(--el-border-color);
+  border-bottom: 1px solid var(--v-border);
+  flex-shrink: 0;
+}
+
+.brand-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 9px;
+  background: var(--v-grad-brand-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--v-primary) 22%, transparent);
+  animation: brand-breathe 5s var(--v-ease) infinite;
+}
+
+@keyframes brand-breathe {
+  0%, 100% { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--v-primary) 22%, transparent); }
+  50% { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--v-primary) 45%, transparent),
+        0 0 14px -2px color-mix(in srgb, var(--v-primary) 55%, transparent); }
 }
 
 .brand-text {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-family: var(--v-font-display);
+  font-weight: 750;
+  font-size: 12.5px;
+  letter-spacing: -0.02em;
 }
 
-.layout-menu :deep(.el-menu-item) {
+.brand.is-collapsed {
+  justify-content: center;
+  padding: 0;
+}
+
+.brand-logo {
+  width: 17px;
+  height: 17px;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+
+/* ── 侧栏工具条 ─────────────────────────────────────────────────── */
+
+.aside-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--v-border);
+  flex-shrink: 0;
+}
+
+.aside-toolbar .el-button {
+  padding: 6px;
+  color: var(--v-text-2);
+}
+
+.toolbar-spacer {
+  margin-left: auto;
+}
+
+.layout-aside.is-collapsed .aside-toolbar {
+  justify-content: center;
+  padding: 7px 2px;
+}
+
+.layout-aside.is-collapsed .toolbar-spacer {
+  display: none;
+}
+
+/* ── 菜单 ───────────────────────────────────────────────────────── */
+
+.layout-menu {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 0;
+  border-right: none;
+  background: transparent;
+}
+
+/* 展开态：左对齐，图标 + 文字 */
+.layout-aside:not(.is-collapsed) .layout-menu :deep(.el-menu-item) {
+  position: relative;
+  justify-content: flex-start;
+  padding-left: 13px !important;
+  padding-right: 10px !important;
+  font-size: 13.5px;
+}
+
+.layout-aside:not(.is-collapsed) .layout-menu :deep(.el-menu-item .el-icon) {
+  margin-right: 9px;
+  font-size: 17px;
+}
+
+/* 激活项的左侧指示条改用「胶囊」贴边样式（基座里那条是给通用场景的） */
+.layout-aside:not(.is-collapsed) .layout-menu :deep(.el-menu-item.is-active)::before {
+  left: -8px;
+  height: 20px;
+}
+
+/* 收起态：居中，且去掉图标右间距以免偏心 */
+.layout-aside.is-collapsed .layout-menu :deep(.el-menu-item) {
   position: relative;
   justify-content: center;
   padding: 0 !important;
 }
 
-.layout-menu :deep(.el-menu-item .el-icon) {
-  margin-right: 6px;
-}
-
-.layout-menu :deep(.el-menu-item.is-active) {
-  padding-left: 0 !important;
+.layout-aside.is-collapsed .layout-menu :deep(.el-menu-item .el-icon) {
+  margin-right: 0;
 }
 
 /* 拖拽排序：展开态显示抓手、可拖、悬停高亮插入位 */
@@ -462,7 +594,10 @@ async function handleMinimize() {
   right: 6px;
   height: 2px;
   border-radius: 1px;
-  background: var(--el-color-primary);
+  background: var(--v-primary);
+  /* 覆盖基座里那条竖指示条的动画 */
+  transform: none;
+  animation: none;
 }
 
 .layout-menu :deep(.el-menu-item.is-drop-before)::before {
@@ -477,90 +612,93 @@ async function handleMinimize() {
    收起态没有标题文字，就把角标挪到图标右上角，免得无处可依。 */
 .nav-badge {
   position: absolute;
-  right: 8px;
+  right: 10px;
   top: 50%;
   transform: translateY(-50%);
-  min-width: 16px;
-  height: 16px;
+  min-width: 17px;
+  height: 17px;
   padding: 0 4px;
   box-sizing: border-box;
-  border-radius: 8px;
-  background: var(--el-color-primary);
-  color: #fff;
+  border-radius: 999px;
+  background: var(--v-grad-brand);
+  color: var(--v-primary-ink);
   font-size: 11px;
-  line-height: 16px;
+  font-weight: 600;
+  line-height: 17px;
   text-align: center;
   pointer-events: none;
+  box-shadow: 0 0 0 2px var(--v-glass-bg);
 }
 
 .layout-aside.is-collapsed .nav-badge {
-  right: 6px;
-  top: 6px;
+  right: 5px;
+  top: 5px;
   transform: none;
 }
 
-/* 角标与右侧的拖拽抓手 ::after 位置重合（都是 right:8px）。带角标的那一项隐掉抓手，
+/* 角标与右侧的拖拽抓手 ::after 位置重合（都是贴右）。带角标的那一项隐掉抓手，
    免得 hover 时两者叠在一起发花。:has() 不被支持时这条规则被忽略，只是回到原来的轻微重叠。 */
 .layout-aside:not(.is-collapsed) .layout-menu :deep(.el-menu-item:has(.nav-badge))::after {
   display: none;
 }
 
-.brand.is-collapsed {
-  justify-content: center;
-  padding: 0;
+/* ── 侧栏底部的状态标签 ─────────────────────────────────────────── */
+
+.aside-foot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--v-border);
+  font-size: 11.5px;
+  color: var(--v-text-3);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
-.brand-logo {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
+.aside-foot-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--v-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--v-success) 20%, transparent);
   flex-shrink: 0;
 }
 
-.layout-menu {
-  flex: 1;
-  border-right: none;
-  overflow-y: auto;
-}
-
-.aside-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--el-border-color);
-}
-
-.aside-toolbar .el-button {
-  padding: 6px;
-}
-
-.toolbar-spacer {
-  margin-left: auto;
-}
-
-.layout-aside.is-collapsed .aside-toolbar {
-  justify-content: center;
-  padding: 6px 2px;
-}
-
-.layout-aside.is-collapsed .toolbar-spacer {
-  display: none;
-}
+/* ── 顶栏 ───────────────────────────────────────────────────────── */
 
 .layout-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  height: 60px;
-  border-bottom: 1px solid var(--el-border-color);
-  background: var(--el-bg-color-overlay);
+  height: 62px;
+  border-bottom: 1px solid var(--v-border);
+  background: var(--v-glass-bg);
+  -webkit-backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
+  backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
+  position: relative;
+  z-index: 5;
 }
 
 .header-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--v-font-display);
   font-size: 17px;
-  font-weight: 600;
+  font-weight: 650;
+  letter-spacing: var(--v-title-tracking);
+  color: var(--v-text);
+}
+
+/* 标题左侧一小段渐变竖条 */
+.header-accent {
+  width: 3px;
+  height: 17px;
+  border-radius: 2px;
+  background: var(--v-grad-brand);
+  flex-shrink: 0;
 }
 
 .header-actions {
@@ -569,40 +707,63 @@ async function handleMinimize() {
   gap: 6px;
 }
 
+/* ── MCP 指示灯 ─────────────────────────────────────────────────── */
+
 .mcp-indicator {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
+  gap: 7px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--v-border);
+  background: color-mix(in srgb, var(--v-bg-sunken) 60%, transparent);
+  font-size: 12.5px;
+  color: var(--v-text-2);
+  transition: color var(--v-base) var(--v-ease), border-color var(--v-base) var(--v-ease);
 }
 
 .mcp-indicator .dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: var(--el-color-info);
+  background: var(--v-info);
+  flex-shrink: 0;
+}
+
+.mcp-indicator.is-on {
+  color: var(--v-success);
+  border-color: color-mix(in srgb, var(--v-success) 32%, transparent);
+  background: color-mix(in srgb, var(--v-success) 9%, transparent);
 }
 
 .mcp-indicator.is-on .dot {
-  background: var(--el-color-success);
-  box-shadow: 0 0 0 3px rgba(103, 194, 58, 0.18);
+  background: var(--v-success);
 }
 
 .mcp-indicator.is-off .dot {
-  background: var(--el-color-danger);
+  background: var(--v-danger);
 }
+
+.mcp-indicator.is-off {
+  color: var(--v-text-2);
+}
+
+/* ── 内容区：透明，好让背景极光透上来 ───────────────────────────── */
 
 .layout-main {
   padding: 20px;
   overflow-y: auto;
-  background: var(--el-bg-color-page);
+  background: transparent;
 }
 
 /* 批量验证横幅：贴在内容区顶部，宽满、不抢占滚动的 el-main */
 .batch-banner {
   flex-shrink: 0;
   border-radius: 0;
+  border-left: none;
+  border-right: none;
+  margin: 0;
+  animation: v-fade-in var(--v-base) var(--v-ease);
 }
 
 .batch-banner :deep(.el-alert__content) {
@@ -624,5 +785,12 @@ async function handleMinimize() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 基座里的 reduced-motion 规则管不到组件内的关键帧（作用域不同），这里自己补一条 */
+@media (prefers-reduced-motion: reduce) {
+  .brand-mark {
+    animation: none;
+  }
 }
 </style>

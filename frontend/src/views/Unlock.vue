@@ -2,7 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Unlock as UnlockIcon } from '@element-plus/icons-vue'
+import { Lock as LockIcon, Unlock as UnlockIcon } from '@element-plus/icons-vue'
 
 import { useAppStore } from '@/stores/app'
 
@@ -52,10 +52,15 @@ onMounted(() => {
 
 <template>
   <div class="auth-screen">
-    <el-card class="auth-card" shadow="always">
+    <div class="auth-halo" aria-hidden="true" />
+
+    <el-card class="auth-card" shadow="never">
       <div class="auth-brand">
-        <span class="auth-logo">🔐</span>
-        <h1>Credential Vault</h1>
+        <span class="auth-mark">
+          <span class="auth-ring" aria-hidden="true" />
+          <el-icon class="auth-mark-icon"><LockIcon /></el-icon>
+        </span>
+        <h1 class="v-grad-text">Credential Vault</h1>
         <p class="auth-subtitle">保险库已锁定，请输入主密码解锁</p>
       </div>
 
@@ -65,6 +70,7 @@ onMounted(() => {
             ref="passwordRef"
             v-model="form.password"
             type="password"
+            size="large"
             show-password
             placeholder="输入主密码"
             autocomplete="current-password"
@@ -77,9 +83,20 @@ onMounted(() => {
         <template #title>{{ errorMessage }}</template>
       </el-alert>
 
-      <el-button type="primary" size="large" class="auth-submit" :loading="submitting" :icon="UnlockIcon" @click="submit">
+      <el-button
+        type="primary"
+        size="large"
+        class="auth-submit"
+        :loading="submitting"
+        :icon="UnlockIcon"
+        @click="submit"
+      >
         解锁
       </el-button>
+
+      <p class="auth-foot">
+        <kbd>Enter</kbd> 快速解锁
+      </p>
 
       <p v-if="mockHint" class="mock-hint">{{ mockHint }}</p>
     </el-card>
@@ -87,52 +104,157 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* 登录/解锁页是「无外壳」的全屏页：背景完全透明，让 App.vue 铺的极光透上来。 */
 .auth-screen {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   height: 100vh;
-  background: radial-gradient(circle at 50% 20%, rgba(64, 158, 255, 0.14), transparent 55%), var(--el-bg-color-page);
+  overflow: hidden;
+  background: transparent;
 }
 
-.auth-card {
-  width: 420px;
-  padding: 8px 12px 16px;
+/* 卡背后两团柔光（品牌色 + 强调色），把视线收拢到卡片上。
+   颜色走 --v-halo-* 令牌，主题可以换色或整体压淡 —— paper 的主色近乎黑，
+   直接铺开只会在米白纸上留一圈灰印。
+
+   尺寸必须明显大于卡片，这点踩过坑：渐变在 closest-side 的 72% 处就到透明，
+   660px 时半径 330px、透明边界约 237px，恰好压在卡片边缘（半宽 230px）上，
+   于是光晕几乎全被卡片盖住，只剩轮廓外一圈极窄的灰边，看着像块脏底板。
+   放到 900px 后透明边界约 324px，渐隐带拉到 90px 上下，才散得开。 */
+.auth-halo {
+  position: absolute;
+  width: 900px;
+  height: 900px;
+  pointer-events: none;
+  filter: blur(64px);
+  opacity: var(--v-halo-opacity);
+  background: radial-gradient(closest-side, var(--v-halo-1), transparent 72%),
+    radial-gradient(closest-side at 68% 38%, var(--v-halo-2), transparent 72%);
+  animation: halo-breathe 9s var(--v-ease) infinite;
 }
+
+@keyframes halo-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.08); opacity: 0.85; }
+}
+
+/* 同时挂 .el-card 是为了压过 Element Plus 的 .el-card.is-never-shadow（同为 2 类选择器，
+   加上 scoped 的属性选择器后本规则胜出），不必用 !important。
+   --el-card-padding 归零，卡片内边距统一由这里控制，免得和基座的 18/20px 叠加。 */
+.auth-card.el-card {
+  --el-card-padding: 0;
+  position: relative;
+  z-index: 1;
+  width: 420px;
+  padding: 28px 28px 24px;
+  box-shadow: var(--v-shadow-lg);
+  animation: v-fade-up 0.5s var(--v-ease) both;
+}
+
+/* ── 品牌区 ─────────────────────────────────────────────────────── */
 
 .auth-brand {
   text-align: center;
-  margin-bottom: 20px;
+  margin-bottom: 22px;
 }
 
-.auth-logo {
-  font-size: 40px;
-  line-height: 1;
+.auth-mark {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  background: var(--v-grad-brand);
+  color: var(--v-primary-ink);
+  box-shadow: var(--v-glow);
+}
+
+.auth-mark-icon {
+  font-size: 26px;
+}
+
+/* 绕在徽标外的一圈「雷达波」：与徽标同形状的圆角方框，由内向外扩散淡出。
+   最初这里是 conic-gradient + 圆形遮罩做的旋转描边，两处几何都不成立：
+   圆形遮罩切在圆角方块的四角上，只能切出一道横穿角部的彩边（实测就是一圈色散花边，
+   看着像渲染瑕疵而不是设计元素）；而且元素一旦 rotate，轮廓本身也跟着转，45° 时
+   圆角方块会变成菱形。
+   换成同形状、只缩放不旋转的描边扩散：圆角半径与外框同心，天然对齐，也不依赖
+   mask-composite / @property，任何内核都稳。 */
+.auth-ring {
+  position: absolute;
+  inset: -6px;
+  border-radius: 24px;
+  border: 2px solid color-mix(in srgb, var(--v-accent) 55%, transparent);
+  pointer-events: none;
+  animation: ring-ping 3.2s var(--v-ease) infinite;
+}
+
+@keyframes ring-ping {
+  0% { transform: scale(0.96); opacity: 0.85; }
+  70%, 100% { transform: scale(1.22); opacity: 0; }
 }
 
 .auth-brand h1 {
-  margin: 10px 0 4px;
-  font-size: 22px;
+  margin: 14px 0 5px;
+  font-family: var(--v-font-display);
+  font-size: 23px;
+  font-weight: 750;
+  letter-spacing: var(--v-title-tracking);
 }
 
 .auth-subtitle {
   margin: 0;
-  color: var(--el-text-color-secondary);
+  color: var(--v-text-2);
   font-size: 13px;
 }
 
+/* ── 表单与按钮 ─────────────────────────────────────────────────── */
+
 .auth-alert {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 .auth-submit {
   width: 100%;
+  margin-top: 4px;
+}
+
+.auth-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 14px 0 0;
+  font-size: 12px;
+  color: var(--v-text-3);
+}
+
+.auth-foot kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--v-border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--v-bg-sunken);
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--v-text-2);
 }
 
 .mock-hint {
-  margin: 14px 0 0;
+  margin: 10px 0 0;
   text-align: center;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--v-text-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-card,
+  .auth-halo,
+  .auth-ring {
+    animation: none;
+  }
 }
 </style>

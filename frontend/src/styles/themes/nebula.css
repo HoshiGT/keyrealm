@@ -1,0 +1,68 @@
+/* ─────────────────────────────────────────────────────────────
+ * 主题 6 · nebula —— 星云（深色）
+ * 紫黑底 + 大块紫/粉/蓝光晕 + 发光描边。华丽、有能量感。
+ * 参考：stylekit「现代渐变风 / Modern Gradient」深色变体、Materio / 渐变类模板。
+ * ───────────────────────────────────────────────────────────── */
+
+:root[data-theme='nebula'] {
+  color-scheme: dark;
+
+  --v-scheme: dark;
+
+  /* 品牌色 */
+  --v-primary: #a78bfa;
+  --v-primary-ink: #120b22;
+  --v-accent: #f472b6;
+  --v-accent-2: #38bdf8;
+
+  /* 语义色 */
+  --v-success: #34d399;
+  --v-warning: #fbbf24;
+  --v-danger: #fb7185;
+  --v-info: #9ca3af;
+
+  /* 背景层 */
+  --v-bg: #0a0714;
+  --v-bg-elevated: rgba(31, 22, 54, 0.6);
+  --v-bg-overlay: #170f29;
+  --v-bg-sunken: #120c1f;
+  --v-bg-hover: rgba(167, 139, 250, 0.14);
+
+  /* 文字 */
+  --v-text: #f2ecff;
+  --v-text-2: #b3a6d1;
+  /* 原 #7c6f99 在 #0a0714 上 4.36:1，略低于 AA；提到 6.15:1（--v-text-2 为 8.82:1）。 */
+  --v-text-3: #9589b0;
+
+  /* 描边 */
+  --v-border: rgba(167, 139, 250, 0.16);
+  --v-border-strong: rgba(167, 139, 250, 0.3);
+
+  /* 毛玻璃 */
+  --v-glass-bg: rgba(28, 20, 50, 0.5);
+  --v-glass-border: rgba(167, 139, 250, 0.2);
+  --v-glass-blur: 24px;
+  --v-glass-saturate: 1.8;
+
+  --v-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.45);
+  --v-shadow-md: 0 6px 20px -6px rgba(88, 28, 135, 0.55);
+  --v-shadow-lg: 0 28px 64px -20px rgba(88, 28, 135, 0.8);
+  --v-glow: 0 0 0 1px rgba(167, 139, 250, 0.4), 0 10px 36px -10px rgba(244, 114, 182, 0.55);
+
+  --v-radius-sm: 10px;
+  --v-radius-md: 14px;
+  --v-radius-lg: 18px;
+  --v-radius-xl: 26px;
+
+  --v-grad-brand: linear-gradient(135deg, #a78bfa 0%, #f472b6 50%, #38bdf8 100%);
+  --v-grad-brand-soft: linear-gradient(135deg, rgba(167, 139, 250, 0.24), rgba(244, 114, 182, 0.2));
+
+  /* 背景球：更大更亮 */
+  --v-mesh-1: radial-gradient(closest-side, rgba(167, 139, 250, 0.6), transparent);
+  --v-mesh-2: radial-gradient(closest-side, rgba(244, 114, 182, 0.42), transparent);
+  --v-mesh-3: radial-gradient(closest-side, rgba(56, 189, 248, 0.34), transparent);
+  --v-mesh-opacity: 1;
+
+  --v-font-display: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --v-title-tracking: -0.015em;
+}

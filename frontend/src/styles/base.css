@@ -1,0 +1,993 @@
+/* ═══════════════════════════════════════════════════════════════════════
+ * Credential Vault · 样式基座（主题令牌层）
+ *
+ * 本文件只做三件事，**不含任何写死的颜色**：
+ *   1. 把主题令牌 `--v-*` 桥接到 Element Plus 的 `--el-*`，让 EP 组件自动换肤；
+ *   2. 定义所有主题共用的结构（背景极光、玻璃面、卡片、表格、动效）；
+ *   3. 提供少量工具类。
+ *
+ * 要换主题 → 只改 `styles/themes/*.css`；要整体回退 → 见 docs/FRONTEND.md
+ * 的「回退整个表现层」。
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Element Plus 令牌桥接 ───────────────────────────────────────── */
+
+:root {
+  /* 配色令牌不在这里 —— 一律由 `styles/themes/<id>.css` 提供；默认主题 obsidian
+     额外用裸 `:root` 兜底（首帧写上 data-theme 之前的一瞬）。本块只留与配色无关的
+     共用令牌：光晕公式、动效曲线、Element 色阶的混色基底。 */
+
+  /* 解锁/初始化页卡片背后那团光晕。做成令牌是因为它对主色深浅很敏感：
+     aurora 这类彩色主色直接铺开就是一层好看的光；paper 的主色是近黑，铺开只会
+     在米白纸上留下一圈灰印。主题可以据此换色或压淡。 */
+  --v-halo-1: color-mix(in srgb, var(--v-primary) 16%, transparent);
+  --v-halo-2: color-mix(in srgb, var(--v-accent) 26%, transparent);
+  --v-halo-opacity: 0.72;
+
+  /* 动效曲线 */
+  --v-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --v-spring: cubic-bezier(0.34, 1.4, 0.5, 1);
+  --v-fast: 0.16s;
+  --v-base: 0.24s;
+  --v-slow: 0.42s;
+
+  /* 主色「混色基底」：浅色主题向白靠、深色主题向底色靠（Element 的 light-N 语义） */
+  --v-ramp-base: #fff;
+  --v-ramp-ink: #000;
+}
+
+html.dark {
+  --v-ramp-base: var(--v-bg);
+  --v-ramp-ink: #fff;
+}
+
+/* 把品牌色铺成 Element 需要的 9 级色阶。
+   全部由 color-mix 推导 —— 主题文件因此只需声明一个 --v-primary。 */
+:root,
+html.dark {
+  --el-color-primary: var(--v-primary);
+  --el-color-primary-light-3: color-mix(in srgb, var(--v-primary) 70%, var(--v-ramp-base));
+  --el-color-primary-light-5: color-mix(in srgb, var(--v-primary) 50%, var(--v-ramp-base));
+  --el-color-primary-light-7: color-mix(in srgb, var(--v-primary) 30%, var(--v-ramp-base));
+  --el-color-primary-light-8: color-mix(in srgb, var(--v-primary) 20%, var(--v-ramp-base));
+  --el-color-primary-light-9: color-mix(in srgb, var(--v-primary) 10%, var(--v-ramp-base));
+  --el-color-primary-dark-2: color-mix(in srgb, var(--v-primary) 80%, var(--v-ramp-ink));
+
+  --el-color-success: var(--v-success);
+  --el-color-success-light-3: color-mix(in srgb, var(--v-success) 70%, var(--v-ramp-base));
+  --el-color-success-light-5: color-mix(in srgb, var(--v-success) 50%, var(--v-ramp-base));
+  --el-color-success-light-7: color-mix(in srgb, var(--v-success) 30%, var(--v-ramp-base));
+  --el-color-success-light-8: color-mix(in srgb, var(--v-success) 20%, var(--v-ramp-base));
+  --el-color-success-light-9: color-mix(in srgb, var(--v-success) 10%, var(--v-ramp-base));
+  --el-color-success-dark-2: color-mix(in srgb, var(--v-success) 80%, var(--v-ramp-ink));
+
+  --el-color-warning: var(--v-warning);
+  --el-color-warning-light-3: color-mix(in srgb, var(--v-warning) 70%, var(--v-ramp-base));
+  --el-color-warning-light-5: color-mix(in srgb, var(--v-warning) 50%, var(--v-ramp-base));
+  --el-color-warning-light-7: color-mix(in srgb, var(--v-warning) 30%, var(--v-ramp-base));
+  --el-color-warning-light-8: color-mix(in srgb, var(--v-warning) 20%, var(--v-ramp-base));
+  --el-color-warning-light-9: color-mix(in srgb, var(--v-warning) 10%, var(--v-ramp-base));
+  --el-color-warning-dark-2: color-mix(in srgb, var(--v-warning) 80%, var(--v-ramp-ink));
+
+  --el-color-danger: var(--v-danger);
+  --el-color-danger-light-3: color-mix(in srgb, var(--v-danger) 70%, var(--v-ramp-base));
+  --el-color-danger-light-5: color-mix(in srgb, var(--v-danger) 50%, var(--v-ramp-base));
+  --el-color-danger-light-7: color-mix(in srgb, var(--v-danger) 30%, var(--v-ramp-base));
+  --el-color-danger-light-8: color-mix(in srgb, var(--v-danger) 20%, var(--v-ramp-base));
+  --el-color-danger-light-9: color-mix(in srgb, var(--v-danger) 10%, var(--v-ramp-base));
+  --el-color-danger-dark-2: color-mix(in srgb, var(--v-danger) 80%, var(--v-ramp-ink));
+
+  --el-color-error: var(--v-danger);
+  --el-color-error-light-3: var(--el-color-danger-light-3);
+  --el-color-error-light-5: var(--el-color-danger-light-5);
+  --el-color-error-light-7: var(--el-color-danger-light-7);
+  --el-color-error-light-8: var(--el-color-danger-light-8);
+  --el-color-error-light-9: var(--el-color-danger-light-9);
+
+  --el-color-info: var(--v-info);
+  --el-color-info-light-3: color-mix(in srgb, var(--v-info) 70%, var(--v-ramp-base));
+  --el-color-info-light-5: color-mix(in srgb, var(--v-info) 50%, var(--v-ramp-base));
+  --el-color-info-light-7: color-mix(in srgb, var(--v-info) 30%, var(--v-ramp-base));
+  --el-color-info-light-8: color-mix(in srgb, var(--v-info) 20%, var(--v-ramp-base));
+  --el-color-info-light-9: color-mix(in srgb, var(--v-info) 10%, var(--v-ramp-base));
+  --el-color-info-dark-2: color-mix(in srgb, var(--v-info) 80%, var(--v-ramp-ink));
+
+  /* 背景 / 文字 / 描边 */
+  --el-bg-color: var(--v-bg-overlay);
+  --el-bg-color-page: var(--v-bg);
+  --el-bg-color-overlay: var(--v-bg-overlay);
+  --el-text-color-primary: var(--v-text);
+  --el-text-color-regular: var(--v-text-2);
+  --el-text-color-secondary: var(--v-text-2);
+  --el-text-color-placeholder: var(--v-text-3);
+  --el-text-color-disabled: var(--v-text-3);
+  --el-border-color: var(--v-border);
+  --el-border-color-light: var(--v-border);
+  --el-border-color-lighter: var(--v-border);
+  --el-border-color-extra-light: var(--v-border);
+  --el-border-color-dark: var(--v-border-strong);
+  --el-border-color-darker: var(--v-border-strong);
+  --el-border-color-hover: var(--v-border-strong);
+
+  --el-fill-color: var(--v-bg-sunken);
+  --el-fill-color-light: var(--v-bg-hover);
+  --el-fill-color-lighter: var(--v-bg-hover);
+  --el-fill-color-extra-light: var(--v-bg-hover);
+  --el-fill-color-dark: var(--v-bg-sunken);
+  --el-fill-color-darker: var(--v-bg-sunken);
+  --el-fill-color-blank: transparent;
+
+  --el-disabled-bg-color: var(--v-bg-sunken);
+  --el-disabled-text-color: var(--v-text-3);
+  --el-disabled-border-color: var(--v-border);
+
+  --el-mask-color: color-mix(in srgb, var(--v-bg) 72%, transparent);
+  --el-mask-color-extra-light: color-mix(in srgb, var(--v-bg) 30%, transparent);
+  --el-overlay-color-lighter: color-mix(in srgb, var(--v-text) 42%, transparent);
+
+  /* 形状 / 阴影 */
+  --el-border-radius-base: var(--v-radius-sm);
+  --el-border-radius-small: calc(var(--v-radius-sm) - 2px);
+  --el-border-radius-round: 999px;
+  --el-box-shadow: var(--v-shadow-lg);
+  --el-box-shadow-light: var(--v-shadow-md);
+  --el-box-shadow-lighter: var(--v-shadow-sm);
+  --el-box-shadow-dark: var(--v-shadow-lg);
+
+  /* 字体 */
+  --el-font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  --el-font-size-base: 14px;
+
+  --el-transition-duration: var(--v-base);
+  --el-transition-duration-fast: var(--v-fast);
+}
+
+/* ── 2. 基座 / 排版 / 滚动条 ─────────────────────────────────────────── */
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--v-bg);
+  color: var(--v-text);
+  font-family: var(--el-font-family);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-synthesis: none;
+  transition: background-color var(--v-slow) var(--v-ease), color var(--v-slow) var(--v-ease);
+}
+
+#app {
+  position: relative;
+  z-index: 1;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--v-font-display);
+  letter-spacing: var(--v-title-tracking);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--v-primary) 28%, transparent);
+  color: var(--v-text);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--v-text) 18%, transparent);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+  transition: background var(--v-base) var(--v-ease);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--v-text) 32%, transparent);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ── 3. 背景极光 ─────────────────────────────────────────────────────
+ * 三个大光斑缓慢漂移，给整屏一点「呼吸」。纯装饰、不拦事件。
+ * ------------------------------------------------------------------- */
+
+.v-aurora {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: var(--v-mesh-opacity);
+  transition: opacity var(--v-slow) var(--v-ease);
+}
+
+.v-aurora .blob {
+  position: absolute;
+  display: block;
+  border-radius: 50%;
+  filter: blur(72px);
+  will-change: transform;
+  transform: translateZ(0);
+}
+
+.v-aurora .b1 {
+  top: -18%;
+  left: -12%;
+  width: 62vw;
+  height: 62vw;
+  background-image: var(--v-mesh-1);
+  animation: v-drift-1 38s ease-in-out infinite alternate;
+}
+
+.v-aurora .b2 {
+  top: -10%;
+  right: -16%;
+  width: 54vw;
+  height: 54vw;
+  background-image: var(--v-mesh-2);
+  animation: v-drift-2 46s ease-in-out infinite alternate;
+}
+
+.v-aurora .b3 {
+  bottom: -26%;
+  left: 26%;
+  width: 58vw;
+  height: 58vw;
+  background-image: var(--v-mesh-3);
+  animation: v-drift-3 52s ease-in-out infinite alternate;
+}
+
+@keyframes v-drift-1 {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(6vw, 4vh, 0) scale(1.08); }
+  100% { transform: translate3d(-3vw, 7vh, 0) scale(0.96); }
+}
+
+@keyframes v-drift-2 {
+  0% { transform: translate3d(0, 0, 0) scale(1.04); }
+  50% { transform: translate3d(-7vw, 6vh, 0) scale(0.94); }
+  100% { transform: translate3d(2vw, -4vh, 0) scale(1.1); }
+}
+
+@keyframes v-drift-3 {
+  0% { transform: translate3d(0, 0, 0) scale(0.98); }
+  50% { transform: translate3d(5vw, -6vh, 0) scale(1.1); }
+  100% { transform: translate3d(-6vw, -2vh, 0) scale(1); }
+}
+
+/* ── 4. 玻璃面 / 卡片 ───────────────────────────────────────────────
+ * 所有面板走同一个「毛玻璃」配方，主题只需调 --v-glass-*。
+ * ------------------------------------------------------------------- */
+
+.v-glass {
+  background: var(--v-glass-bg);
+  border: 1px solid var(--v-glass-border);
+  border-radius: var(--v-radius-lg);
+  box-shadow: var(--v-shadow-md);
+  -webkit-backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
+  backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
+}
+
+.el-card {
+  --el-card-padding: 18px 20px;
+  --el-card-border-radius: var(--v-radius-lg);
+  --el-card-border-color: var(--v-glass-border);
+  position: relative;
+  background: var(--v-glass-bg);
+  border: 1px solid var(--v-glass-border);
+  border-radius: var(--v-radius-lg);
+  box-shadow: var(--v-shadow-md);
+  -webkit-backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
+  backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
+  overflow: hidden;
+  transition: box-shadow var(--v-base) var(--v-ease), transform var(--v-base) var(--v-ease),
+    border-color var(--v-base) var(--v-ease);
+}
+
+/* 卡片顶缘的一道渐变高光：不抢眼，但让「玻璃」立起来 */
+.el-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--v-primary) 45%, transparent),
+    transparent
+  );
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.el-card.is-hover-shadow:hover,
+.el-card.is-always-shadow:hover {
+  box-shadow: var(--v-shadow-lg);
+}
+
+.el-card__header {
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--v-border);
+  font-weight: 600;
+  font-family: var(--v-font-display);
+  letter-spacing: var(--v-title-tracking);
+}
+
+/* 页头工具条上的「主卡」——不加玻璃、只当容器 */
+.el-card.is-flat {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.el-card.is-flat::before {
+  display: none;
+}
+
+/* ── 5. 按钮 ────────────────────────────────────────────────────────── */
+
+.el-button {
+  --el-button-border-color: var(--v-border);
+  --el-button-hover-border-color: var(--v-border-strong);
+  font-weight: 500;
+  border-radius: var(--v-radius-sm);
+  transition: transform var(--v-fast) var(--v-ease), box-shadow var(--v-base) var(--v-ease),
+    background-color var(--v-base) var(--v-ease), border-color var(--v-base) var(--v-ease),
+    color var(--v-base) var(--v-ease);
+}
+
+.el-button:not(.is-text):not(.is-link):not(.is-disabled):hover {
+  transform: translateY(-1px);
+}
+
+.el-button:not(.is-text):not(.is-link):not(.is-disabled):active {
+  transform: translateY(0.5px) scale(0.99);
+}
+
+.el-button--primary:not(.is-plain):not(.is-text):not(.is-link) {
+  background: var(--v-grad-brand);
+  background-size: 160% 160%;
+  background-position: 0% 50%;
+  border: none;
+  color: var(--v-primary-ink);
+  box-shadow: var(--v-glow);
+  transition: background-position var(--v-slow) var(--v-ease), transform var(--v-fast) var(--v-ease),
+    box-shadow var(--v-base) var(--v-ease), filter var(--v-base) var(--v-ease);
+}
+
+.el-button--primary:not(.is-plain):not(.is-text):not(.is-link):hover {
+  background-position: 100% 50%;
+  filter: brightness(1.06);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--v-primary) 30%, transparent),
+    0 12px 32px -10px color-mix(in srgb, var(--v-primary) 65%, transparent);
+}
+
+.el-button--primary.is-plain {
+  background: color-mix(in srgb, var(--v-primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--v-primary) 34%, transparent);
+  color: var(--v-primary);
+}
+
+.el-button--primary.is-plain:hover {
+  background: color-mix(in srgb, var(--v-primary) 20%, transparent);
+  border-color: color-mix(in srgb, var(--v-primary) 55%, transparent);
+  color: var(--v-primary);
+}
+
+.el-button.is-text,
+.el-button.is-link {
+  border-radius: var(--v-radius-sm);
+}
+
+.el-button.is-text:hover {
+  background: var(--v-bg-hover);
+}
+
+.el-button.is-round {
+  border-radius: 999px;
+}
+
+.el-button.is-circle {
+  border-radius: 50%;
+}
+
+/* 图标按钮：点击时给一点回弹 */
+.el-button > .el-icon + span {
+  margin-left: 5px;
+}
+
+/* ── 6. 表单控件 ────────────────────────────────────────────────────── */
+
+.el-input__wrapper,
+.el-textarea__inner {
+  background: color-mix(in srgb, var(--v-bg-sunken) 55%, var(--v-bg-overlay));
+  border-radius: var(--v-radius-sm);
+  box-shadow: 0 0 0 1px var(--v-border) inset;
+  transition: box-shadow var(--v-base) var(--v-ease), background-color var(--v-base) var(--v-ease);
+}
+
+.el-input__wrapper:hover,
+.el-textarea__inner:hover {
+  box-shadow: 0 0 0 1px var(--v-border-strong) inset;
+}
+
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus {
+  background: var(--v-bg-overlay);
+  box-shadow: 0 0 0 1.5px var(--v-primary) inset,
+    0 0 0 4px color-mix(in srgb, var(--v-primary) 14%, transparent);
+}
+
+.el-input.is-disabled .el-input__wrapper {
+  background: var(--v-bg-sunken);
+}
+
+.el-input__inner::placeholder,
+.el-textarea__inner::placeholder {
+  color: var(--v-text-3);
+}
+
+.el-select__wrapper {
+  background: color-mix(in srgb, var(--v-bg-sunken) 55%, var(--v-bg-overlay));
+  border-radius: var(--v-radius-sm);
+  box-shadow: 0 0 0 1px var(--v-border) inset;
+  transition: box-shadow var(--v-base) var(--v-ease), background-color var(--v-base) var(--v-ease);
+}
+
+.el-select__wrapper:hover {
+  box-shadow: 0 0 0 1px var(--v-border-strong) inset;
+}
+
+.el-select__wrapper.is-focused {
+  background: var(--v-bg-overlay);
+  box-shadow: 0 0 0 1.5px var(--v-primary) inset,
+    0 0 0 4px color-mix(in srgb, var(--v-primary) 14%, transparent);
+}
+
+.el-select-dropdown__item.is-selected {
+  color: var(--v-primary);
+  font-weight: 600;
+}
+
+.el-select-dropdown__item.is-hovering {
+  background: var(--v-bg-hover);
+}
+
+.el-form-item__label {
+  font-weight: 500;
+  color: var(--v-text-2);
+  padding-bottom: 4px;
+}
+
+.el-form-item {
+  margin-bottom: 18px;
+}
+
+/* 勾选/单选：方形改成柔角，选中给主色 */
+.el-checkbox__inner,
+.el-radio__inner {
+  border-radius: 5px;
+  border-color: var(--v-border-strong);
+  transition: all var(--v-fast) var(--v-ease);
+}
+
+.el-radio__inner {
+  border-radius: 50%;
+}
+
+.el-checkbox__input.is-checked .el-checkbox__inner,
+.el-radio__input.is-checked .el-radio__inner {
+  background: var(--v-primary);
+  border-color: var(--v-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--v-primary) 16%, transparent);
+}
+
+.el-checkbox__label,
+.el-radio__label {
+  color: var(--v-text-2);
+}
+
+.el-radio-button__inner {
+  border-color: var(--v-border);
+  transition: all var(--v-base) var(--v-ease);
+}
+
+.el-radio-button__original-radio:checked + .el-radio-button__inner {
+  background: var(--v-primary);
+  border-color: var(--v-primary);
+  box-shadow: -1px 0 0 0 var(--v-primary);
+}
+
+.el-switch.is-checked .el-switch__core {
+  background: var(--v-grad-brand);
+  border-color: transparent;
+}
+
+.el-switch__core {
+  transition: background var(--v-base) var(--v-ease), border-color var(--v-base) var(--v-ease);
+}
+
+.el-input-number .el-input__wrapper {
+  background: color-mix(in srgb, var(--v-bg-sunken) 55%, var(--v-bg-overlay));
+}
+
+/* ── 7. 表格 ────────────────────────────────────────────────────────── */
+
+.el-table {
+  --el-table-border-color: var(--v-border);
+  --el-table-header-bg-color: transparent;
+  --el-table-header-text-color: var(--v-text-2);
+  --el-table-row-hover-bg-color: var(--v-bg-hover);
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  background: transparent;
+  font-size: 13.5px;
+}
+
+.el-table th.el-table__cell {
+  background: transparent;
+  font-weight: 600;
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--v-text-2);
+  border-bottom: 1px solid var(--v-border-strong);
+}
+
+.el-table td.el-table__cell {
+  border-bottom: 1px solid var(--v-border);
+}
+
+.el-table__body tr {
+  transition: background-color var(--v-fast) var(--v-ease);
+}
+
+.el-table__inner-wrapper::before,
+.el-table__border-left-patch {
+  background-color: var(--v-border);
+}
+
+.el-table .cell {
+  line-height: 1.5;
+}
+
+/* ── 8. 标签 / 提示 / 空态 / 分隔线 / 进度 ──────────────────────────── */
+
+.el-tag {
+  --el-tag-border-radius: 999px;
+  font-weight: 500;
+  border-width: 1px;
+  padding: 0 10px;
+  transition: transform var(--v-fast) var(--v-spring), box-shadow var(--v-base) var(--v-ease);
+}
+
+.el-tag:hover {
+  transform: translateY(-1px);
+}
+
+.el-tag--primary {
+  background: color-mix(in srgb, var(--v-primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--v-primary) 26%, transparent);
+  color: var(--v-primary);
+}
+
+.el-alert {
+  border-radius: var(--v-radius-md);
+  border: 1px solid transparent;
+  padding: 12px 16px;
+  align-items: center;
+}
+
+.el-alert--info {
+  background: color-mix(in srgb, var(--v-info) 10%, transparent);
+  border-color: color-mix(in srgb, var(--v-info) 22%, transparent);
+}
+
+.el-alert--success {
+  background: color-mix(in srgb, var(--v-success) 11%, transparent);
+  border-color: color-mix(in srgb, var(--v-success) 24%, transparent);
+}
+
+.el-alert--warning {
+  background: color-mix(in srgb, var(--v-warning) 12%, transparent);
+  border-color: color-mix(in srgb, var(--v-warning) 26%, transparent);
+}
+
+.el-alert--error {
+  background: color-mix(in srgb, var(--v-danger) 11%, transparent);
+  border-color: color-mix(in srgb, var(--v-danger) 24%, transparent);
+}
+
+.el-alert__title {
+  font-size: 13px;
+}
+
+/* 空状态插图：Element Plus 用 --el-empty-fill-color-0..9 这组「不透明」色阶一层层叠出
+   插画的立体感（浅色 #fff→#d5d7de，深色 #000→#18181a，见 theme-chalk/dark/css-vars.css）。
+
+   踩过的坑：把它们改成 color-mix(主色 N%, transparent) 想过一把主题色，结果半透明叠不出
+   层次，插画直接糊成一团近乎纯黑的色块，两种配色下都废。
+
+   现在换成「往不透明基底里掺主色」：仍是不透明，层次照旧，但整幅插画带上主题色。
+   基底用 --v-ramp-base，它在浅色下是白、深色下是页面底色 —— 而 EP 的色阶方向恰好也是
+   浅色由亮到暗、深色由暗到亮，所以同一组递增比例在两边都成立，不用分叉。 */
+.el-empty {
+  --el-empty-fill-color-0: color-mix(in srgb, var(--v-primary) 2%, var(--v-ramp-base));
+  --el-empty-fill-color-1: color-mix(in srgb, var(--v-primary) 4%, var(--v-ramp-base));
+  --el-empty-fill-color-2: color-mix(in srgb, var(--v-primary) 7%, var(--v-ramp-base));
+  --el-empty-fill-color-3: color-mix(in srgb, var(--v-primary) 10%, var(--v-ramp-base));
+  --el-empty-fill-color-4: color-mix(in srgb, var(--v-primary) 13%, var(--v-ramp-base));
+  --el-empty-fill-color-5: color-mix(in srgb, var(--v-primary) 16%, var(--v-ramp-base));
+  --el-empty-fill-color-6: color-mix(in srgb, var(--v-primary) 18%, var(--v-ramp-base));
+  --el-empty-fill-color-7: color-mix(in srgb, var(--v-primary) 20%, var(--v-ramp-base));
+  --el-empty-fill-color-8: color-mix(in srgb, var(--v-primary) 22%, var(--v-ramp-base));
+  --el-empty-fill-color-9: color-mix(in srgb, var(--v-primary) 24%, var(--v-ramp-base));
+}
+
+/* 那组色阶本是照着「纯白卡片」配的，我们的卡片是毛玻璃，插画会发飘。
+   一条中性黑投影压住轮廓；深色下几乎不可见，不会帮倒忙。 */
+.el-empty__image {
+  filter: drop-shadow(0 6px 12px rgb(0 0 0 / 12%));
+}
+
+.el-empty__description p {
+  color: var(--v-text-3);
+  font-size: 13px;
+}
+
+/* 品牌图标在深色配色下要垫一层浅底。
+   插件 logo 是后端下发的 icon_image，多数品牌标（Simple Icons 那批）本身不带 fill，
+   按 SVG 默认渲染为**纯黑**；留在浅色主题里没问题，一进深色主题就跟底色糊在一起，
+   OpenAI / Anthropic / Moonshot Kimi 实测对比度约 1.1:1 —— 等于隐形。
+   与其在前端硬编码「哪几个标是黑的」（新装一个黑标插件就会重新踩坑），
+   不如统一垫一块浅板：黑标立刻可读，彩色标也只是多了一层底，观感一致。 */
+html.dark :is(
+    .pm-icon,
+    .pm-cat-icon img,
+    .tree-icon-img,
+    .credential-icon-img,
+    .pick-node-icon
+  ) {
+  background: rgb(255 255 255 / 88%);
+  border-radius: 4px;
+}
+
+.el-divider {
+  border-color: var(--v-border);
+}
+
+.el-divider__text {
+  background: transparent;
+  color: var(--v-text-2);
+  font-size: 12.5px;
+}
+
+.el-progress-bar__outer {
+  background: var(--v-bg-sunken);
+  border-radius: 999px;
+}
+
+.el-progress-bar__inner {
+  background: var(--v-grad-brand);
+  border-radius: 999px;
+  transition: width var(--v-slow) var(--v-ease);
+}
+
+/* ── 9. 弹层：对话框 / 抽屉 / 气泡 / 下拉 ──────────────────────────── */
+
+.el-overlay {
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  background-color: color-mix(in srgb, var(--v-text) 34%, transparent);
+  animation: v-fade-in var(--v-base) var(--v-ease);
+}
+
+.el-dialog {
+  --el-dialog-border-radius: var(--v-radius-xl);
+  --el-dialog-bg-color: var(--v-bg-overlay);
+  --el-dialog-box-shadow: var(--v-shadow-lg);
+  border: 1px solid var(--v-glass-border);
+  overflow: hidden;
+  animation: v-pop-in var(--v-slow) var(--v-spring);
+}
+
+.el-dialog__header {
+  padding: 20px 22px 12px;
+  margin-right: 0;
+}
+
+.el-dialog__title {
+  font-family: var(--v-font-display);
+  font-weight: 650;
+  letter-spacing: var(--v-title-tracking);
+  font-size: 16px;
+}
+
+.el-dialog__body {
+  padding: 6px 22px 18px;
+  color: var(--v-text-2);
+}
+
+.el-dialog__footer {
+  padding: 6px 22px 20px;
+}
+
+.el-dialog__headerbtn {
+  top: 14px;
+  right: 12px;
+}
+
+.el-drawer {
+  --el-drawer-bg-color: var(--v-bg-overlay);
+  border-left: 1px solid var(--v-glass-border);
+}
+
+.el-drawer__header {
+  margin-bottom: 12px;
+  padding: 18px 20px 0;
+  font-family: var(--v-font-display);
+  font-weight: 650;
+  color: var(--v-text);
+}
+
+.el-popper.is-light,
+.el-popper.is-dark {
+  border-radius: var(--v-radius-md);
+  border: 1px solid var(--v-glass-border);
+  background: color-mix(in srgb, var(--v-bg-overlay) 92%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  backdrop-filter: blur(14px) saturate(1.5);
+  box-shadow: var(--v-shadow-lg);
+  color: var(--v-text);
+  animation: v-pop-in var(--v-base) var(--v-spring);
+}
+
+.el-popper.is-light .el-popper__arrow::before,
+.el-popper.is-dark .el-popper__arrow::before {
+  background: color-mix(in srgb, var(--v-bg-overlay) 92%, transparent);
+  border-color: var(--v-glass-border);
+}
+
+.el-popper.is-dark {
+  color: var(--v-text);
+}
+
+.el-select-dropdown,
+.el-dropdown-menu,
+.el-picker-panel {
+  border-radius: var(--v-radius-md);
+  border-color: var(--v-glass-border);
+  background: color-mix(in srgb, var(--v-bg-overlay) 94%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  backdrop-filter: blur(16px) saturate(1.5);
+  box-shadow: var(--v-shadow-lg);
+}
+
+.el-dropdown-menu__item:not(.is-disabled):hover {
+  background: var(--v-bg-hover);
+  color: var(--v-primary);
+}
+
+/* 全局消息条 */
+.el-message {
+  border-radius: 999px;
+  border: 1px solid var(--v-glass-border);
+  background: color-mix(in srgb, var(--v-bg-overlay) 88%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  backdrop-filter: blur(18px) saturate(1.6);
+  box-shadow: var(--v-shadow-lg);
+  padding: 12px 20px;
+  animation: v-msg-in var(--v-slow) var(--v-spring);
+}
+
+.el-message__content {
+  color: var(--v-text) !important;
+  font-size: 13px;
+}
+
+.el-message-box {
+  border-radius: var(--v-radius-xl);
+  border: 1px solid var(--v-glass-border);
+  background: color-mix(in srgb, var(--v-bg-overlay) 94%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+  box-shadow: var(--v-shadow-lg);
+  padding: 22px;
+  animation: v-pop-in var(--v-slow) var(--v-spring);
+}
+
+.el-message-box__title {
+  font-family: var(--v-font-display);
+  font-weight: 650;
+}
+
+.el-message-box__content {
+  color: var(--v-text-2);
+}
+
+/* ── 10. 侧栏菜单 ──────────────────────────────────────────────────── */
+
+.el-menu {
+  --el-menu-bg-color: transparent;
+  --el-menu-hover-bg-color: var(--v-bg-hover);
+  --el-menu-text-color: var(--v-text-2);
+  --el-menu-active-color: var(--v-primary);
+  --el-menu-item-height: 44px;
+  border-right: none;
+}
+
+.el-menu-item {
+  position: relative;
+  margin: 2px 8px;
+  border-radius: var(--v-radius-sm);
+  transition: background-color var(--v-base) var(--v-ease), color var(--v-base) var(--v-ease),
+    box-shadow var(--v-base) var(--v-ease), transform var(--v-fast) var(--v-ease);
+}
+
+.el-menu-item:hover {
+  background: var(--v-bg-hover);
+  color: var(--v-text);
+}
+
+.el-menu-item.is-active {
+  background: color-mix(in srgb, var(--v-primary) 13%, transparent);
+  color: var(--v-primary);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--v-primary) 22%, transparent);
+}
+
+/* 激活项的左侧指示条：从中间「生长」出来 */
+.el-menu-item.is-active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 18px;
+  border-radius: 0 3px 3px 0;
+  background: var(--v-grad-brand);
+  transform: translateY(-50%) scaleY(0);
+  transform-origin: center;
+  animation: v-grow-in var(--v-slow) var(--v-spring) forwards;
+}
+
+.el-menu--collapse .el-menu-item {
+  margin: 2px 8px;
+}
+
+/* ── 11. 通用布局类（原先散在 App.vue，这里收口） ─────────────────── */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.page-toolbar .spacer {
+  flex: 1;
+}
+
+.text-muted {
+  color: var(--v-text-2);
+  font-size: 13px;
+}
+
+/* 内容区进入动画：每次路由切换、组件重新挂载时播放一次 */
+.layout-main > * ,
+.v-enter {
+  animation: v-fade-up var(--v-slow) var(--v-ease) both;
+}
+
+/* ── 12. 动效关键帧 ────────────────────────────────────────────────── */
+
+@keyframes v-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes v-fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes v-pop-in {
+  0% { opacity: 0; transform: translateY(6px) scale(0.97); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes v-msg-in {
+  0% { opacity: 0; transform: translateY(-14px) scale(0.94); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes v-grow-in {
+  from { transform: translateY(-50%) scaleY(0); }
+  to { transform: translateY(-50%) scaleY(1); }
+}
+
+@keyframes v-pulse-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--v-success) 55%, transparent); }
+  70% { box-shadow: 0 0 0 7px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+@keyframes v-sheen {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ── 13. 工具类 ────────────────────────────────────────────────────── */
+
+.v-pulse {
+  animation: v-pulse-ring 2.4s var(--v-ease) infinite;
+}
+
+/* 渐变文字（标题/品牌名用） */
+.v-grad-text {
+  background: var(--v-grad-brand);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* 骨架屏微光 */
+.v-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--v-bg-sunken) 25%,
+    color-mix(in srgb, var(--v-bg-sunken) 55%, var(--v-bg-overlay)) 37%,
+    var(--v-bg-sunken) 63%
+  );
+  background-size: 200% 100%;
+  animation: v-sheen 1.4s linear infinite;
+  border-radius: var(--v-radius-sm);
+}
+
+/* ── 14. 无障碍：尊重「减少动态效果」 ──────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .v-aurora .blob,
+  .v-pulse,
+  .v-skeleton,
+  .layout-main > * {
+    animation: none !important;
+  }
+
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}

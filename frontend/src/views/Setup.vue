@@ -31,9 +31,10 @@ const rules = {
   ],
 }
 
+/* 强度配色一律取主题令牌，这样切主题时进度条跟着换色，不会留在 Element Plus 的默认色上。 */
 const strength = computed(() => {
   const value = form.password
-  if (!value) return { score: 0, label: '未输入', color: '#909399' }
+  if (!value) return { score: 0, label: '未输入', color: 'var(--v-text-3)' }
   let score = 0
   if (value.length >= 8) score += 1
   if (value.length >= 12) score += 1
@@ -43,11 +44,11 @@ const strength = computed(() => {
   score = Math.min(score, 4)
 
   const table = [
-    { label: '很弱', color: '#F56C6C' },
-    { label: '较弱', color: '#F56C6C' },
-    { label: '一般', color: '#E6A23C' },
-    { label: '较强', color: '#67C23A' },
-    { label: '很强', color: '#409EFF' },
+    { label: '很弱', color: 'var(--v-danger)' },
+    { label: '较弱', color: 'var(--v-danger)' },
+    { label: '一般', color: 'var(--v-warning)' },
+    { label: '较强', color: 'var(--v-success)' },
+    { label: '很强', color: 'var(--v-primary)' },
   ]
   return { score, ...table[score] }
 })
@@ -75,10 +76,15 @@ async function submit() {
 
 <template>
   <div class="auth-screen">
-    <el-card class="auth-card" shadow="always">
+    <div class="auth-halo" aria-hidden="true" />
+
+    <el-card class="auth-card" shadow="never">
       <div class="auth-brand">
-        <span class="auth-logo">🔐</span>
-        <h1>Credential Vault</h1>
+        <span class="auth-mark">
+          <span class="auth-ring" aria-hidden="true" />
+          <el-icon class="auth-mark-icon"><Lock /></el-icon>
+        </span>
+        <h1 class="v-grad-text">Credential Vault</h1>
         <p class="auth-subtitle">设置主密码（首次使用）</p>
       </div>
 
@@ -91,6 +97,7 @@ async function submit() {
           <el-input
             v-model="form.password"
             type="password"
+            size="large"
             show-password
             placeholder="至少 8 个字符"
             autocomplete="new-password"
@@ -102,6 +109,7 @@ async function submit() {
           <el-input
             v-model="form.confirm"
             type="password"
+            size="large"
             show-password
             placeholder="再次输入以确认"
             autocomplete="new-password"
@@ -116,13 +124,22 @@ async function submit() {
             v-for="index in 4"
             :key="index"
             class="strength-bar"
-            :style="{ background: index <= strength.score ? strength.color : 'var(--el-border-color)' }"
+            :style="{ background: index <= strength.score ? strength.color : 'var(--v-border)' }"
           />
         </div>
-        <span class="strength-label" :style="{ color: strength.color }">密码强度：{{ strength.label }}</span>
+        <span class="strength-label" :style="{ color: strength.color }">
+          密码强度：{{ strength.label }}
+        </span>
       </div>
 
-      <el-button type="primary" size="large" class="auth-submit" :loading="submitting" :icon="Lock" @click="submit">
+      <el-button
+        type="primary"
+        size="large"
+        class="auth-submit"
+        :loading="submitting"
+        :icon="Lock"
+        @click="submit"
+      >
         创建保险库
       </el-button>
     </el-card>
@@ -130,38 +147,93 @@ async function submit() {
 </template>
 
 <style scoped>
+/* 与 Unlock.vue 同一套外壳：全屏居中、背景透明，内容压在 App.vue 的极光之上。 */
 .auth-screen {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   height: 100vh;
-  background: radial-gradient(circle at 50% 20%, rgba(64, 158, 255, 0.14), transparent 55%), var(--el-bg-color-page);
+  overflow: hidden;
+  background: transparent;
 }
 
-.auth-card {
+/* 与 Unlock.vue 同款双色柔光，尺寸/配色的取舍见那边的注释。 */
+.auth-halo {
+  position: absolute;
+  width: 900px;
+  height: 900px;
+  pointer-events: none;
+  filter: blur(64px);
+  opacity: var(--v-halo-opacity);
+  background: radial-gradient(closest-side, var(--v-halo-1), transparent 72%),
+    radial-gradient(closest-side at 68% 38%, var(--v-halo-2), transparent 72%);
+  animation: halo-breathe 9s var(--v-ease) infinite;
+}
+
+@keyframes halo-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.08); opacity: 0.85; }
+}
+
+/* 见 Unlock.vue 同处说明：挂 .el-card 提高优先级，内边距改由这里独占控制。 */
+.auth-card.el-card {
+  --el-card-padding: 0;
+  position: relative;
+  z-index: 1;
   width: 460px;
-  padding: 8px 12px 16px;
+  padding: 28px 28px 24px;
+  box-shadow: var(--v-shadow-lg);
+  animation: v-fade-up 0.5s var(--v-ease) both;
 }
 
 .auth-brand {
   text-align: center;
-  margin-bottom: 18px;
+  margin-bottom: 20px;
 }
 
-.auth-logo {
-  font-size: 40px;
-  line-height: 1;
+.auth-mark {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  background: var(--v-grad-brand);
+  color: var(--v-primary-ink);
+  box-shadow: var(--v-glow);
+}
+
+.auth-mark-icon {
+  font-size: 26px;
+}
+
+/* 与 Unlock.vue 同：不做旋转，改成同形状描边向外扩散（理由见那边的注释）。 */
+.auth-ring {
+  position: absolute;
+  inset: -6px;
+  border-radius: 24px;
+  border: 2px solid color-mix(in srgb, var(--v-accent) 55%, transparent);
+  pointer-events: none;
+  animation: ring-ping 3.2s var(--v-ease) infinite;
+}
+
+@keyframes ring-ping {
+  0% { transform: scale(0.96); opacity: 0.85; }
+  70%, 100% { transform: scale(1.22); opacity: 0; }
 }
 
 .auth-brand h1 {
-  margin: 10px 0 4px;
-  font-size: 22px;
-  letter-spacing: 0.01em;
+  margin: 14px 0 5px;
+  font-family: var(--v-font-display);
+  font-size: 23px;
+  font-weight: 750;
+  letter-spacing: var(--v-title-tracking);
 }
 
 .auth-subtitle {
   margin: 0;
-  color: var(--el-text-color-secondary);
+  color: var(--v-text-2);
   font-size: 13px;
 }
 
@@ -169,8 +241,10 @@ async function submit() {
   margin-bottom: 18px;
 }
 
+/* ── 强度计 ─────────────────────────────────────────────────────── */
+
 .strength {
-  margin: 4px 0 20px;
+  margin: 2px 0 20px;
 }
 
 .strength-bars {
@@ -182,16 +256,25 @@ async function submit() {
   height: 6px;
   flex: 1;
   border-radius: 3px;
-  transition: background 0.2s ease;
+  transition: background var(--v-base) var(--v-ease), box-shadow var(--v-base) var(--v-ease);
 }
 
 .strength-label {
   display: inline-block;
   margin-top: 8px;
   font-size: 12px;
+  transition: color var(--v-base) var(--v-ease);
 }
 
 .auth-submit {
   width: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-card,
+  .auth-halo,
+  .auth-ring {
+    animation: none;
+  }
 }
 </style>

@@ -5,6 +5,7 @@ import { Connection, Delete, Edit, Key, Lock, Plus, Refresh, Timer, VideoPlay } 
 
 import { api } from '@/api'
 import CredentialTreePicker from '@/components/CredentialTreePicker.vue'
+import ThemePicker from '@/components/ThemePicker.vue'
 import { useAppStore } from '@/stores/app'
 import { useProxyStore } from '@/stores/proxy'
 import { useVaultStore } from '@/stores/vault'
@@ -606,6 +607,16 @@ onMounted(async () => {
       <div class="spacer" />
       <el-button :icon="Refresh" :loading="schedulesLoading" @click="loadSchedules">刷新</el-button>
     </div>
+
+    <el-card shadow="never">
+      <template #header><span>外观</span></template>
+
+      <div class="setting-info">
+        <div class="setting-label">界面主题</div>
+      </div>
+
+      <ThemePicker />
+    </el-card>
 
     <el-card shadow="never">
       <template #header><span>安全</span></template>

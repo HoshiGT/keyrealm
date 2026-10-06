@@ -131,6 +131,13 @@ watch(
 </script>
 
 <template>
+  <!-- 背景极光：三个缓慢漂移的光斑，纯装饰。内容层靠 #app 的 z-index 压在上面。 -->
+  <div class="v-aurora" aria-hidden="true">
+    <span class="blob b1" />
+    <span class="blob b2" />
+    <span class="blob b3" />
+  </div>
+
   <router-view />
 
   <el-dialog
@@ -157,75 +164,21 @@ watch(
 </template>
 
 <style>
-:root {
-  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-}
+/* 全局基座（html/body/#app、滚动条、.page、.page-toolbar、.text-muted）已移到
+   `src/styles/base.css`，那里按主题令牌统一控制。此处只留本组件独有的部分。
+   注意：本块是**非 scoped** 的全局样式。 */
 
-html,
-body,
-#app {
-  height: 100%;
-  margin: 0;
-  padding: 0;
-}
-
-body {
-  background: var(--el-bg-color-page);
-  color: var(--el-text-color-primary);
-  overflow: hidden;
-  -webkit-font-smoothing: antialiased;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--el-border-color-darker);
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.page {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.page-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.page-toolbar .spacer {
-  flex: 1;
-}
-
-.text-muted {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-}
-
+/* 关闭确认弹窗里的两段文案 */
 .close-ask {
   margin: 0 0 6px;
   font-size: 14px;
+  color: var(--v-text);
 }
 
 .close-hint {
   margin: 0 0 14px;
-  color: var(--el-text-color-secondary);
+  color: var(--v-text-2);
   font-size: 13px;
+  line-height: 1.6;
 }
 </style>

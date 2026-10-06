@@ -1,0 +1,75 @@
+/* ─────────────────────────────────────────────────────────────
+ * 主题 5 · obsidian —— 黑曜（深色）· 默认主题
+ * 近黑实底 + 细描边 + 青柠主色。高对比、锐利、无玻璃。终端/工程感。
+ * 参考：stylekit「暗黑模式 / Dark Mode」、Shadcn Landing（dark + green accents）、
+ *       Folex Lite（white/black + lime accents）。
+ *
+ * 裸 `:root` 是给「还没写上 data-theme」的兜底（首帧内联脚本执行前的一瞬）——
+ * 其余主题只声明 `:root[data-theme='<id>']`，靠更高的选择器优先级盖过这里。
+ * 换默认主题时，把裸 `:root` 挪到新默认的那份文件里即可。
+ * ───────────────────────────────────────────────────────────── */
+
+:root,
+:root[data-theme='obsidian'] {
+  color-scheme: dark;
+
+  --v-scheme: dark;
+
+  /* 品牌色 */
+  --v-primary: #a3e635;
+  --v-primary-ink: #09090b;
+  --v-accent: #4ade80;
+  --v-accent-2: #22d3ee;
+
+  /* 语义色 */
+  --v-success: #4ade80;
+  --v-warning: #facc15;
+  --v-danger: #f87171;
+  --v-info: #a1a1aa;
+
+  /* 背景层：实底，不透明 */
+  --v-bg: #09090b;
+  --v-bg-elevated: #131316;
+  --v-bg-overlay: #18181b;
+  --v-bg-sunken: #0f0f11;
+  --v-bg-hover: rgba(163, 230, 53, 0.1);
+
+  /* 文字 */
+  --v-text: #fafafa;
+  --v-text-2: #a1a1aa;
+  /* 原 #71717a 在 #09090b 上 4.12:1，略低于 AA；提到 5.51:1（--v-text-2 为 7.76:1）。 */
+  --v-text-3: #86868f;
+
+  /* 描边：这一主题的骨架，比别处更实 */
+  --v-border: #27272a;
+  --v-border-strong: #3f3f46;
+
+  /* 无毛玻璃——保留变量以免基座引用报空，但把模糊压到 0 */
+  --v-glass-bg: #131316;
+  --v-glass-border: #27272a;
+  --v-glass-blur: 0px;
+  --v-glass-saturate: 1;
+
+  --v-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.6);
+  --v-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.55);
+  --v-shadow-lg: 0 20px 48px -16px rgba(0, 0, 0, 0.9);
+  --v-glow: 0 0 0 1px rgba(163, 230, 53, 0.5), 0 0 22px -4px rgba(163, 230, 53, 0.45);
+
+  /* 圆角：小而利 */
+  --v-radius-sm: 6px;
+  --v-radius-md: 8px;
+  --v-radius-lg: 10px;
+  --v-radius-xl: 14px;
+
+  --v-grad-brand: linear-gradient(135deg, #a3e635 0%, #4ade80 50%, #22d3ee 100%);
+  --v-grad-brand-soft: linear-gradient(135deg, rgba(163, 230, 53, 0.16), rgba(34, 211, 238, 0.14));
+
+  /* 背景球：几乎不可见，只留一点点色温 */
+  --v-mesh-1: radial-gradient(closest-side, rgba(163, 230, 53, 0.16), transparent);
+  --v-mesh-2: radial-gradient(closest-side, rgba(34, 211, 238, 0.12), transparent);
+  --v-mesh-3: radial-gradient(closest-side, rgba(74, 222, 128, 0.1), transparent);
+  --v-mesh-opacity: 0.7;
+
+  --v-font-display: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --v-title-tracking: -0.02em;
+}
