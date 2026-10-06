@@ -14,33 +14,17 @@ export const useProxyStore = defineStore('proxy', {
     items: [],
     globalId: null,
     globalUrl: '',
-    loading: false,
     testing: false,
     testingId: null,      // 正在测哪个代理；null 且 testing=true 表示在测「全局当前生效的」
     result: null,
-    resultFor: null,      // 结果对应哪个 id（null = 全局）
   }),
-
-  getters: {
-    byId: (state) => (id) => state.items.find((item) => item.id === id) || null,
-    /** 供「使用代理」下拉用；值一律是代理 id */
-    options: (state) => state.items.map((item) => ({
-      label: `${item.name}（${item.url}）`,
-      value: item.id,
-    })),
-  },
 
   actions: {
     async fetch() {
-      this.loading = true
-      try {
-        const res = await api.listProxies()
-        this.items = (res && res.items) || []
-        this.globalId = (res && res.global_id) ?? null
-        this.globalUrl = (res && res.global_url) || ''
-      } finally {
-        this.loading = false
-      }
+      const res = await api.listProxies()
+      this.items = (res && res.items) || []
+      this.globalId = (res && res.global_id) ?? null
+      this.globalUrl = (res && res.global_url) || ''
       return this.items
     },
 
@@ -76,7 +60,6 @@ export const useProxyStore = defineStore('proxy', {
     async runTest(id = null) {
       this.testing = true
       this.testingId = id
-      this.resultFor = id
       this.result = null
       try {
         const res = await api.testProxyId(id)
@@ -90,7 +73,6 @@ export const useProxyStore = defineStore('proxy', {
 
     clearResult() {
       this.result = null
-      this.resultFor = null
     },
   },
 })

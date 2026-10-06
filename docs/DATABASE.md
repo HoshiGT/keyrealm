@@ -291,6 +291,7 @@ Agent 请求 Header: Authorization: Bearer cv_a3f2...
 ["vault_list_credentials", "vault_verify_credential", "vault_list_groups"]
 ```
 > 空数组 `[]` 表示继承全局 `mcp_permissions` 中所有已开启的工具。
+> 当前界面与 API 均未提供设置该字段的入口，实际恒为 `[]`（= 继承全局）；鉴权层保留该能力。
 
 ---
 
@@ -330,7 +331,7 @@ groups
 plugins (credential_type ←→ credentials.credential_type)
 
 mcp_permissions (tool_name)          ← 全局工具开关
-mcp_tokens (tools_allowed JSON)      ← Token 级范围，与 mcp_permissions 取交集
+mcp_tokens (tools_allowed JSON)      ← Token 级范围，与 mcp_permissions 取交集（无配置入口，恒为空）
 
 schedules (target_id → groups.id 或 NULL；credential_ids → 勾选的凭据 id 列表)
 ```

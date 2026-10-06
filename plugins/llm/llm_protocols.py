@@ -2,8 +2,7 @@
 
 不放最底层工具（那些在 llm_common.py），只放**协议级、跨厂商完全相同**的能力：
 
-- 校验探针：`probe_openai_models` / `probe_anthropic_models` /
-  `probe_openai_chat` / `probe_anthropic_chat`
+- 校验探针：`probe_openai_models` / `probe_anthropic_models` / `probe_openai_chat`
   （统一经 `_request_with_retry` 发请求：上游 5xx 退避重试，避免把偶发故障误判为失败）
 - 简单对话：`chat_completion`（openai / anthropic / gemini 三种协议）
 - 欠费探测：`quota_chat_probe`（通用实现）、`is_insufficient_balance`（关键字判定，
@@ -417,23 +416,6 @@ def probe_openai_chat(base_url: str, api_key: str, model: str,
         resp = _request_with_retry(
             client, "POST", url,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json=body,
-        )
-    return _interpret_chat(resp)
-
-
-def probe_anthropic_chat(base_url: str, api_key: str, model: str) -> VerifyResult:
-    """Anthropic 协议：POST {root}/v1/messages（可识别欠费）。"""
-    url = _anthropic_root(base_url) + "/v1/messages"
-    body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]}
-    with make_client() as client:
-        resp = _request_with_retry(
-            client, "POST", url,
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
             json=body,
         )
     return _interpret_chat(resp)

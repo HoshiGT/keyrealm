@@ -811,55 +811,63 @@ await window.pywebview.api.touch_activity()     // 前端有用户操作时上�
 
 ### `useVaultStore`（核心状态）
 
+> **解锁态不在本 store**：`unlocked` / `unlock()` / `setupMasterPassword()` 都在 `useAppStore`
+> （见下），本 store 只管凭据、分组、插件与批量验证。
+
 ```javascript
 {
   // 状态
-  isUnlocked: false,
   credentials: [],
   groups: [],
   plugins: [],
+  loadingCredentials: false,
   filters: { group_id: null, credential_type: null, credential_types: null, status: null, search: '' },
-  
+  batch: { running, done, total, currentName, status, ids, trigger, result },
+
   // 计算属性
-  filteredCredentials: [],
-  statusCounts: { total: 0, valid: 0, invalid: 0, unknown: 0 },
-  
+  enabledPlugins, pluginByType,        // 已启用插件 / 按 credential_type 索引
+  typeOptions, typeGroups,             // 「新建凭据」的类型下拉（按类别分组）
+  pluginTree,                          // 左侧目录树：类别节点 → 服务节点
+  groupOptions,                        // 分组下拉
+
   // 操作
-  unlock(password),
-  setupMasterPassword(password),
-  fetchCredentials(),
-  createCredential(data),
-  updateCredential(id, data),
-  deleteCredential(id),
-  verifyCredential(id),
-  batchVerify(scope),
-  fetchGroups(),
-  createGroup(data),
-  fetchPlugins(),           // 插件放入 plugins/ 目录即自动加载，无安装入口
-  checkDuplicateCredential(type, data),  // 创建前重复检测
+  fetchCredentials(), createCredential(payload), updateCredential(id, payload),
+  deleteCredential(id), verifyCredential(id),
+  batchVerify(scope, groupId, credentialType, credentialIds, concurrency, timeout),
+  fetchBatchOptions(),                 // 批量验证的并发/超时可选值（对话框回填）
+  fetchGroups(), createGroup(payload), updateGroup(id, payload), deleteGroup(id),
+  fetchPlugins(),                      // 插件放入 plugins/ 目录即自动加载，无安装入口
+  setPluginEnabled(type, enabled),
+  clear(),                             // 锁定时清空内存明文
+  // 后端事件 / 快照接回
+  upsertCredential(cred), applyCredentialUpdated(cred),
+  applyBatchStarted(detail), applyBatchProgress(detail), applyBatchDone(detail),
+  resumeBatchFromTasks(),
 }
 ```
+
+> 「创建前重复检测」是 `api.checkDuplicateCredential(type, data)`，由 `CredentialForm.vue`
+> **直接调用**（不进 store）。
 
 ### `useMcpStore`（MCP 设置）
 
 ```javascript
 {
-  // 服务状态
-  serverStatus: 'stopped',  // running | stopped | error
-  port: 8765,
-
-  // 全局工具权限
-  permissions: {},           // { tool_name: bool }
-
-  // 当前活跃 Token（全局唯一，默认即存在）
+  // 服务运行状态
+  status: { running: false, host: '127.0.0.1', port: 8765, active_tokens: 0, url: '' },
+  permissions: [],           // [{ tool_name, description, enabled }]
   token: null,               // { exists, id, token_prefix, created_at, last_used_at }
+  busy: false,               // 启动/停止进行中
+
+  // 计算属性
+  running, serverUrl, clientConfig,   // clientConfig() → 可直接粘进客户端的 JSON
 
   // 操作
-  fetchPermissions(),
-  setPermission(toolName, enabled),
-  fetchToken(),
-  rotateToken(),             // 作废旧 Token 并签发新的，返回明文（仅一次）
-  start() / stop(),
+  fetchStatus(), start(), stop(),
+  fetchPermissions(), setPermission(toolName, enabled),
+  fetchToken(), rotateToken(),        // 作废旧 Token 并签发新的（明文仅返回一次）
+  refreshAll(),
+  clear(), applyStatusEvent(detail),
 }
 ```
 
@@ -871,12 +879,7 @@ await window.pywebview.api.touch_activity()     // 前端有用户操作时上�
   bootstrapped: false,       // 是否已问过后端「有没有初始化过」
   initialized: false,        // 是否已设过主密码
   unlocked: false,           // 当前是否已解锁
-  bridgeError: '',
   tray: { mcp_running: false, mcp_port: 8765, active_tokens: 0, is_locked: true },
-
-  // 计算属性
-  ready,                     // bootstrapped && !bridgeError
-  locked,                    // initialized && !unlocked
 
   // 操作
   bootstrap(force),          // 读初始化/解锁状态（并发去重 + 结果缓存）
@@ -897,9 +900,8 @@ await window.pywebview.api.touch_activity()     // 前端有用户操作时上�
 
 ```javascript
 {
-  items: [], globalId: null, globalUrl: '', loading: false,
-  testing: false, testingId: null, result: null, resultFor: null,
-  // getters: byId(id), options
+  items: [], globalId: null, globalUrl: '',
+  testing: false, testingId: null, result: null,
   fetch(), create(name, url), update(id, name, url), remove(id), setGlobal(id),
   runTest(id = null),        // id = null 表示测「当前全局生效的那个」
   clearResult(),

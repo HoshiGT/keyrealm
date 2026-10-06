@@ -21,7 +21,6 @@
 import base64
 import binascii
 import os
-import time
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote
@@ -33,7 +32,6 @@ from backend.plugin_sdk import (
     VerifyResult,
     body_snippet,
     guarded,
-    log,
     make_client,
     safe_json,
     timeout,

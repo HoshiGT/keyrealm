@@ -31,7 +31,6 @@ export const useVaultStore = defineStore('vault', {
     groups: [],
     plugins: [],
     loadingCredentials: false,
-    loaded: false,
     filters: emptyFilters(),
     batch: emptyBatch(),
   }),
@@ -43,14 +42,6 @@ export const useVaultStore = defineStore('vault', {
       const map = {}
       state.plugins.forEach((plugin) => {
         map[plugin.credential_type] = plugin
-      })
-      return map
-    },
-
-    groupById: (state) => {
-      const map = {}
-      state.groups.forEach((group) => {
-        map[group.id] = group
       })
       return map
     },
@@ -120,15 +111,6 @@ export const useVaultStore = defineStore('vault', {
 
     groupOptions: (state) =>
       state.groups.map((group) => ({ label: group.name, value: group.id })),
-
-    statusCounts: (state) => {
-      const counts = { total: state.credentials.length, valid: 0, invalid: 0, error: 0, unknown: 0 }
-      state.credentials.forEach((credential) => {
-        if (counts[credential.status] === undefined) counts.unknown += 1
-        else counts[credential.status] += 1
-      })
-      return counts
-    },
   },
 
   actions: {
@@ -136,7 +118,6 @@ export const useVaultStore = defineStore('vault', {
       this.credentials = []
       this.groups = []
       this.plugins = []
-      this.loaded = false
       this.filters = emptyFilters()
       this.batch = emptyBatch()
     },
@@ -147,7 +128,6 @@ export const useVaultStore = defineStore('vault', {
       try {
         const items = await api.listCredentials(this.filters)
         this.credentials = Array.isArray(items) ? items : []
-        this.loaded = true
       } finally {
         this.loadingCredentials = false
       }

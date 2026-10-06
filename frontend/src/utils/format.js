@@ -52,14 +52,6 @@ export function formatRelative(value, fallback = '从未') {
   return formatDateTime(date)
 }
 
-/** 12.4 ms / 1.2 s */
-export function formatDuration(ms) {
-  const value = Number(ms)
-  if (!Number.isFinite(value) || value <= 0) return '—'
-  if (value < 1000) return `${Math.round(value)} ms`
-  return `${(value / 1000).toFixed(1)} s`
-}
-
 const STATUS_TEXT = {
   valid: '有效',
   invalid: '失效',

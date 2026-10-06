@@ -597,13 +597,6 @@ def touch_token(token_hash: str):
         conn.commit()
 
 
-def revoke_mcp_token(token_id: int):
-    with _lock:
-        conn = get_conn()
-        conn.execute("UPDATE mcp_tokens SET revoked=1, revoked_at=? WHERE id=?", (_now(), token_id))
-        conn.commit()
-
-
 def revoke_active_mcp_tokens() -> int:
     """撤销所有活跃 Token（轮换用，保证全局至多一个活跃 Token）。返回撤销数量。"""
     with _lock:
@@ -613,16 +606,6 @@ def revoke_active_mcp_tokens() -> int:
         )
         conn.commit()
     return cur.rowcount or 0
-
-
-def update_token_scope(token_id: int, tools_allowed: list[str]):
-    with _lock:
-        conn = get_conn()
-        conn.execute(
-            "UPDATE mcp_tokens SET tools_allowed=? WHERE id=?",
-            (json.dumps(tools_allowed, ensure_ascii=False), token_id),
-        )
-        conn.commit()
 
 
 def count_active_tokens() -> int:

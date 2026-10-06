@@ -28,7 +28,6 @@ from . import vault_proxy_ctx as ctx
 KEY_MODE = "_proxy_mode"
 KEY_ID = "_proxy_id"
 
-MODE_GLOBAL = "global"
 MODE_PROXY = "proxy"
 MODE_DIRECT = "direct"
 

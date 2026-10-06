@@ -548,7 +548,13 @@ def validate_credential(credential_type: str, data: dict) -> list[str]:
 
 
 def get_display_summary(credential_type: str, data: dict) -> str:
-    """调用插件获取显示摘要"""
+    """调用插件获取显示摘要。
+
+    **预留接口，当前未接线**：列表「附加信息」列渲染的是 ``status_detail.account_info``
+    （见 frontend/src/views/Credentials.vue 的 ``extraInfo()``），没有任何生产路径调用本函数；
+    调用者仅 tests/test_plugin_state.py（验证「插件未实现该可选方法时返回空串」）。
+    保留是因为它属插件可选契约（见 backend/plugin_sdk.py 的接口表），删掉会破坏契约面。
+    """
     module = get_module(credential_type)
     if module is None:
         return ""

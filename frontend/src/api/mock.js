@@ -220,7 +220,6 @@ function createState() {
     logLevel: 'INFO',
     closeAction: 'ask',
     autoLockMinutes: 0,
-    proxy: '',
     logs: [
       { level: 'INFO', text: logLine('INFO', 'main', '应用启动（frozen=False，日志级别=INFO，数据目录=…）', minutesDate(32)) },
       { level: 'DEBUG', text: logLine('DEBUG', 'backend.scheduler', '调度器已启动，加载 2 个计划', minutesDate(32)) },
@@ -740,22 +739,6 @@ export function createMockApi() {
 
     async touch_activity() {
       return { ok: true }
-    },
-
-    // ── 验证代理 ──────────────────────────────────────────
-    async get_proxy() {
-      await delay(40)
-      return { proxy: state.proxy || '' }
-    },
-
-    async set_proxy(proxy) {
-      await delay(60)
-      const value = String(proxy || '').trim()
-      if (value && !value.includes('://')) {
-        return { ok: false, message: '代理地址需带协议前缀，如 socks5://127.0.0.1:10808' }
-      }
-      state.proxy = value
-      return { ok: true, proxy: value, effective: value }
     },
 
     // ── 简易操作（插件可选能力）────────────────────────────

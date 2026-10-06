@@ -149,34 +149,32 @@ def test_token_create_hash_lookup():
     assert found is not None
     assert found["name"] == "test-perm"
     assert found["token_prefix"] == plaintext[:8]
-
-    db.revoke_mcp_token(record["id"])
+    assert found["id"] == record["id"]
 
 
 def test_revoked_token_rejected():
     """撤销后 get_token_by_hash 应返回 None"""
     plaintext = crypto.generate_token()
     token_hash = crypto.hash_token(plaintext)
-    record = db.create_mcp_token(name="test-revoke", token_hash=token_hash,
-                                 token_prefix=plaintext[:8], tools_allowed=[])
-    db.revoke_mcp_token(record["id"])
+    db.create_mcp_token(name="test-revoke", token_hash=token_hash,
+                        token_prefix=plaintext[:8], tools_allowed=[])
+    assert db.get_token_by_hash(token_hash) is not None
+    # 全量撤销（轮换用的同一入口；teardown 也走它）
+    db.revoke_active_mcp_tokens()
     assert db.get_token_by_hash(token_hash) is None
 
 
-def test_token_scope_update():
-    """更新 Token 工具范围后，权限检查使用新范围"""
+def test_token_scope_honored_by_permission_check():
+    """Token 自带工具范围时，权限检查按该范围放行/拒绝"""
     plaintext = crypto.generate_token()
     token_hash = crypto.hash_token(plaintext)
-    record = db.create_mcp_token(name="test-scope", token_hash=token_hash,
-                                 token_prefix=plaintext[:8], tools_allowed=[])
-    db.update_token_scope(record["id"], ["vault_list_groups"])
+    db.create_mcp_token(name="test-scope", token_hash=token_hash,
+                        token_prefix=plaintext[:8], tools_allowed=["vault_list_groups"])
 
     found = db.get_token_by_hash(token_hash)
     assert found["tools_allowed"] == ["vault_list_groups"]
     assert _check_permission("vault_list_groups", found)
     assert not _check_permission("vault_list_credentials", found)
-
-    db.revoke_mcp_token(record["id"])
 
 
 if __name__ == "__main__":

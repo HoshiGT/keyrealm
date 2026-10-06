@@ -14,7 +14,6 @@ export const useAppStore = defineStore('app', {
     bootstrapped: false,
     initialized: false,
     unlocked: false,
-    bridgeError: '',
     tray: {
       mcp_running: false,
       mcp_port: 8765,
@@ -22,11 +21,6 @@ export const useAppStore = defineStore('app', {
       is_locked: true,
     },
   }),
-
-  getters: {
-    ready: (state) => state.bootstrapped && !state.bridgeError,
-    locked: (state) => state.initialized && !state.unlocked,
-  },
 
   actions: {
     /** 读取初始化/解锁状态。可安全重复调用（并发去重 + 结果缓存）。 */
@@ -44,11 +38,9 @@ export const useAppStore = defineStore('app', {
           } else {
             this.unlocked = false
           }
-          this.bridgeError = ''
-        } catch (err) {
+        } catch {
           this.initialized = false
           this.unlocked = false
-          this.bridgeError = err && err.message ? err.message : '无法连接后端服务'
         } finally {
           this.bootstrapped = true
         }
@@ -66,7 +58,6 @@ export const useAppStore = defineStore('app', {
       const result = await api.setupMasterPassword(password)
       this.initialized = true
       this.unlocked = true
-      this.bridgeError = ''
       await this.refreshTray()
       return result
     },

@@ -1161,7 +1161,6 @@ def _run_download_prefix(
         return {"ok": False, "error": "缺少前缀（文件夹），请在表单里填写，或从对象列表行内点击「打包下载」进入"}
 
     bucket = target["bucket"]
-    region = target["region"]
     endpoint = target["endpoint"]
 
     with make_client() as client:

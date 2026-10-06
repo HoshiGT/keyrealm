@@ -23,8 +23,6 @@ import hashlib
 import hmac
 import xml.etree.ElementTree as ET
 
-import httpx
-
 from backend.plugin_sdk import (
     VerifyResult,
     body_snippet,

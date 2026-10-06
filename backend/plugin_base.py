@@ -217,7 +217,11 @@ def call_validate(module: Any, data: dict) -> list[str]:
 
 
 def call_display_summary(module: Any, data: dict) -> str:
-    """调用插件的可选 get_display_summary 函数"""
+    """调用插件的可选 get_display_summary 函数。
+
+    **预留接口，当前未接线**：生产路径无人调用（列表「附加信息」列走 ``status_detail.account_info``），
+    仅作为插件可选契约保留，详见 ``plugin_manager.get_display_summary``。
+    """
     if not hasattr(module, "get_display_summary"):
         return ""
     try:

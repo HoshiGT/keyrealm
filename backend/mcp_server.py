@@ -20,7 +20,7 @@ from starlette.responses import JSONResponse
 from . import backup
 from . import database as db
 from . import plugin_manager
-from .crypto import decrypt_dict, encrypt_dict, hash_token
+from .crypto import decrypt_dict, hash_token
 
 # 由 api.py 注入
 _get_key_cb = None

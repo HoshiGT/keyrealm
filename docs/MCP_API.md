@@ -8,7 +8,7 @@
 | 默认地址 | `http://localhost:8765/sse` |
 | 随应用启动 | 否（在「MCP 设置」页手动启动；启动后窗口最小化到托盘仍持续运行） |
 | 鉴权方式 | Bearer Token（必须） |
-| 权限控制 | 双层：全局工具开关 + Token 级 tools_allowed |
+| 权限控制 | 全局工具开关（界面唯一入口）；鉴权层另保留 Token 级 `tools_allowed` 子集，当前无配置入口 |
 
 ---
 
@@ -276,8 +276,8 @@ claude mcp add credential-vault \
 
 批量验证，异步执行，立即返回任务 ID。
 
-> 声明 `batch_verify: false` 的凭据类型（无法自动化验证或有写副作用，如 `dns_duckdns`、
-> `im_wechat_ilink`、`exchange_ht`）会被自动跳过，不计入本次验证范围。
+> 声明 `batch_verify: false` 的凭据类型（无法自动化验证或有写副作用，如 `sms_gateway`、
+> `dns_duckdns`、`im_telegram_apihash`）会被自动跳过，不计入本次验证范围。
 
 ```json
 // 入参
@@ -411,11 +411,12 @@ claude mcp add credential-vault \
 ```
 工具调用请求
     │
-    ▼ 第一层：Token.tools_allowed（Token 级范围）
-    │   空数组 [] = 继承全局；非空 = 只允许列表内工具
-    │
-    ▼ 第二层：mcp_permissions 表（全局工具开关）
+    ▼ 第一层：mcp_permissions 表（全局工具开关）
     │   enabled=0 → 拒绝，无论 Token 如何配置
+    │
+    ▼ 第二层：Token.tools_allowed（Token 级范围）
+    │   空数组 [] = 继承全局；非空 = 只允许列表内工具
+    │   鉴权层保留该能力，但界面与 API 均无配置入口，现网恒为空 = 继承全局
     │
     ▼ 两层均通过 → 执行工具
 ```
@@ -437,7 +438,7 @@ claude mcp add credential-vault \
 // 全局工具未开启
 {"error": "permission_denied", "message": "工具 vault_create_credential 全局未启用，请在 MCP 设置中开启"}
 
-// Token 范围不含该工具
+// Token 范围不含该工具（鉴权层保留该分支；当前无配置入口，正常不会出现）
 {"error": "permission_denied", "message": "当前 Token 无权调用 vault_create_credential"}
 ```
 

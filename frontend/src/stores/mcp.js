@@ -6,7 +6,6 @@ export const useMcpStore = defineStore('mcp', {
     status: { running: false, host: '127.0.0.1', port: 8765, active_tokens: 0, url: '' },
     permissions: [],
     token: null,
-    loading: false,
     busy: false,
   }),
 
@@ -15,16 +14,6 @@ export const useMcpStore = defineStore('mcp', {
     serverUrl: (state) =>
       state.status.url ||
       `http://${state.status.host || '127.0.0.1'}:${state.status.port || 8765}/sse`,
-    toolOptions: (state) =>
-      state.permissions.map((permission) => ({
-        label: permission.tool_name,
-        value: permission.tool_name,
-        description: permission.description,
-      })),
-    toolDescription: (state) => (toolName) => {
-      const found = state.permissions.find((item) => item.tool_name === toolName)
-      return found ? found.description : ''
-    },
     clientConfig: (state) => () =>
       JSON.stringify(
         {
@@ -97,13 +86,8 @@ export const useMcpStore = defineStore('mcp', {
     },
 
     async fetchToken() {
-      this.loading = true
-      try {
-        const result = await api.getMcpToken()
-        this.token = result && result.exists ? result : null
-      } finally {
-        this.loading = false
-      }
+      const result = await api.getMcpToken()
+      this.token = result && result.exists ? result : null
       return this.token
     },
 

@@ -500,9 +500,9 @@ class TunneledSMTP_SSL(smtplib.SMTP_SSL):  # SMTPS
   不许写进 `manifest.json` 的 `description` 或任何字段的 label/hint/placeholder，不许出现在
   `verify()` / `get_display_summary()` 返回的 message 里，也不许写进 `actions` 文案 ——
   凡是前端会渲染出来的地方都不能有它。
-  > 校验脚本 `tmp/smoke_optin_contract.py` 按「**只在 docstring 出现、正文里找不到**的 URL」
-  > 判定参考链接；正文里也出现的那些是端点/默认值常量（如 ``DEFAULT_HOMESERVER``），
-  > 它们在 manifest 里当 `default` / `placeholder` 渲染是功能性的，不算外泄。
+  > 判定口径：**只在 docstring 出现、正文里找不到**的 URL 才算参考链接；正文里也出现的那些是
+  > 端点/默认值常量（如 ``DEFAULT_HOMESERVER``），它们在 manifest 里当 `default` / `placeholder`
+  > 渲染是功能性的，不算外泄。
 
 ```python
 """MyVendor 验证插件（plugins/llm/my_vendor/，自包含实现）。

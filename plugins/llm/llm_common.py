@@ -102,14 +102,3 @@ def make_quota_probe(default_base_url, protocol="openai"):
         return quota_chat_probe(base_url, api_key, proto, probe_model(data))
 
     return quota_probe
-
-
-def quota_probe(data: dict) -> Optional[dict]:
-    """子插件可选实现：余额拿不到时发一次最小对话请求判断欠费。
-
-    通用协议用 ``quota_probe = make_quota_probe(DEFAULT_BASE_URL, "<对话协议>")`` 一行接入；
-    **鉴权/端点非通用格式的插件**（如百度文心）按上方契约自行实现，复用
-    ``probe_requested`` / ``probe_model`` / ``quota_ok`` / ``quota_insufficient``。
-    未导出该函数时后端跳过此检查。
-    """
-    return None

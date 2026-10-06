@@ -163,20 +163,6 @@ def _tc3_authorization(
     )
 
 
-def _tencent_authorization(
-    secret_id: str,
-    secret_key: str,
-    timestamp: int,
-    date: str,
-    payload: str,
-    content_type: str,
-) -> str:
-    """生成 STS 的 TC3-HMAC-SHA256 Authorization 头（保持原有调用点签名不变）。"""
-    return _tc3_authorization(
-        secret_id, secret_key, STS_HOST, STS_SERVICE, timestamp, date, payload, content_type
-    )
-
-
 def _tc3_call(
     client,
     host: str,

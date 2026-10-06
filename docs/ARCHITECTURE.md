@@ -589,8 +589,8 @@ AI Agent（Claude Desktop / Cursor）
 | 内存中密钥泄露 | 密钥仅存于进程内存，不写文件；托盘"锁定"可主动清除 |
 | 无人值守时密钥常驻 | 「空闲自动锁定」按 `auto_lock_minutes` 在无操作一段时间后自动清除内存密钥（[§2.8](ARCHITECTURE.md)） |
 | MCP 未授权访问 | Bearer Token 鉴权，Token 哈希存储，支持吊销和过期时间 |
-| MCP Token 泄露 | 每个 Token 可单独限定工具范围；吊销后立即失效；记录 last_used_at 便于审计 |
-| MCP 工具越权 | 双层权限：全局工具开关 + Token 级 tools_allowed，取交集 |
+| MCP Token 泄露 | 吊销 / 过期后立即失效；记录 last_used_at 便于审计 |
+| MCP 工具越权 | 双层权限取交集：全局工具开关（`mcp_permissions`，界面唯一入口）+ Token 级 `tools_allowed`（鉴权层保留，当前无配置入口，空值即继承全局） |
 | 插件恶意代码 | 插件在独立命名空间加载，文档中明确信任边界 |
 | 验证请求泄露 Key | 验证逻辑由插件实现，Key 仅发送给对应厂商 API |
 | 后台运行时窗口未锁 | 托盘菜单提供"锁定"操作，清除内存密钥，需重新输入主密码 |

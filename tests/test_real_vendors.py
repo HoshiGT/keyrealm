@@ -39,13 +39,17 @@ for _category in _CATEGORIES:
         sys.path.insert(0, _cat_dir)
 
 
-def plugin_path_for(vendor: str) -> str:
-    """vendor 名即子插件目录名，跨所有类别查找 plugins/<类别>/<vendor>/plugin.py。"""
+def plugin_path_for(vendor: str) -> str | None:
+    """vendor 名即子插件目录名，跨所有类别查找 plugins/<类别>/<vendor>/plugin.py。
+
+    找不到返回 ``None`` —— real_keys.json 是长期累积的样本库，常留着已删除/改名的厂商条目，
+    不该让整个测试因此崩掉（由调用方告警并跳过）。
+    """
     for category in _CATEGORIES:
         path = os.path.join(PLUGINS_DIR, category, vendor, "plugin.py")
         if os.path.exists(path):
             return path
-    raise KeyError(f"未找到厂商 {vendor} 对应的子插件目录")
+    return None
 
 
 def load_plugin(name: str, path: str):
@@ -57,14 +61,24 @@ def load_plugin(name: str, path: str):
     return mod
 
 
-def load_plugins(items) -> dict:
-    """按 real_keys 中出现的 vendor 加载对应子插件，vendor -> module。"""
-    plugins = {}
+def load_plugins(items) -> tuple[dict, list[str]]:
+    """按 real_keys 中出现的 vendor 加载对应子插件。
+
+    返回 ``(vendor -> module, 缺失插件的 vendor 列表)``；缺失的 vendor 只记录并跳过，
+    不抛 KeyError（见 ``plugin_path_for``）。
+    """
+    plugins: dict = {}
+    missing: list[str] = []
     for item in items:
         vendor = item["vendor"]
-        if vendor not in plugins:
-            plugins[vendor] = load_plugin(vendor, plugin_path_for(vendor))
-    return plugins
+        if vendor in plugins or vendor in missing:
+            continue
+        path = plugin_path_for(vendor)
+        if path is None:
+            missing.append(vendor)
+            continue
+        plugins[vendor] = load_plugin(vendor, path)
+    return plugins, missing
 
 
 def mask(key: str) -> str:
@@ -126,15 +140,23 @@ def main() -> None:
     skipped = [it for it in items if it.get("expected") == "skip"]
     active = [it for it in items if it.get("expected") != "skip"]
 
-    plugins = load_plugins(active)
-    print(f"共 {len(items)} 个真实 Key（{len(plugins)} 个子插件），"
-          f"{len(active)} 条验证、{len(skipped)} 条跳过…\n")
+    plugins, missing = load_plugins(active)
+    # 插件目录缺失（厂商已删除/改名）的条目：只列出并跳过，不进验证
+    missing_set = set(missing)
+    dropped = [it for it in active if it["vendor"] in missing_set]
+    active = [it for it in active if it["vendor"] not in missing_set]
 
-    stats = {"PASS": 0, "FAIL": 0, "NETERR": 0, "SKIP": len(skipped)}
+    extra = f"、{len(dropped)} 条插件缺失" if dropped else ""
+    print(f"共 {len(items)} 个真实 Key（{len(plugins)} 个子插件），"
+          f"{len(active)} 条验证、{len(skipped)} 条跳过{extra}…\n")
+
+    stats = {"PASS": 0, "FAIL": 0, "NETERR": 0, "SKIP": len(skipped) + len(dropped)}
     failures = []
 
     for it in skipped:
         print(f"[{'SKIP':6s}] {it['vendor']:<22s} -> 跳过：{it.get('note', '')}")
+    for it in dropped:
+        print(f"[{'SKIP':6s}] {it['vendor']:<22s} -> 跳过：未找到对应插件目录")
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = [pool.submit(verify_one, plugins, item) for item in active]
