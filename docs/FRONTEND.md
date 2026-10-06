@@ -92,6 +92,14 @@ Chromium 只要 `backdrop-filter` 的计算值不是 `none`，就会给元素建
 即便看不出变化，GPU 和 CPU 也一直有开销。判定标准很简单——**信息量为零的常驻闪动不要加**。
 连带的另一条：静态元素不写 `will-change`（不动的元素没必要常驻提升合成层）。
 
+**浮层（popper）的进场动画只允许动 `opacity`。** Element Plus 的 popper 默认开
+`gpuAcceleration`，定位结果写在内联 `transform: translate3d(x, y, 0)` 上；而 **CSS 动画声明的
+优先级高于内联样式**，动画里只要出现 `transform`，动画期间就会顶掉真实坐标——现象是提示框先在
+窗口左上角画一帧、再「闪」回正确位置。`translate` / `scale` 独立属性同样不能用（会污染 popper
+自身的 rect 测量）。所以 `.el-popper` 统一用只做透明度的 `v-pop-fade`（`base.css`），
+以后新增带 `transform` 动画的浮层规则会被这条约定挡下。全仓只有这一条全局 popper 动画，
+其余 `transform` 动画都在非浮层元素上，不受影响。
+
 ### 明暗切换
 
 Element Plus 的暗色模式靠 `<html class="dark">` 触发（其 `theme-chalk/dark/css-vars.css`

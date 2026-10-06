@@ -756,7 +756,13 @@ html.dark :is(
   backdrop-filter: blur(14px) saturate(1.5);
   box-shadow: var(--v-shadow-lg);
   color: var(--v-text);
-  animation: v-pop-in var(--v-base) var(--v-spring);
+  /* ⚠ 这里只允许动 opacity。
+     Element Plus 的 popper 默认开 gpuAcceleration，位置写在内联
+     `transform: translate3d(x, y, 0)` 上；而 CSS 动画声明的优先级高于内联样式，
+     动画一旦包含 transform，就会在动画期间顶掉真实坐标 —— 表现为提示框先在
+     左上角弹出、再闪回正确位置。translate/scale 独立属性同样不能用（会污染
+     popper 自身的 rect 测量）。要「弹出感」请只做透明度。 */
+  animation: v-pop-fade var(--v-base) var(--v-spring);
 }
 
 .el-popper.is-light .el-popper__arrow::before,
@@ -919,6 +925,14 @@ html.dark :is(
   100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+/* popper 专用：**只有 opacity**。别往这里加 transform —— 原因见 .el-popper 规则内的注释。
+   单列一个关键帧而不是复用 v-fade-in，是为了防止后人给 v-fade-in 加位移动画时
+   悄悄把提示框闪回的问题带回来。 */
+@keyframes v-pop-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 @keyframes v-msg-in {
   0% { opacity: 0; transform: translateY(-14px) scale(0.94); }
   100% { opacity: 1; transform: translateY(0) scale(1); }
@@ -942,7 +956,10 @@ html.dark :is(
 /* ── 14. 无障碍：尊重「减少动态效果」 ──────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
-  .layout-main > * {
+  .layout-main > *,
+  .el-popper,
+  .el-dialog,
+  .el-message-box {
     animation: none !important;
   }
 
