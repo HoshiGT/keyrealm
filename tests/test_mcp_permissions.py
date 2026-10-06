@@ -177,6 +177,41 @@ def test_token_scope_honored_by_permission_check():
     assert not _check_permission("vault_list_credentials", found)
 
 
+# ── 种子同步规则（description 跟随源码默认，enabled 归用户） ──────
+
+def test_seed_refreshes_description_but_keeps_enabled():
+    """启动种子：已有工具的描述被源码默认值刷新，但用户的 enabled 开关不被覆盖。
+
+    复现「老库描述追不上源码」的场景：把描述改成过期文案、开关反转，
+    跑一次 db.init_db()（等价一次启动），应只见描述被刷回默认、enabled 原样。
+    """
+    tool = "vault_get_credential"
+    orig = next(p for p in db.list_mcp_permissions() if p["tool_name"] == tool)
+    orig_desc, orig_enabled = orig["description"], orig["enabled"]
+    stale = "过期文案（掩码）"
+    try:
+        conn = db.get_conn()
+        conn.execute(
+            "UPDATE mcp_permissions SET description=?, enabled=? WHERE tool_name=?",
+            (stale, 1 - int(orig_enabled), tool),
+        )
+        conn.commit()
+
+        db.init_db()  # 复刻一次启动
+
+        row = next(p for p in db.list_mcp_permissions() if p["tool_name"] == tool)
+        assert row["description"] == orig_desc, f"描述未被刷新: {row['description']!r}"
+        assert row["description"] != stale
+        assert row["enabled"] == 1 - int(orig_enabled), "enabled 被种子覆盖（应保留用户开关）"
+    finally:
+        conn = db.get_conn()
+        conn.execute(
+            "UPDATE mcp_permissions SET description=?, enabled=? WHERE tool_name=?",
+            (orig_desc, orig_enabled, tool),
+        )
+        conn.commit()
+
+
 if __name__ == "__main__":
     setup_module()
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

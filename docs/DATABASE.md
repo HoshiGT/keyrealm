@@ -245,6 +245,10 @@ CREATE TABLE mcp_permissions (
 | `vault_export_backup` | ❌ 关 | 导出备份（高危；`encrypted=false` 会把密钥明文写出） |
 | `vault_import_backup` | ❌ 关 | 导入备份（高危：会合并凭据、可能覆盖偏好设置） |
 
+> **启动时的同步规则**（`database._seed_mcp_permissions`）：每次启动按上表校准本表 ——
+> 新工具插入、已下线的工具删除；**已存在工具的 `description` 会同步为源码默认值**
+> （改了文案的老库下次启动即自动追上），但 **`enabled` 不动**，始终以用户在 MCP 设置页的开关为准。
+
 ---
 
 ### mcp_tokens — MCP 访问令牌

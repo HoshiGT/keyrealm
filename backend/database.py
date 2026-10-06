@@ -246,12 +246,24 @@ def _seed_mcp_permissions(conn: sqlite3.Connection):
         ("vault_export_backup",     0, "导出备份（触及整库数据，高危；encrypted=false 会写出明文密钥）"),
         ("vault_import_backup",     0, "导入备份（合并入库，高危：会新增凭据、可能覆盖偏好设置）"),
     ]
+    # 以 defaults 为准，但**只对「描述」**：
+    #   · 新工具   → 插入默认 enabled + 描述；
+    #   · 已有工具 → **保留用户设的 enabled**（开关是用户资产，不能被每次启动重置），
+    #                仅把 description 同步成源码默认值，让改了文案的旧库能追上。
+    #                WHERE 保证文案真的不同时才写、才 bump updated_at。
     for tool, enabled, desc in defaults:
         conn.execute(
-            "INSERT OR IGNORE INTO mcp_permissions (tool_name, enabled, description) VALUES (?,?,?)",
+            """
+            INSERT INTO mcp_permissions (tool_name, enabled, description)
+            VALUES (?,?,?)
+            ON CONFLICT(tool_name) DO UPDATE SET
+                description = excluded.description,
+                updated_at  = CURRENT_TIMESTAMP
+            WHERE mcp_permissions.description IS NOT excluded.description
+            """,
             (tool, enabled, desc),
         )
-    # 权限表以 defaults 为准：清理已不存在的工具记录
+    # 清理已不存在的工具记录
     placeholders = ",".join("?" for _ in defaults)
     conn.execute(
         f"DELETE FROM mcp_permissions WHERE tool_name NOT IN ({placeholders})",
