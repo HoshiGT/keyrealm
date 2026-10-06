@@ -349,7 +349,7 @@ claude mcp add credential-vault \
 其凭据仍可读写）。
 
 ```json
-// 出参（裸数组；下列为节选，实际是 plugins 表整行 + 三个附加字段）
+// 出参（裸数组；下列为节选，实际是 plugins 表整行 + 若干附加字段）
 [
   {
     "id": 3,
@@ -368,7 +368,9 @@ claude mcp add credential-vault \
     "fields_schema": [{"key": "api_key", "label": "API Key", "sensitive": true, "...": "..."}],
     "credential_count": 8,      // 附加字段
     "category_icon": "🤖",       // 附加字段
-    "rel_path": "llm/openai"    // 附加字段
+    "rel_path": "llm/openai",   // 附加字段
+    "icon_image": "data:...",   // 附加字段：icon 是图片文件名时读成 data URL，否则 null
+    "icon_lift": false          // 附加字段：深色主题下该 logo 要不要垫浅色底（判据见 backend/icon_ink.py）
   }
 ]
 ```

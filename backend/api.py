@@ -474,6 +474,9 @@ def list_plugins() -> list:
     plugins = plugin_manager.list_installed_plugins()
     for record in plugins:
         record["icon_image"] = plugin_manager.get_icon_image(record)
+        # 深色主题下这个 logo 要不要垫浅色底（判据见 plugin_manager.icon_needs_lift）。
+        # 前端只给 icon_lift 为真的那些加 .icon-lift —— 彩色标垫了就是一圈白框。
+        record["icon_lift"] = plugin_manager.icon_needs_lift(record)
         record["batch_verify"] = bool(record.get("batch_verify", 1))
         record["enabled"] = bool(record.get("enabled", 1))
         record["has_actions"] = plugin_manager.has_actions(record["credential_type"])

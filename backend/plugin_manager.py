@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import database as db
+from . import icon_ink
 from . import logger
 from . import proxy_store
 from . import redact
@@ -81,6 +82,10 @@ _ICON_IMAGE_MIME = {
     ".gif": "image/gif",
 }
 _icon_image_cache: dict[str, Optional[str]] = {}
+
+# 深色主题下「这个 logo 要不要垫浅色底」的缓存（credential_type -> bool），
+# 与 _icon_image_cache 同生命周期：同一个 logo 只分析一次，清缓存只在扫描插件时。
+_icon_lift_cache: dict[str, bool] = {}
 
 # 类别目录 category.json 的 icon 缓存（category_folder -> icon）
 _category_icon_cache: dict[str, Optional[str]] = {}
@@ -195,30 +200,62 @@ def _plugin_rel_path(plugin_path: str) -> str:
         return Path(plugin_path).name
 
 
+def _icon_path(record: dict) -> Optional[Path]:
+    """manifest 的 icon 指向的插件目录内图片文件；不是图片文件名（如 emoji）则 None。
+
+    防目录穿越：图标文件必须位于插件目录内。
+    """
+    icon = (record.get("icon") or "").strip()
+    if not icon or Path(icon).suffix.lower() not in _ICON_IMAGE_MIME:
+        return None
+    try:
+        plugin_dir = Path(record["plugin_path"]).resolve()
+        path = (plugin_dir / icon).resolve()
+    except Exception:  # noqa: BLE001 —— 路径不可解析，等同「没有图标」
+        return None
+    return path if path.is_relative_to(plugin_dir) and path.is_file() else None
+
+
 def get_icon_image(record: dict) -> Optional[str]:
     """插件自定义图标：manifest 的 icon 为插件目录内图片文件时读取为 data URL。
 
     icon 不是图片文件名（如 emoji）时返回 None，前端回退到默认展示。
     """
-    icon = (record.get("icon") or "").strip()
-    ext = Path(icon).suffix.lower()
-    if not icon or ext not in _ICON_IMAGE_MIME:
-        return None
+    ext = Path((record.get("icon") or "").strip()).suffix.lower()
     ct = record.get("credential_type", "")
     if ct in _icon_image_cache:
         return _icon_image_cache[ct]
     result: Optional[str] = None
-    try:
-        plugin_dir = Path(record["plugin_path"]).resolve()
-        path = (plugin_dir / icon).resolve()
-        # 防目录穿越：图标文件必须位于插件目录内
-        if path.is_relative_to(plugin_dir) and path.is_file():
+    path = _icon_path(record)
+    if path is not None:
+        try:
             b64 = base64.b64encode(path.read_bytes()).decode()
             result = f"data:{_ICON_IMAGE_MIME[ext]};base64,{b64}"
-    except Exception as e:
-        _log.warning("插件图标读取失败 %s: %s", ct, e)
+        except Exception as e:
+            _log.warning("插件图标读取失败 %s: %s", ct, e)
     _icon_image_cache[ct] = result
     return result
+
+
+def icon_needs_lift(record: dict) -> bool:
+    """该插件 logo 在深色主题下要不要垫一层浅色底（判据见 icon_ink 模块）。
+
+    icon 不是图片文件名（emoji 等）时恒为 False —— 那种情况前端根本不走 <img>。
+    分析失败时返回 True：垫了只是不好看，不垫就直接看不见。
+    """
+    ct = record.get("credential_type", "")
+    if ct in _icon_lift_cache:
+        return _icon_lift_cache[ct]
+    need = False
+    path = _icon_path(record)
+    if path is not None:
+        try:
+            need = icon_ink.needs_lift(path)
+        except Exception as e:
+            _log.warning("插件图标可见度分析失败（按需要垫底处理） %s: %s", ct, e)
+            need = True
+    _icon_lift_cache[ct] = need
+    return need
 
 
 def _scan_plugin_dirs() -> list[tuple[Path, str, dict]]:
@@ -274,6 +311,7 @@ def sync_plugins():
     **只读镜像**，不参与任何功能判定（真正的闸门是 get_module）。
     """
     _icon_image_cache.clear()
+    _icon_lift_cache.clear()
     _category_icon_cache.clear()
     disabled = _read_disabled()
     found: set[str] = set()

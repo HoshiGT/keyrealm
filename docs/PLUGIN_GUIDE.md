@@ -194,7 +194,7 @@ plugins/
 | `fields[].preset` | 可选，是否允许作为「类别/插件默认设置」被预设。**默认允许**（只要非敏感）；填 `false` 可排除该字段。**敏感字段永远不可预设**（默认值表是明文列） |
 | `fields[].hint` | 可选，字段下方的一行灰字说明。用于解释开关或高级项（如 LLM 的「余额未知时发一次对话探测」），前端 `CredentialForm.vue` 渲染为 `.field-hint` |
 | `fields[].sensitive` | `true` 的字段加密存储（AES-256-GCM），列表页只显示掩码（`crypto.mask_secret`，形如 `sk-123…cdef`），也参与重复凭据检测 |
-| `icon` | 服务显示图标。填 emoji（如 `🐋`）直接使用；也可填插件目录内的图片文件名（如 `"logo.png"`，支持 png/jpg/svg/webp/ico/gif），后端读取为 data URL 返回（`icon_image` 字段），前端优先展示图片，缺省回退 emoji `🔑` |
+| `icon` | 服务显示图标。填 emoji（如 `🐋`）直接使用；也可填插件目录内的图片文件名（如 `"logo.png"`，支持 png/jpg/svg/webp/ico/gif），后端读取为 data URL 返回（`icon_image` 字段），前端优先展示图片，缺省回退 emoji `🔑`。图片形态下后端还会附一个 `icon_lift`（bool）——深色主题下该 logo 是否需要垫一层浅色底，由 `backend/icon_ink.py` 自动判定（位图取不透明像素 `max(r,g,b)` 的 p90、SVG 取 `fill`/`stroke` 声明的颜色，纯黑标为真），**作者无需关心** |
 | `batch_verify` | 是否参与批量验证，默认 `true`。**有写副作用**的插件应设为 `false`（如 `duckdns`——它的校验本身就是一次写解析）：前端在选中该类型时禁用「批量验证」按钮，只能逐条手动验证；后端批量时也会跳过这些类型并在结果里统计「跳过 N」 |
 
 > **插件 logo 的来源与许可**：内置插件的品牌图标是**随包分发**的第三方商标图形，取自

@@ -150,6 +150,7 @@ function openDefaults(scope, scopeKey, credentialType, name) {
           <span class="pm-cat-icon">
             <img
               v-if="!group.category_icon && group.items[0].icon_image"
+              :class="{ 'icon-lift': group.items[0].icon_lift }"
               :src="group.items[0].icon_image"
               alt=""
             />
@@ -177,7 +178,13 @@ function openDefaults(scope, scopeKey, credentialType, name) {
               size="small"
               class="pm-state"
             >{{ plugin.enabled ? '已启用' : '已禁用' }}</el-tag>
-            <img v-if="plugin.icon_image" class="pm-icon" :src="plugin.icon_image" alt="" />
+            <img
+              v-if="plugin.icon_image"
+              class="pm-icon"
+              :class="{ 'icon-lift': plugin.icon_lift }"
+              :src="plugin.icon_image"
+              alt=""
+            />
             <span v-else class="pm-icon-emoji">{{ plugin.icon }}</span>
             <div class="pm-main">
               <div class="pm-name">{{ plugin.name }}</div>

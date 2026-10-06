@@ -149,6 +149,15 @@ plugins/
   **协议级工具**（如 `plugins/llm/llm_protocols.py` 的探针与 `chat_completion`、
   `cloud/google_sa.py` 的服务账号签名）另建独立模块供子插件按需引用。加载子插件时临时将其目录
   与类别目录注入 `sys.path`（见 plugin_base.load_plugin_module）。
+- **插件 logo 的深色可见度判定（`backend/icon_ink.py`）**：`list_plugins()` 下发的每条记录除
+  `icon_image`（data URL）外，还有 `icon_lift`（bool）——该 logo 在深色主题下**要不要垫一层浅色底**。
+  判据是「可见度」而非亮度：位图取不透明像素 `max(r,g,b)` 的 p90、**SVG 取 `fill`/`stroke` 声明的颜色**
+  （属性式 `fill="#fff"` 与 CSS 式 `<style>{fill:#1c99ff}` / `style="fill:#fff"` 都解析——官方导出的 SVG
+  常把颜色放在后者；一个颜色都取不到时按 SVG 默认纯黑处理）。p90 低于 `LIFT_CUTOFF`（0.30）才算会糊
+  （纯黑标 `aws` / `github` / `openai` …）。深色底上「看不看得见」取决于离黑有多远，而 Rec.709 亮度
+  会把饱和色误判成「糊」。判定按 `credential_type` 缓存在 `plugin_manager._icon_lift_cache`，
+  与 `_icon_image_cache` 同生命周期（只在 `sync_plugins()` 清空）。前端只给 `icon_lift` 为真的
+  `<img>` 加 `.icon-lift`，`base.css` 的白板规则据此限定——避免给彩色标套上白框（见 docs/FRONTEND.md）。
   **服务专属逻辑在各子插件内自带，新增插件无需改动共享模块。**
 - **同步流程**：启动时 `sync_plugins()` 扫描两层结构 → upsert plugins 表（含 category / category_name / batch_verify）→ 清理已消失插件的记录与模块缓存。
 - **批量验证开关**：manifest 的 `batch_verify`（默认 true）落库到 plugins.batch_verify；调度器与前端批量时跳过为 false 的类型——**有写副作用或无法自动化**的（如 duckdns / wechat_ilink），以及**判定常为「未验证」、批量会刷掉人工结论**的（telegram_apihash / api/gateway）。前端在批量勾选弹窗中禁用其勾选，但单条手动验证仍可用。

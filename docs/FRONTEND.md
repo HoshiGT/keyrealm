@@ -168,8 +168,16 @@ Element Plus 的暗色模式靠 `<html class="dark">` 触发（其 `theme-chalk/
 **2. 深色主题下插件 logo 不可见。** 插件 logo 是后端下发的 `icon_image`，多数品牌标
 （Simple Icons 那批）自身不带 `fill`，按 SVG 默认渲染为**纯黑**——留在浅色主题里没问题，
 一进深色主题就跟底色糊在一起（实测 OpenAI / Anthropic / Moonshot Kimi 约 1.1:1，等于隐形）。
-修法是 `base.css` 里统一给 `html.dark` 下的所有 logo 位垫一块 88% 白板。**没有**选择在前端
-硬编码「哪几个标是黑的」——那只会让下一个新装的黑标插件重新踩同一个坑。
+第一版修法是 `base.css` 里统一给 `html.dark` 下的所有 logo 位垫一块 88% 白板，代价是彩色标
+也被套上一圈白框，看起来像「背景没抠干净」。**现改为按 logo 逐个判定**：后端
+`backend/icon_ink.py` 取不透明像素 `max(r,g,b)` 的 p90（SVG 则取其 `fill`/`stroke` 声明色——**含写在
+`<style>` 里的 CSS 声明**，官方导出的 SVG 常用这种；判据是**可见度**而非 Rec.709 亮度，
+后者会把饱和色——如纯蓝 `#0033FF`——误判成「糊」），低于阈值才算需要垫底，
+`plugin_manager.icon_needs_lift()` 把结果随 `list_plugins()` 下发为 `icon_lift`；
+前端只给置了该标志的 `<img>` 加 `.icon-lift`，`base.css` 的白板规则也据此限定。
+**没有**在前端硬编码「哪几个标是黑的」——新装一个黑标插件同样自动纳入判定，不必改前端。
+冷启动一次性分析约 66 ms（52 个插件 / 50 张 logo，31 张位图已从 640² 缩到 ≤256²、多数 128²），
+之后按 `credential_type` 命中缓存（约 0.03 ms），缓存只在 `sync_plugins()` 时清空。
 
 **3. 解锁页徽标外那圈旋转描边从来没被看见过。** 它原本是 `conic-gradient` 配 `radial-gradient`
 圆形遮罩挖出的细环，两个几何错误叠在一起：遮罩 `closest-side, transparent 74% → #000 76%`

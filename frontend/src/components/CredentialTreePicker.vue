@@ -50,6 +50,7 @@ const treeData = computed(() => {
         label: plugin.label,
         icon: plugin.icon,
         icon_image: plugin.icon_image,
+        icon_lift: plugin.icon_lift,
         count: leaves.length,
         children: leaves.map((cred) => ({
           id: `cred:${cred.id}`,
@@ -184,7 +185,13 @@ onMounted(load)
     >
       <template #default="{ data }">
         <span class="pick-node">
-          <img v-if="data.icon_image" class="pick-node-icon" :src="data.icon_image" alt="" />
+          <img
+            v-if="data.icon_image"
+            class="pick-node-icon"
+            :class="{ 'icon-lift': data.icon_lift }"
+            :src="data.icon_image"
+            alt=""
+          />
           <span v-else class="pick-node-icon">{{ data.icon }}</span>
           <span>{{ data.label }}</span>
           <span v-if="data.count" class="text-muted">（{{ data.count }}）</span>

@@ -892,6 +892,12 @@ function iconImage(type) {
   return plugin && plugin.icon_image ? plugin.icon_image : ''
 }
 
+/** 深色主题下这个 logo 要不要垫浅色底，由后端逐个判定（backend/icon_ink.py） */
+function iconLift(type) {
+  const plugin = pluginFor(type)
+  return !!(plugin && plugin.icon_lift)
+}
+
 /** 凭据单元格副标题：掩码后的敏感值（如 sk-123…cdef） */
 function maskedSubtitle(row) {
   const masked = row.data_masked
@@ -1769,7 +1775,13 @@ onMounted(async () => {
               :show-after="300"
             >
               <span class="tree-node">
-                <img v-if="data.icon_image" class="tree-icon-img" :src="data.icon_image" alt="" />
+                <img
+                  v-if="data.icon_image"
+                  class="tree-icon-img"
+                  :class="{ 'icon-lift': data.icon_lift }"
+                  :src="data.icon_image"
+                  alt=""
+                />
                 <span v-else class="tree-icon">{{ data.icon }}</span>
                 <span class="tree-label">{{ data.label }}</span>
                 <span v-if="data.count !== undefined" class="tree-count">{{ data.count }}</span>
@@ -1798,7 +1810,13 @@ onMounted(async () => {
           >
             <template v-if="col.key === 'credential'" #default="{ row }">
               <div class="credential-cell">
-                <img v-if="iconImage(row.credential_type)" class="credential-icon-img" :src="iconImage(row.credential_type)" alt="" />
+                <img
+                  v-if="iconImage(row.credential_type)"
+                  class="credential-icon-img"
+                  :class="{ 'icon-lift': iconLift(row.credential_type) }"
+                  :src="iconImage(row.credential_type)"
+                  alt=""
+                />
                 <span v-else class="credential-icon">{{ typeIcon(row.credential_type) }}</span>
                 <div class="credential-text">
                   <div class="credential-name">{{ row.name }}</div>

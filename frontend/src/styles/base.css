@@ -652,19 +652,22 @@ h4 {
   font-size: 13px;
 }
 
-/* 品牌图标在深色配色下要垫一层浅底。
+/* 品牌图标在深色配色下要垫一层浅底 —— **但只给真会糊的那些垫**。
    插件 logo 是后端下发的 icon_image，多数品牌标（Simple Icons 那批）本身不带 fill，
    按 SVG 默认渲染为**纯黑**；留在浅色主题里没问题，一进深色主题就跟底色糊在一起，
    OpenAI / Anthropic / Moonshot Kimi 实测对比度约 1.1:1 —— 等于隐形。
-   与其在前端硬编码「哪几个标是黑的」（新装一个黑标插件就会重新踩坑），
-   不如统一垫一块浅板：黑标立刻可读，彩色标也只是多了一层底，观感一致。 */
+   可无差别地给所有 logo 都垫一块，代价是彩色标（dify / cloudflare / gemini…）也被
+   套上一圈白框，看起来像「背景没抠干净」。
+   所以判定挪到后端逐个做（backend/icon_ink.py：取不透明像素 max(r,g,b) 的 p90，
+   低于阈值才算糊），前端只给置了 icon_lift 的那些按类生效 —— 新增插件自动适用，
+   不必在前端硬编码「哪几个标是黑的」。 */
 html.dark :is(
     .pm-icon,
     .pm-cat-icon img,
     .tree-icon-img,
     .credential-icon-img,
     .pick-node-icon
-  ) {
+  ).icon-lift {
   background: rgb(255 255 255 / 88%);
   border-radius: 4px;
 }

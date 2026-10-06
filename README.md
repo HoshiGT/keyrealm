@@ -207,6 +207,7 @@ API-Key-Checker/
 │   ├── database.py          # SQLite 数据访问层
 │   ├── backup.py            # 备份 / 恢复（导出单个 JSON，可选加密；导入自动识别）
 │   ├── paths.py             # 冻结感知路径解析（打包/开发统一）
+│   ├── icon_ink.py          # 插件 logo 深色主题可见度判定（该不该垫一层浅色底）
 │   ├── plugin_base.py       # 插件接口定义
 │   ├── plugin_manager.py    # 插件目录扫描与自动加载
 │   ├── plugin_sdk.py        # 框架暴露给插件的唯一接口层（VerifyResult / make_client / guarded …）

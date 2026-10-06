@@ -96,6 +96,8 @@ export const useVaultStore = defineStore('vault', {
           label: plugin.name,
           icon: inlineIcon(plugin.icon),
           icon_image: plugin.icon_image || null,
+          // 深色主题下这个 logo 要不要垫浅色底，由后端逐个判定（backend/icon_ink.py）
+          icon_lift: !!plugin.icon_lift,
           credential_type: plugin.credential_type,
           category: key,
           rel_path: plugin.rel_path || '',
