@@ -198,14 +198,28 @@ plugins/
 | `batch_verify` | 是否参与批量验证，默认 `true`。**有写副作用**的插件应设为 `false`（如 `duckdns`——它的校验本身就是一次写解析）：前端在选中该类型时禁用「批量验证」按钮，只能逐条手动验证；后端批量时也会跳过这些类型并在结果里统计「跳过 N」 |
 
 > **插件 logo 的来源与许可**：内置插件的品牌图标是**随包分发**的第三方商标图形，取自
-> [Simple Icons](https://simpleicons.org/)（CC0-1.0）、Iconify 的 `thesvg` 集合（MIT），
-> 以及厂商官网 / 官方仓库的原始素材；商标归各自权利人所有，此处仅用于标识对应服务。
+> [Simple Icons](https://simpleicons.org/)（CC0-1.0）、Iconify 的 `thesvg` 集合（MIT）、
+> **App Store 官方图标**（中文区 `itunes.apple.com/search?country=cn`，取 `artworkUrl512` 的高分辨率版；
+> 扣子 / 飞书 / 企业微信等中文服务多由此取源）、以及厂商官网 / 官方仓库的原始素材
+> （官网 `<link rel="icon">` 的 favicon，或官网静态资源目录里的原始 SVG/PNG——如 W&B 取自
+> `site.wandb.ai` 的 favicon、腾讯 QQ 取自 `static-res.qq.com` 的 `qq-logo.png`、
+> Hugging Face 取自官网仓库的彩色版 `huggingface_logo-noborder.svg`）；
+> 商标归各自权利人所有，此处仅用于标识对应服务。
 >
-> 选图有两条硬要求（渲染位只有 **16px**（凭据树选择器）与 **22px**（插件管理）两种，见
+> 选图有四条硬要求（渲染位只有 **16px**（凭据树选择器）与 **22px**（插件管理）两种，见
 > `CredentialTreePicker.vue` / `PluginManager.vue`）：
 > 1. **方形单色标优先**——横向 wordmark（如 `Dify`、`OKX` 的官方字标）缩到 16px 会糊成一团；
 > 2. **必须能独立渲染**——不要在 SVG 里用 `currentColor`：图标是以 `<img src="data:image/svg+xml;base64,…">`
->    渲染的，没有 CSS 继承，`currentColor` 只会解析成黑色。
+>    渲染的，没有 CSS 继承，`currentColor` 只会解析成黑色。（颜色写在 `<style>` / `class` 里**本身没问题**，
+>    `icon_ink` 会连 CSS 声明一起解析；只是别指望 `<img>` 能继承页面样式。）
+> 3. **不留烤死的白底 / 白边**——深色主题下白底会变成一块白砖（`wecom` 曾把白底烤进位图，100% 不透明），
+>    白边则是低分辨率圆角砖硬缩放留下的晕（`feishu` 曾是 48px）。若源图只有「彩色图形 + 白底」，
+>    不能直接按亮度设 alpha（那会把图形内部也叫成半透明、整块发灰），要按合成模型
+>    `observed = ink·a + 255(1−a)` **解出 a 再把墨色反解回来**（现成实现见 `tmp/logosrc/cutout.py`；
+>    图标本身的深色可见度另由 `backend/icon_ink.py` 判定）。
+> 4. **位图长边压在 128px 以内**——渲染位最大 22px，640×640 纯属浪费（曾占冷启动分析的大头，
+>    20 张 640² 缩到 128² 后总耗时 232 ms → 66 ms）。位图一律缩到 **128×128**（LANCZOS，保 alpha）；
+>    例外是原生就小的图（如 `qq_bot` 官方 favicon 只有 62×62 且无更高清源，原样保留，不做假放大）。
 
 ### 字段输入约定（新增插件必守）
 
