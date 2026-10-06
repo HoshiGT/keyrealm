@@ -4,7 +4,7 @@
   "credential_type": "dev_wandb",
   "author": "Credential Vault",
   "description": "验证 Weights & Biases API Key 有效性",
-  "icon": "📊",
+  "icon": "logo.svg",
   "fields": [
     {
       "key": "api_key",

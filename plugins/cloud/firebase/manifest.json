@@ -4,7 +4,7 @@
   "credential_type": "firebase_admin",
   "author": "Credential Vault",
   "description": "验证 Firebase Admin SDK 服务账号密钥有效性（JWT 换 token + Firebase Management 探测，只读）",
-  "icon": "🔥",
+  "icon": "logo.svg",
   "fields": [
     {
       "key": "client_email",

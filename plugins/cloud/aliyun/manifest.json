@@ -4,7 +4,7 @@
   "credential_type": "cloud_aliyun",
   "author": "Credential Vault",
   "description": "验证阿里云 AccessKey 有效性（STS GetCallerIdentity）",
-  "icon": "☁️",
+  "icon": "logo.svg",
   "fields": [
     {
       "key": "access_key_id",

@@ -4,7 +4,7 @@
   "credential_type": "im_telegram",
   "author": "Credential Vault",
   "description": "验证 Telegram Bot Token 有效性",
-  "icon": "✈️",
+  "icon": "logo.svg",
   "fields": [
     {
       "key": "bot_token",

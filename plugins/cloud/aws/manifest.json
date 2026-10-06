@@ -4,7 +4,7 @@
   "credential_type": "cloud_aws",
   "author": "Credential Vault",
   "description": "验证 AWS Access Key 有效性（STS GetCallerIdentity）",
-  "icon": "🅰️",
+  "icon": "logo.svg",
   "fields": [
     {
       "key": "access_key_id",

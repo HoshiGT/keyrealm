@@ -358,7 +358,7 @@ claude mcp add credential-vault \
     "author": "Credential Vault",
     "description": "验证 OpenAI API Key 有效性",
     "credential_type": "llm_openai",
-    "icon": "🤖",
+    "icon": "logo.png",
     "category": "llm",
     "category_name": "LLM 模型",
     "plugin_path": "plugins/llm/openai",
@@ -367,7 +367,7 @@ claude mcp add credential-vault \
     "installed_at": "2026-10-01T08:00:00Z",
     "fields_schema": [{"key": "api_key", "label": "API Key", "sensitive": true, "...": "..."}],
     "credential_count": 8,      // 附加字段
-    "category_icon": "🧠",       // 附加字段
+    "category_icon": "🤖",       // 附加字段
     "rel_path": "llm/openai"    // 附加字段
   }
 ]

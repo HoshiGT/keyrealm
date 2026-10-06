@@ -4,7 +4,7 @@
   "credential_type": "im_qq_bot",
   "author": "Credential Vault",
   "description": "验证 QQ 频道机器人 AppID / ClientSecret 有效性",
-  "icon": "🐧",
+  "icon": "logo.svg",
   "fields": [
     {
       "key": "app_id",

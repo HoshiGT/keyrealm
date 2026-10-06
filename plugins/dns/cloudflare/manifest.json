@@ -4,7 +4,7 @@
   "credential_type": "cloud_cloudflare",
   "author": "Credential Vault",
   "description": "验证 Cloudflare API Token 或 Global API Key 有效性",
-  "icon": "🛡️",
+  "icon": "logo.svg",
   "fields": [
     {
       "key": "auth_mode",

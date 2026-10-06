@@ -197,6 +197,16 @@ plugins/
 | `icon` | 服务显示图标。填 emoji（如 `🐋`）直接使用；也可填插件目录内的图片文件名（如 `"logo.png"`，支持 png/jpg/svg/webp/ico/gif），后端读取为 data URL 返回（`icon_image` 字段），前端优先展示图片，缺省回退 emoji `🔑` |
 | `batch_verify` | 是否参与批量验证，默认 `true`。**有写副作用**的插件应设为 `false`（如 `duckdns`——它的校验本身就是一次写解析）：前端在选中该类型时禁用「批量验证」按钮，只能逐条手动验证；后端批量时也会跳过这些类型并在结果里统计「跳过 N」 |
 
+> **插件 logo 的来源与许可**：内置插件的品牌图标是**随包分发**的第三方商标图形，取自
+> [Simple Icons](https://simpleicons.org/)（CC0-1.0）、Iconify 的 `thesvg` 集合（MIT），
+> 以及厂商官网 / 官方仓库的原始素材；商标归各自权利人所有，此处仅用于标识对应服务。
+>
+> 选图有两条硬要求（渲染位只有 **16px**（凭据树选择器）与 **22px**（插件管理）两种，见
+> `CredentialTreePicker.vue` / `PluginManager.vue`）：
+> 1. **方形单色标优先**——横向 wordmark（如 `Dify`、`OKX` 的官方字标）缩到 16px 会糊成一团；
+> 2. **必须能独立渲染**——不要在 SVG 里用 `currentColor`：图标是以 `<img src="data:image/svg+xml;base64,…">`
+>    渲染的，没有 CSS 继承，`currentColor` 只会解析成黑色。
+
 ### 字段输入约定（新增插件必守）
 
 **凭据输入一律尽量单行**：一个字段一个值，不要求用户「粘贴整份配置」。

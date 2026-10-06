@@ -4,7 +4,7 @@
   "credential_type": "exchange_okx",
   "author": "Credential Vault",
   "description": "验证 OKX API Key / Secret / Passphrase 有效性",
-  "icon": "📊",
+  "icon": "logo.png",
   "fields": [
     {
       "key": "api_key",

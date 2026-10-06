@@ -4,7 +4,7 @@
   "credential_type": "dev_github",
   "author": "Credential Vault",
   "description": "验证 GitHub 令牌有效性",
-  "icon": "🐙",
+  "icon": "logo.svg",
   "fields": [
     {
       "key": "token",

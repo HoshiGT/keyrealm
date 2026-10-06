@@ -4,7 +4,7 @@
   "credential_type": "im_wecom",
   "author": "Credential Vault",
   "description": "验证企业微信：自建应用（CorpID / CorpSecret）或群机器人 Webhook 密钥",
-  "icon": "🏢",
+  "icon": "logo.png",
   "fields": [
     {
       "key": "kind",

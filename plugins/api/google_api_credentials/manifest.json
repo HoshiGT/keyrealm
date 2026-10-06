@@ -4,7 +4,7 @@
   "credential_type": "google_api_credentials",
   "author": "Credential Vault",
   "description": "验证 Google API Key / Google OAuth 客户端密钥有效性（只读探测）",
-  "icon": "🔑",
+  "icon": "logo.svg",
   "fields": [
     {
       "key": "kind",

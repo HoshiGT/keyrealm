@@ -4,7 +4,7 @@
   "credential_type": "im_discord",
   "author": "Credential Vault",
   "description": "验证 Discord Webhook URL 有效性",
-  "icon": "🎮",
+  "icon": "logo.svg",
   "fields": [
     {
       "key": "webhook_url",

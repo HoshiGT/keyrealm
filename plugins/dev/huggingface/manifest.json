@@ -4,7 +4,7 @@
   "credential_type": "dev_huggingface",
   "author": "Credential Vault",
   "description": "验证 HuggingFace 访问令牌有效性",
-  "icon": "🤗",
+  "icon": "logo.svg",
   "fields": [
     {
       "key": "token",

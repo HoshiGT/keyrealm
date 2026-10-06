@@ -4,7 +4,7 @@
   "credential_type": "im_telegram_apihash",
   "author": "Credential Vault",
   "description": "验证 Telegram api_id / api_hash（未登录状态探针，不发送验证码），并离线解析会话串",
-  "icon": "📱",
+  "icon": "logo.svg",
   "batch_verify": false,
   "fields": [
     {

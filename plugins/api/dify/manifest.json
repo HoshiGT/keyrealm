@@ -4,7 +4,7 @@
   "credential_type": "api_dify",
   "author": "Credential Vault",
   "description": "验证 Dify 应用 API Key 有效性（GET /parameters，只读）",
-  "icon": "🧠",
+  "icon": "logo.svg",
   "fields": [
     {
       "key": "api_key",

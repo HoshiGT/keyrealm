@@ -4,7 +4,7 @@
   "credential_type": "cloud_huaweicloud",
   "author": "Credential Vault",
   "description": "验证华为云 AK/SK 有效性（OBS ListBuckets，只读）",
-  "icon": "🔴",
+  "icon": "logo.svg",
   "fields": [
     {
       "key": "access_key_id",

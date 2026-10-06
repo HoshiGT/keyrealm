@@ -4,7 +4,7 @@
   "credential_type": "cloud_gcp",
   "author": "Credential Vault",
   "description": "验证 GCP 服务账号有效性（JWT 断言换 token + Resource Manager 探测，只读）",
-  "icon": "☁️",
+  "icon": "logo.svg",
   "fields": [
     {
       "key": "client_email",

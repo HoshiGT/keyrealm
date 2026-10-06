@@ -4,7 +4,7 @@
   "credential_type": "cloud_tencentcloud",
   "author": "Credential Vault",
   "description": "验证腾讯云 SecretId/SecretKey 有效性（STS GetCallerIdentity）",
-  "icon": "🐧",
+  "icon": "logo.svg",
   "fields": [
     {
       "key": "secret_id",

@@ -4,7 +4,7 @@
   "credential_type": "im_wechat_ilink",
   "author": "Credential Vault",
   "description": "验证微信 iLink Bot 凭据（getupdates 只读探测），并可拉取消息、下载消息附件",
-  "icon": "📲",
+  "icon": "logo.svg",
   "batch_verify": true,
   "fields": [
     {
