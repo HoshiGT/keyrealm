@@ -1,5 +1,7 @@
 """秘塔 AI 搜索（Metaso）API Key 验证插件（plugins/api/ 类别下的独立子插件）。
 
+参考文档：https://metaso.cn/search-api/playground
+
 自带完整的校验与展示逻辑，只复用 api_common 的通用工具；
 复制本目录即可派生出新的服务插件。
 

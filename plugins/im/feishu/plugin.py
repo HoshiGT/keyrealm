@@ -17,6 +17,8 @@
 并实现 ``capabilities()``：逐个只读探测上述接口权限，决定哪些操作对当前应用可见；
 **探测拿不准时抛异常**（框架按「未知 → 全部可用」处理，fail-open），
 绝不返回空列表把功能藏掉。token 按 app_id 模块级缓存，快过期时自动刷新。
+
+参考文档：https://open.feishu.cn/document/server-docs/authentication-management/access-token/tenant_access_token_internal
 """
 from __future__ import annotations
 

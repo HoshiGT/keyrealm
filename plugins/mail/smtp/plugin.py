@@ -21,6 +21,8 @@
   - ``read_mail`` (list) 「查看收件箱」的行内下钻，读取单封正文与基本头部
 IMAP 主机默认由 ``smtp.*`` 推导为 ``imap.*``，端口默认 993；非 993 端口先试
 STARTTLS 再回落 SSL。全程用 EXAMINE / ``BODY.PEEK``，不置「已读」标记、不改动邮箱。
+
+参考文档：https://datatracker.ietf.org/doc/html/rfc5321（RFC 5321，SMTP）
 """
 from __future__ import annotations
 

@@ -2,6 +2,9 @@
 
 OKX：GET /api/v5/account/balance，HMAC-SHA256（base64）签名鉴权，
 需 Passphrase。签名算法与判定逻辑随插件自带，不依赖 exchange_common。
+
+参考文档：https://www.okx.com/docs-v5/en/
+参考文档：https://www.okx.com/docs-v5/en/#overview-rest-authentication-signature
 """
 import base64
 import hashlib

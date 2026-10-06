@@ -1,4 +1,7 @@
-"""MiniMax API Key 验证插件（plugins/llm/ 类别下的独立子插件）。"""
+"""MiniMax API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
+
+参考文档：https://platform.minimaxi.com/document/guides
+"""
 from __future__ import annotations
 
 from llm_common import VerifyResult, guarded, make_quota_probe

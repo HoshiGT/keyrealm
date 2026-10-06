@@ -14,6 +14,8 @@ New API 把硬限额 ``hard_limit_usd`` 定义成**令牌总额度（剩余 + �
 99999996.47 这类假余额——这类哨兵值一律按「不限额度」处理，不显示数字。
 
 Base URL 无默认值，必须由用户填写站点地址。
+
+参考文档：https://github.com/QuantumNous/new-api
 """
 from __future__ import annotations
 

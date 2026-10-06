@@ -10,6 +10,8 @@
   - ``list_repos``    (list) 我的仓库（名称/属主/可见性/语言/更新时间/大小 KB/默认分支）
   - ``repo_detail``   (list) 单个仓库详情（list_repos 的行内动作入口）
   - ``download_repo`` (form) 打包下载仓库 zipball，路径由前端「另存为」选好后经 params 传入
+
+参考文档：https://docs.github.com/en/rest/users/users?apiVersion=2022-11-28
 """
 from __future__ import annotations
 

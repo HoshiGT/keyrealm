@@ -16,6 +16,8 @@ OpenAI 协议探针 ``GET {base}/models``。**没有公开的账户余额/用量
 
 用户若改用第二套地址，需同时把模型名换成 ``SenseChat-5`` 一类（对话框里的模型下拉
 走的是 ``list_models()`` 实时列表，地址正确时会自动填上可用模型）。
+
+参考文档：https://www.sensecore.cn/help/docs/model-as-a-service/nova/overview/compatible-mode
 """
 from __future__ import annotations
 

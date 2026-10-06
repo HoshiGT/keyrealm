@@ -2,6 +2,9 @@
 
 Binance：GET /api/v3/account，HMAC-SHA256 查询串签名鉴权。
 签名算法与判定逻辑随插件自带，不依赖 exchange_common。
+
+参考文档：https://developers.binance.com/legacy-docs/binance-spot-api-docs/rest-api/account-endpoints
+参考文档：https://developers.binance.com/legacy-docs/binance-spot-api-docs/rest-api/request-security
 """
 import hashlib
 import hmac

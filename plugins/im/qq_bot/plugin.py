@@ -2,6 +2,8 @@
 
 端点：POST https://bots.qq.com/app/getAppAccessToken
 以 appId + clientSecret 换取 AppAccessToken。
+
+参考文档：https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/access-token.html
 """
 from im_common import VerifyResult, body_snippet, guarded, make_client, safe_json
 

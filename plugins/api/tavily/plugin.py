@@ -2,6 +2,8 @@
 
 自带完整的校验与展示逻辑，只复用 api_common 的通用工具；
 复制本目录即可派生出新的服务插件。
+
+参考文档：https://docs.tavily.com/documentation/api-reference/endpoint/search
 """
 from api_common import VerifyResult, body_snippet, guarded, make_client, safe_json
 

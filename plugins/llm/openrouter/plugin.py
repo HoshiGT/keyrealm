@@ -2,6 +2,8 @@
 
 协议：GET /auth/key（返回 key 信息与用量，plan 类账号带 limit/usage）
 余额：GET /credits（total_credits - total_usage → 余额与使用率）
+
+参考文档：https://openrouter.ai/docs/quickstart
 """
 from __future__ import annotations
 

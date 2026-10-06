@@ -1,5 +1,7 @@
 """DeepSeek API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
 
+参考文档：https://api-docs.deepseek.com/
+
 OpenAI 协议探针 + 官方余额接口 /user/balance。
 """
 from __future__ import annotations

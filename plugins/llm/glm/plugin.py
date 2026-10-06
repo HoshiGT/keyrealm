@@ -1,5 +1,7 @@
 """智谱 GLM API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
 
+参考文档：https://docs.bigmodel.cn/api-reference
+
 智谱**不按协议分权**：同一把 key 既能调 OpenAI 兼容端点，也能调 Anthropic 兼容端点
 （2026-10-05 实测三把 key 一致；`claude-sonnet-4` 这类 Claude 模型名也由智谱做了映射）。
 因此插件只有一条路径——**OpenAI 兼容端点**，不设「接口格式」开关，也不为旧地址做特判：

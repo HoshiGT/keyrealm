@@ -5,6 +5,8 @@
 关闭重定向：Webhook URL 由用户提供，跟随跳转会把请求带去未知目标。
 安全提示：Webhook Token 位于 URL 路径中，网络异常只返回异常类型；响应里的
 token 字段也不写入 account_info。
+
+参考文档：https://docs.discord.com/developers/resources/webhook
 """
 import httpx
 

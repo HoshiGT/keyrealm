@@ -8,6 +8,8 @@
   ``edit_record``（表单，写操作）PUT 覆盖该「类型 + 主机名」下的全部记录。
 
 刻意不提供删除解析：破坏性且不属于本插件的验证目标。
+
+参考文档：https://developer.godaddy.com/en/docs/references/rest/domains/v1/list
 """
 from dns_common import VerifyResult, body_snippet, guarded, make_client
 

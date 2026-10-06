@@ -1,4 +1,7 @@
-"""HuggingFace 访问令牌验证插件（plugins/dev/ 类别下的独立子插件）。"""
+"""HuggingFace 访问令牌验证插件（plugins/dev/ 类别下的独立子插件）。
+
+参考文档：https://huggingface.co/docs/hub/api
+"""
 from __future__ import annotations
 
 from typing import Any

@@ -1,4 +1,7 @@
-"""阿里云百炼 DashScope API Key 验证插件（plugins/llm/ 类别下的独立子插件）。"""
+"""阿里云百炼 DashScope API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
+
+参考文档：https://help.aliyun.com/zh/dashscope/developer-reference/api-details
+"""
 from __future__ import annotations
 
 from llm_common import VerifyResult, guarded, make_quota_probe

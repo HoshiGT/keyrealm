@@ -2,6 +2,8 @@
 
 自带完整的校验与展示逻辑，只复用 api_common 的通用工具；
 复制本目录即可派生出新的服务插件。
+
+参考文档：https://docs.coze.cn/api/open/docs/developer_guides/authentication
 """
 from typing import Any
 

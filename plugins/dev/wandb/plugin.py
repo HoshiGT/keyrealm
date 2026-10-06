@@ -1,4 +1,7 @@
-"""Weights & Biases API Key 验证插件（plugins/dev/ 类别下的独立子插件）。"""
+"""Weights & Biases API Key 验证插件（plugins/dev/ 类别下的独立子插件）。
+
+参考文档：https://docs.coreweave.com/models/ref/python/public-api
+"""
 from __future__ import annotations
 
 from typing import Any

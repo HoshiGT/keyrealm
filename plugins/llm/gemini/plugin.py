@@ -1,5 +1,7 @@
 """Google Gemini API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
 
+参考文档：https://ai.google.dev/api
+
 协议：GET {base}/models?key=<API_KEY>（密钥走 query 参数）。
 注意：密钥在 URL 中，异常兜底（guarded）只暴露异常类型名，避免泄漏。
 """

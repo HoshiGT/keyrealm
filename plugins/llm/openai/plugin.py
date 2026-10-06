@@ -1,5 +1,7 @@
 """OpenAI 插件（plugins/llm/openai/，自包含实现）。
 
+参考文档：https://platform.openai.com/docs/api-reference
+
 一份凭据支持两种**认证方式**（字段 ``auth_mode``）：
 
 - ``api_key``（默认）：标准 OpenAI API Key，走 ``GET /v1/models`` 探针；

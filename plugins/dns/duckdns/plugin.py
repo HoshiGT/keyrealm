@@ -1,4 +1,7 @@
-"""DuckDNS Token 验证插件（plugins/dns/ 类别下的独立子插件）。"""
+"""DuckDNS Token 验证插件（plugins/dns/ 类别下的独立子插件）。
+
+参考文档：https://www.duckdns.org/spec.jsp
+"""
 import time
 
 from dns_common import VerifyResult, guarded, make_client, safe_json

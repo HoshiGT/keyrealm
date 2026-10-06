@@ -20,6 +20,9 @@
 下载类操作全部走签名 GET 流式读取，磁盘上限见 ``MAX_ZIP_*``。
 两个下载操作都声明了 ``progress``，由 ``stream_action`` 边下边回调进度、并响应取消
 （``run_action`` 三个参数调用时不上报也不可取消，行为与以前一致）。
+
+参考文档：https://cloud.tencent.com/document/api/213/30654
+参考文档：https://cloud.tencent.com/document/product/436/7778
 """
 from __future__ import annotations
 

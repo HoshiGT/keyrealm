@@ -1,5 +1,7 @@
 """月之暗面 Moonshot API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
 
+参考文档：https://platform.moonshot.cn/docs/api/chat
+
 OpenAI 协议探针 + 官方余额接口 /v1/users/me/balance。
 """
 from __future__ import annotations

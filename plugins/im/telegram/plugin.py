@@ -4,6 +4,8 @@
 
 安全提示：Bot Token 直接拼在 URL 路径中，任何异常文本都可能带完整 URL，
 因此网络异常只返回异常类型（见 im_common.guarded）。
+
+参考文档：https://core.telegram.org/bots/api
 """
 import httpx
 

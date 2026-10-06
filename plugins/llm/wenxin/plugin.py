@@ -2,6 +2,8 @@
 
 协议：POST {base}/oauth/2.0/token（client_credentials）。
 凭证格式为 API_KEY|SECRET_KEY（由子插件自行拆分）。
+
+参考文档：https://cloud.baidu.com/doc/WENXINWORKSHOP/index.html
 """
 from __future__ import annotations
 

@@ -9,6 +9,9 @@
   或打开 ``set_dns_record``（新增记录）并自动带站点；
 - ``list_dns_records``（列表）指定站点的 DNS 记录，行内 ``set_dns_record``（修改记录）；
 - ``set_dns_record``（表单，写操作）记录 ID 留空 = 新增，填写 = 修改该记录。
+
+参考文档：https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/verify/
+参考文档：https://developers.cloudflare.com/api/resources/user/methods/get/
 """
 from __future__ import annotations
 

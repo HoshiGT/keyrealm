@@ -7,6 +7,8 @@
 但 NVIDIA **会下线模型**，且各账号开通的模型不同（清单是过期超集：大量 410 Gone
 与 404 Not found for account），所以**不能赌单个模型名**——候选短名单逐个短超时试，
 命中即止（历史上的硬编码 model 就曾因「网关接受后永不响应」把真 key 必卡成超时）。
+
+参考文档：https://docs.api.nvidia.com/nim/reference/
 """
 from __future__ import annotations
 

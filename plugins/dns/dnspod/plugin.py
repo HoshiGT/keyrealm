@@ -7,6 +7,8 @@
 - ``add_record`` / ``edit_record``（表单，写操作）新增 / 修改解析记录。
 
 刻意不提供删除解析：破坏性且不属于本插件的验证目标。
+
+参考文档：https://support.dnspod.cn/api/domains-list/
 """
 from dns_common import VerifyResult, body_snippet, guarded, make_client, safe_json
 

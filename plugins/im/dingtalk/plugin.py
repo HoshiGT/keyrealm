@@ -6,6 +6,8 @@
 2. 新版不可用（404/405、非 JSON、5xx、网络异常）时回退旧版
    GET https://oapi.dingtalk.com/gettoken?appkey=..&appsecret=..
    注意：旧版 appsecret 走查询串，属钉钉旧版设计，该 URL 不可透出到消息里。
+
+参考文档：https://open.dingtalk.com/document/orgapp/obtain-orgapp-token
 """
 import httpx
 

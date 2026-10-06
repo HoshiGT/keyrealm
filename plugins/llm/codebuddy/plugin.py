@@ -1,5 +1,7 @@
 """腾讯 CodeBuddy 客户端登录态验证插件（plugins/llm/codebuddy/，自包含实现）。
 
+参考文档：https://www.codebuddy.cn/docs/
+
 CodeBuddy 是腾讯的 AI 编程助手（中国站 www.codebuddy.cn / 国际站 www.codebuddy.ai）。
 这里的「凭据」不是 API Key，而是**客户端登录态**——两个 Keycloak 风格的 JWT
 （``iss`` = ``…/auth/realms/copilot``）。

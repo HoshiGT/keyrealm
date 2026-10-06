@@ -1,4 +1,7 @@
-"""字节豆包 API Key 验证插件（plugins/llm/ 类别下的独立子插件）。"""
+"""字节豆包 API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
+
+参考文档：https://docs.volcengine.com/docs/ark （火山方舟大模型 API）
+"""
 from __future__ import annotations
 
 from llm_common import VerifyResult, guarded, make_quota_probe
