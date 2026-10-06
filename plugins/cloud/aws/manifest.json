@@ -1,0 +1,41 @@
+{
+  "name": "AWS",
+  "version": "1.0.0",
+  "credential_type": "cloud_aws",
+  "author": "Credential Vault",
+  "description": "验证 AWS Access Key 有效性（STS GetCallerIdentity）",
+  "icon": "🅰️",
+  "fields": [
+    {
+      "key": "access_key_id",
+      "label": "Access Key ID",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "AKIA… / ASIA…（临时凭据）"
+    },
+    {
+      "key": "secret_access_key",
+      "label": "Secret Access Key",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "请输入 Secret Access Key"
+    },
+    {
+      "key": "session_token",
+      "label": "Session Token",
+      "type": "password",
+      "required": false,
+      "sensitive": true,
+      "placeholder": "仅临时凭据需要",
+      "hint": "Access Key ID 以 ASIA 开头（实例角色 / STS 临时凭据）时必须填写；长期密钥留空。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

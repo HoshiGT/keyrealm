@@ -1,0 +1,52 @@
+{
+  "name": "Telegram API ID / Hash",
+  "version": "1.0.0",
+  "credential_type": "im_telegram_apihash",
+  "author": "Credential Vault",
+  "description": "验证 Telegram api_id / api_hash（未登录状态探针，不发送验证码），并离线解析会话串",
+  "icon": "📱",
+  "batch_verify": false,
+  "fields": [
+    {
+      "key": "api_id",
+      "label": "api_id",
+      "type": "text",
+      "required": false,
+      "placeholder": "21805357",
+      "hint": "my.telegram.org 上为某个应用申请的纯数字 api_id，与 api_hash 成对使用。"
+    },
+    {
+      "key": "api_hash",
+      "label": "api_hash",
+      "type": "password",
+      "required": false,
+      "sensitive": true,
+      "placeholder": "52bb9e4c4db12323a4b683faeea16610",
+      "hint": "32 位十六进制。api_id 与 api_hash 必须成对提供，缺一不可。"
+    },
+    {
+      "key": "phone",
+      "label": "登录手机号",
+      "type": "text",
+      "required": false,
+      "sensitive": true,
+      "placeholder": "+919919067713",
+      "hint": "仅作留档（登录该应用时用的号码）。校验过程绝不会向该号码发码——探针用的是杜撰号码。"
+    },
+    {
+      "key": "session_string",
+      "label": "会话串（StringSession）",
+      "type": "text",
+      "required": false,
+      "sensitive": true,
+      "placeholder": "1BQANOE...（可选）",
+      "hint": "可选。只做本地解码（取 dc_id / 服务器 / auth_key 指纹），不会联网复用该会话——异地复用可能触发 Telegram 风控把会话踢掉。敏感字段会渲染成单行输入框，直接粘贴即可。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

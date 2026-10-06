@@ -8,6 +8,9 @@ httpx[socks]>=0.27
 # 写在包名后面容易被「按行取值」的解析器当成版本约束（构建脚本自己会先剥掉注释，
 # 但别的工具不一定）。
 PySocks>=1.7
+# telethon：校验 Telegram api_id/api_hash（plugins/im/telegram_apihash）。装 [socks] 是为了带上
+# python-socks——缺它时 telethon **不报错，而是静默忽略 proxy= 直连**，校验请求会漏出真实出口。
+telethon[socks]>=1.36
 mcp>=2.0
 uvicorn>=0.29
 pydantic>=2.7

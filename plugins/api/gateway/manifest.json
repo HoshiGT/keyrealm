@@ -1,0 +1,71 @@
+{
+  "name": "短信服务商",
+  "version": "1.0.0",
+  "credential_type": "sms_gateway",
+  "author": "Credential Vault",
+  "description": "短信网关/接码服务商凭据；字段名按各厂商叫法通用化，有只读接口的联网校验，没有的如实报「未验证」",
+  "icon": "📲",
+  "batch_verify": false,
+  "fields": [
+    {
+      "key": "vendor",
+      "label": "服务商",
+      "type": "select",
+      "required": true,
+      "default": "unspecified",
+      "options": [
+        { "value": "unspecified", "label": "（未指定 / 其他）" },
+        { "value": "kmi", "label": "kmi（accessKey / secretKey）" },
+        { "value": "nxcloud", "label": "nxcloud（appKey / secretKey）" },
+        { "value": "infobip_in", "label": "Infobip 印度（apiKey）" },
+        { "value": "infobip_hk", "label": "Infobip 香港 / info-bip-hk（apiKey）" },
+        { "value": "infinity", "label": "infinity（otpKey / otppwd、ntfKey / ntfpwd）" },
+        { "value": "zhuwei", "label": "zhuwei / zw（merchantKey / aesKey / aesIv）" },
+        { "value": "cm", "label": "CM / cmtelecom（productToken）" },
+        { "value": "hkmi", "label": "hkmi（otpClientId / otpPassword）" },
+        { "value": "buka", "label": "buka / itniotech（apiKey / apiSecret）" },
+        { "value": "iway", "label": "iway（appKey / appSecret / appCode）" },
+        { "value": "laaffic", "label": "laaffic（apiKey / secretKey / appId）" },
+        { "value": "mengwang", "label": "mengwang（account / password）" },
+        { "value": "linkinfo", "label": "linkinfo（appId / appSecret / productId）" },
+        { "value": "eva", "label": "eva（signToken / newAppId / partnerKey / aesKey / iv）" },
+        { "value": "engagelab", "label": "WhatsApp Engagelab（apiKey / apiSecret）" },
+        { "value": "ultramsg", "label": "腾讯 Ultramsg（instanceId / token）" }
+      ],
+      "hint": "决定用哪家的只读接口校验。实测有可用只读接口的 8 家：Engagelab、Infobip、CM、laaffic、nxcloud、buka、Ultramsg（Ultramsg 只能报「未验证」）；其余 8 家没有只读接口，一律如实报「未验证」。"
+    },
+    {
+      "key": "app_key",
+      "label": "标识 / 账号",
+      "type": "text",
+      "required": false,
+      "sensitive": true,
+      "placeholder": "各厂商叫法不同，见提示",
+      "hint": "各家叫法：accessKey、appKey、apiKey、account、clientId、otpClientId、merchantKey、signToken、productToken、instanceId。"
+    },
+    {
+      "key": "app_secret",
+      "label": "密钥 / 口令",
+      "type": "password",
+      "required": false,
+      "sensitive": true,
+      "placeholder": "各厂商叫法不同，见提示",
+      "hint": "各家叫法：secretKey、appSecret、apiSecret、password、otppwd、token、aesKey 等。与「标识」成对的放这里。"
+    },
+    {
+      "key": "extra_params",
+      "label": "附加参数（name=value，用 ; 分隔）",
+      "type": "text",
+      "required": false,
+      "sensitive": true,
+      "placeholder": "appCode=1000; productId=218",
+      "hint": "装不下「标识 / 密钥」这对的其余取值，如 appCode、productId、aesIv、iv、otpTextAppId、marketingAppId、newAppId。同一厂商有多组凭据时（如 infinity 的 otpKey/ntfKey、iway 的 App/MKT 两套），第一组填上面两栏、其余组填这里。敏感字段会渲染成单行输入框，用 ; 分隔即可。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

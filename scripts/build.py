@@ -287,6 +287,19 @@ def assemble_release() -> Path:
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
 
+    # 默认不启用的插件源：同样只出现在「插件管理 → 可添加」，装着不生效，
+    # 等用户点「添加」或日后验证通过挪进 plugins/ 才算启用。缺目录不算错（可以一个都没有）。
+    src_optin = ROOT / "plugins_optin"
+    dest_optin = RELEASE / "plugins_optin"
+    if dest_optin.exists():
+        shutil.rmtree(dest_optin)
+    if src_optin.exists():
+        shutil.copytree(
+            src_optin,
+            dest_optin,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+
     # 约定：plugins/ 是插件的唯一事实来源；data/installed_plugins/ 是旧版本
     # （zip 安装时代）遗留的运行期缓存，应用启动时由 migrate_legacy_installed_plugins()
     # 一次性迁移/清理，不随发行包分发。若用户此前从 release/ 运行过、留下了该缓存

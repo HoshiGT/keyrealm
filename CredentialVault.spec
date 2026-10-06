@@ -125,6 +125,39 @@ else:
     hiddenimports += _h
     print("[spec] 邮箱代理支持：已收集 PySocks")
 
+# Telegram api_id/api_hash 校验（plugins/im/telegram_apihash）靠 telethon；它同样只在插件里被
+# import，PyInstaller 静态分析看不到，必须显式收集。telethon 的 socks 支持另需 python-socks，
+# **这一条要一起收**：缺它时 telethon 不报错，而是**静默忽略 proxy= 直连**——校验请求会脱离代理。
+try:
+    import telethon  # noqa: F401
+except Exception:
+    print(
+        "[spec] 警告：构建环境未安装 telethon → 打出的程序**无法校验 Telegram api_id/api_hash**。\n"
+        '[spec]       修复：pip install "telethon[socks]" 后重新构建。\n'
+        "[spec]       提示：改用 python scripts/build.py 会在构建前检查全部依赖并直接中止。"
+    )
+else:
+    _d, _b, _h = collect_all("telethon")
+    datas += _d
+    binaries += _b
+    hiddenimports += _h
+    print("[spec] Telegram 校验支持：已收集 telethon")
+
+try:
+    import python_socks  # noqa: F401
+except Exception:
+    print(
+        "[spec] 警告：构建环境未安装 python-socks → 打出的程序校验 Telegram 时**会绕过代理直连**\n"
+        "[spec]       （telethon 缺此库时不报错，只是静默忽略 proxy 参数）。\n"
+        '[spec]       修复：pip install "telethon[socks]" 后重新构建。'
+    )
+else:
+    _d, _b, _h = collect_all("python_socks")
+    datas += _d
+    binaries += _b
+    hiddenimports += _h
+    print("[spec] Telegram 代理支持：已收集 python-socks")
+
 # plugins/ 下的标准库导入：**必须手工补**，否则打包后的 exe 一用到就崩。
 #
 # 原因：插件是运行时由 backend 用 importlib **动态加载**的，main.py 从不 `import plugins`，
@@ -134,24 +167,28 @@ else:
 # ——构建期毫无警告、开发机也复现不出（开发机是完整解释器，什么都有）。
 # 这里扫一遍 plugins/**/*.py 的顶层 import，把其中属于标准库的名字补进 hiddenimports，
 # 新增插件用到新的标准库时自动生效，无需再回来手工维护这张清单。
+#
+# `plugins_optin/` **一并扫**：那里的插件是默认不启用、等用户点「添加」才复制进 plugins/ 的，
+# 但 exe 早在构建时就定下了带哪些 stdlib —— 漏掉它，用户装完插件一点就 ModuleNotFoundError。
 def _plugin_stdlib_imports() -> list[str]:
-    root = ROOT / "plugins"
-    if not root.exists():
-        return []
+    roots = [ROOT / "plugins", ROOT / "plugins_optin"]
     pat = re.compile(
         r"^\s*(?:import\s+([A-Za-z_][\w.]*)|from\s+([A-Za-z_][\w.]*)\s+import)\b", re.M
     )
     names: set[str] = set()
-    for py in root.rglob("*.py"):
-        try:
-            text = py.read_text(encoding="utf-8", errors="replace")
-        except Exception:
+    for root in roots:
+        if not root.exists():
             continue
-        for m in pat.finditer(text):
-            mod = (m.group(1) or m.group(2) or "").split(".")[0]
-            # 跳过 __future__ 这类伪模块；它进了 hiddenimports 只会让 PyInstaller 报警告
-            if mod and not mod.startswith("_") and mod in sys.stdlib_module_names:
-                names.add(mod)
+        for py in root.rglob("*.py"):
+            try:
+                text = py.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            for m in pat.finditer(text):
+                mod = (m.group(1) or m.group(2) or "").split(".")[0]
+                # 跳过 __future__ 这类伪模块；它进了 hiddenimports 只会让 PyInstaller 报警告
+                if mod and not mod.startswith("_") and mod in sys.stdlib_module_names:
+                    names.add(mod)
     return sorted(names)
 
 

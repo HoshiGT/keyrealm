@@ -1,0 +1,47 @@
+{
+  "name": "Firebase 管理密钥",
+  "version": "1.1.0",
+  "credential_type": "firebase_admin",
+  "author": "Credential Vault",
+  "description": "验证 Firebase Admin SDK 服务账号密钥有效性（JWT 换 token + Firebase Management 探测，只读）",
+  "icon": "🔥",
+  "fields": [
+    {
+      "key": "client_email",
+      "label": "服务账号邮箱",
+      "type": "text",
+      "required": true,
+      "placeholder": "firebase-adminsdk-xxxxx@项目ID.iam.gserviceaccount.com",
+      "hint": "adminsdk 下载的 JSON 里 client_email 字段的值。"
+    },
+    {
+      "key": "private_key",
+      "label": "私钥（PEM）",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "-----BEGIN PRIVATE KEY-----MIIE…-----END PRIVATE KEY-----",
+      "hint": "adminsdk JSON 里 private_key 字段的值。单行输入框吃不下换行，插件会自己把换行还原、再按 64 列重新折行，所以「原样多行粘贴 / 被压成一行 / 带字面 \\n」都能收。因含私钥故加密存储、列表内打码。"
+    },
+    {
+      "key": "private_key_id",
+      "label": "密钥 ID",
+      "type": "text",
+      "required": false,
+      "hint": "选填，JSON 里的 private_key_id，只用作签名 JWT 头的 kid。实测缺它同样能换到 token，只是为了多一层可追溯性才留。"
+    },
+    {
+      "key": "project_id",
+      "label": "项目 ID",
+      "type": "text",
+      "required": false,
+      "hint": "选填，JSON 里的 project_id；只用于补充探测 Firebase 项目信息，不参与有效性判定。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

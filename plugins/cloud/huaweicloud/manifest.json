@@ -1,0 +1,41 @@
+{
+  "name": "华为云",
+  "version": "1.0.0",
+  "credential_type": "cloud_huaweicloud",
+  "author": "Credential Vault",
+  "description": "验证华为云 AK/SK 有效性（OBS ListBuckets，只读）",
+  "icon": "🔴",
+  "fields": [
+    {
+      "key": "access_key_id",
+      "label": "Access Key ID (AK)",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "HPUA…"
+    },
+    {
+      "key": "secret_access_key",
+      "label": "Secret Access Key (SK)",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "请输入 SK"
+    },
+    {
+      "key": "region",
+      "label": "OBS 区域",
+      "type": "text",
+      "required": false,
+      "default": "ap-southeast-3",
+      "placeholder": "ap-southeast-3",
+      "hint": "只读校验走对象存储列举桶接口（obs.<区域>.myhuaweicloud.com），此栏即签名与访问域名用的区域。留空按 ap-southeast-3。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "name": "应用密钥",
+  "version": "1.0.0",
+  "credential_type": "app_secret",
+  "author": "Credential Vault",
+  "description": "验证 Google API Key / Google OAuth 客户端密钥有效性（只读探测）",
+  "icon": "🔑",
+  "fields": [
+    {
+      "key": "kind",
+      "label": "密钥种类",
+      "type": "select",
+      "required": true,
+      "default": "google_api_key",
+      "options": [
+        {
+          "value": "google_api_key",
+          "label": "Google API Key（AIza…）"
+        },
+        {
+          "value": "google_oauth_secret",
+          "label": "Google OAuth 客户端密钥（GOCSPX-…）"
+        }
+      ],
+      "hint": "按值本身选：AIza… 开头的选 API Key，GOCSPX-… 开头的选 OAuth 客户端密钥。选好后只显示该种类需要的字段。"
+    },
+    {
+      "key": "secret",
+      "label": "密钥值",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "AIza… 或 GOCSPX-…"
+    },
+    {
+      "key": "client_id",
+      "label": "OAuth Client ID",
+      "type": "password",
+      "required": false,
+      "sensitive": true,
+      "placeholder": "…apps.googleusercontent.com",
+      "hint": "校验 GOCSPX- 密钥必须与它成对的 Client ID：Google 只有在客户端凭据对得上的前提下才会走到「授权码无效」这一步。缺了它只能报「无法确认」。",
+      "show_if": {
+        "kind": "google_oauth_secret"
+      }
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}
