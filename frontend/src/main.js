@@ -1,17 +1,26 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
-import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import * as ElementPlusIcons from '@element-plus/icons-vue'
 
-import 'element-plus/dist/index.css'
+// Element Plus 的组件本体与样式由 unplugin-vue-components 按需引入（见 vite.config.js），
+// 这里不再 app.use(ElementPlus)、也不再引 element-plus/dist/index.css。
+//
+// 例外：命令式服务 ElMessage / ElMessageBox 是 JS 调用而非模板标签，解析器扫不到它们，
+// 必须手动引入样式入口。es/components/<name>/style/css 会自动带上该组件的依赖
+// （base / badge / input / button / overlay），不必逐个补。
+import 'element-plus/es/components/message/style/css'
+import 'element-plus/es/components/message-box/style/css'
+// 暗色主题变量：全局一份，先于样式层。
 import 'element-plus/theme-chalk/dark/css-vars.css'
-// 主题层：必须排在 Element Plus 之后，才能盖住它的默认变量与组件样式。
-import '@/styles/index.css'
 
 import App from './App.vue'
 import router from './router'
 import { initTheme } from '@/theme/applyTheme'
+
+// ⚠ 主题层必须是**最后一个** import，别往上挪。
+// 按需引入后，Element Plus 各组件的样式挂在各自的 SFC 上，随 App.vue / router 子树
+// 进入模块图。只有让这一行排在它们之后，我们的覆盖才会落到打包 CSS 的末尾，
+// 从而在同优先级下压住 Element Plus 的默认样式。提前会导致大面积覆盖失效。
+import '@/styles/index.css'
 
 async function bootstrap() {
   // 开发模式下若没有 pywebview，安装内存 Mock 后端，便于浏览器中联调。
@@ -28,11 +37,6 @@ async function bootstrap() {
 
   app.use(createPinia())
   app.use(router)
-  app.use(ElementPlus, { locale: zhCn })
-
-  for (const [name, component] of Object.entries(ElementPlusIcons)) {
-    app.component(name, component)
-  }
 
   app.config.errorHandler = (err, _instance, info) => {
     console.error('[Credential Vault] 未捕获的前端异常:', err, info)

@@ -2,6 +2,9 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+// 按需引入后不再有 app.use(ElementPlus, { locale })，中文语言包改由根级
+// <el-config-provider> 提供（ElConfigProvider 用 renderSlot 渲染，不产生额外 DOM）。
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 
 import api, { EVENTS, onEvent } from '@/api'
 import { useAppStore } from '@/stores/app'
@@ -131,36 +134,40 @@ watch(
 </script>
 
 <template>
-  <!-- 背景极光：三个缓慢漂移的光斑，纯装饰。内容层靠 #app 的 z-index 压在上面。 -->
-  <div class="v-aurora" aria-hidden="true">
-    <span class="blob b1" />
-    <span class="blob b2" />
-    <span class="blob b3" />
-  </div>
+  <!-- locale 由根级 config-provider 统一提供：按需引入后没有 app.use(ElementPlus) 了。
+       该组件内部用 renderSlot 渲染，不会多包一层 DOM，不影响 #app 的布局。 -->
+  <el-config-provider :locale="zhCn">
+    <!-- 背景极光：三个缓慢漂移的光斑，纯装饰。内容层靠 #app 的 z-index 压在上面。 -->
+    <div class="v-aurora" aria-hidden="true">
+      <span class="blob b1" />
+      <span class="blob b2" />
+      <span class="blob b3" />
+    </div>
 
-  <router-view />
+    <router-view />
 
-  <el-dialog
-    v-model="closeDialog"
-    title="关闭窗口"
-    width="440px"
-    align-center
-    :close-on-click-modal="false"
-    :close-on-press-escape="false"
-    :show-close="false"
-  >
-    <p class="close-ask">要直接退出程序，还是让程序继续在后台运行？</p>
-    <p class="close-hint">后台运行时窗口会最小化到系统托盘，MCP 服务与定时任务继续执行。</p>
-    <el-checkbox v-model="closeRemember">记住我的选择（可在"系统设置"中修改）</el-checkbox>
-    <template #footer>
-      <el-button :disabled="closeBusy" @click="handleCloseChoice('background')">
-        后台运行
-      </el-button>
-      <el-button type="primary" :disabled="closeBusy" @click="handleCloseChoice('quit')">
-        直接退出
-      </el-button>
-    </template>
-  </el-dialog>
+    <el-dialog
+      v-model="closeDialog"
+      title="关闭窗口"
+      width="440px"
+      align-center
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      :show-close="false"
+    >
+      <p class="close-ask">要直接退出程序，还是让程序继续在后台运行？</p>
+      <p class="close-hint">后台运行时窗口会最小化到系统托盘，MCP 服务与定时任务继续执行。</p>
+      <el-checkbox v-model="closeRemember">记住我的选择（可在"系统设置"中修改）</el-checkbox>
+      <template #footer>
+        <el-button :disabled="closeBusy" @click="handleCloseChoice('background')">
+          后台运行
+        </el-button>
+        <el-button type="primary" :disabled="closeBusy" @click="handleCloseChoice('quit')">
+          直接退出
+        </el-button>
+      </template>
+    </el-dialog>
+  </el-config-provider>
 </template>
 
 <style>

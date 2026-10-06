@@ -10,6 +10,26 @@
 | Vue Router | ^4.3 | 页面路由 |
 | Vite | ^5.2 | 构建工具 |
 | @vitejs/plugin-vue | ^5.0 | Vue SFC 支持 |
+| unplugin-vue-components | ^32.1 | Element Plus 组件 / 图标**按需自动引入** |
+
+## Element Plus 按需引入
+
+组件与图标**不做全量注册**：`main.js` 不 `app.use(ElementPlus)`，改为在 `vite.config.js` 里挂
+`unplugin-vue-components` 的 `ElementPlusResolver({ importStyle: 'css' })`，模板里写到哪个组件就
+只打包哪个（图标同理，`<el-icon><Search /></el-icon>` 里的 `Search` 由 resolver 自动引入）。
+
+三条必须知道的约束：
+
+- `dirs: []`、`dts: false`——只解析 Element Plus 自身的名字，不扫本地组件目录（本地组件一律显式
+  `import`），也不生成 `components.d.ts`。
+- **命令式组件要手工引样式**：`ElMessage` / `ElMessageBox` / `ElNotification` / `ElLoading` 这类
+  以函数调用的服务不走模板解析，resolver 看不到它们。样式统一在 `main.js` 显式 `import`；
+  `v-loading` 指令的样式也走指令解析路径，缺了它 loading 遮罩会变成纯文字。
+- `import '@/styles/index.css'` **必须放在所有 Element Plus 样式之后**，否则主题令牌会被
+  EP 的默认色阶盖回去。
+
+> 实测收益（同一份源码 A/B 构建）：CSS **425.77 → 231.43 kB（−45.6%）**、
+> JS **1339.80 → 742.56 kB（−44.6%）**。
 
 ## 主题与样式层
 
