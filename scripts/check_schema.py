@@ -141,6 +141,47 @@ def main() -> int:
         assert isinstance(created["id"], str) and len(created["id"]) == 32, created
         print("✓ 代理 id 改 UUID（老库重建 + 引用清理）")
 
+        # 10) 定时计划：credential_ids 列（v6）的读写
+        sched = db.create_schedule(
+            name="勾选巡检", trigger_type="interval", trigger_args={"hours": 1},
+            target_scope="credentials", target_id=None, credential_ids=[3, 1],
+        )
+        assert sched["credential_ids"] == [3, 1], sched
+        listed = next(s for s in db.list_schedules() if s["id"] == sched["id"])
+        assert listed["credential_ids"] == [3, 1], listed
+        db.update_schedule(sched["id"], credential_ids=[2])
+        assert next(s for s in db.list_schedules()
+                    if s["id"] == sched["id"])["credential_ids"] == [2]
+        # 其它 scope 不传时读数必须是 []，不是 None（前端 v-model 要数组）
+        plain = db.create_schedule(name="全量", trigger_type="interval",
+                                   trigger_args={"hours": 1}, target_scope="all")
+        assert next(s for s in db.list_schedules()
+                    if s["id"] == plain["id"])["credential_ids"] == []
+        print("✓ 定时计划 credential_ids 通过")
+
+        # 11) 升级路径：v5 的老 schedules 表（无 credential_ids 列）跑 init_db 应自动补列
+        conn.execute("DROP TABLE schedules")
+        conn.execute(
+            "CREATE TABLE schedules (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " name TEXT NOT NULL, trigger_type TEXT NOT NULL,"
+            " trigger_args TEXT NOT NULL DEFAULT '{}',"
+            " target_scope TEXT NOT NULL DEFAULT 'all', target_id TEXT,"
+            " enabled INTEGER NOT NULL DEFAULT 1, last_run_at TIMESTAMP,"
+            " next_run_at TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        conn.execute("INSERT INTO schedules (name, trigger_type, target_scope)"
+                     " VALUES ('老计划','interval','all')")
+        conn.execute("INSERT OR REPLACE INTO settings (key, value)"
+                     " VALUES ('schema_version','5')")
+        conn.commit()
+        db.init_db()
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(schedules)")}
+        assert "credential_ids" in cols, cols
+        assert db.get_setting("schema_version", "") == "6", db.get_setting("schema_version", "")
+        old = next(s for s in db.list_schedules() if s["name"] == "老计划")
+        assert old["credential_ids"] == [], old
+        print("✓ 老库补 credential_ids 列（v5 → v6）")
+
         print("\n全部通过：建表脚本与各表 SQL 都可用。")
         return 0
     finally:

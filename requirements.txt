@@ -8,9 +8,14 @@ httpx[socks]>=0.27
 # 写在包名后面容易被「按行取值」的解析器当成版本约束（构建脚本自己会先剥掉注释，
 # 但别的工具不一定）。
 PySocks>=1.7
-# telethon：校验 Telegram api_id/api_hash（plugins/im/telegram_apihash）。装 [socks] 是为了带上
-# python-socks——缺它时 telethon **不报错，而是静默忽略 proxy= 直连**，校验请求会漏出真实出口。
-telethon[socks]>=1.36
+# telethon：校验 Telegram api_id/api_hash（plugins/im/telegram_apihash）。
+# 不要写 `telethon[socks]`——telethon 的轮子里**没有 socks 这个 extra**（metadata 的
+# Provides-Extra 只有 cryptg），pip 只会打一句 warning 然后照装 telethon，**不会带
+# python-socks**，于是「照着 requirements 装却仍缺 python-socks」。它的代理支持靠
+# telethon/network/connection/connection.py 里的 `import python_socks`，所以必须单独列一行。
+# 缺 python-socks 时 telethon 不报错，只是静默忽略 proxy= 直连（插件会因此拒绝联网校验）。
+telethon>=1.36
+python-socks>=2.4
 mcp>=2.0
 uvicorn>=0.29
 pydantic>=2.7

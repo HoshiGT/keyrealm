@@ -19,7 +19,7 @@ BASE_DIR = app_dir()
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "credentials.db"
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _lock = threading.Lock()
 _conn: Optional[sqlite3.Connection] = None
@@ -125,6 +125,8 @@ def init_db():
             trigger_args  TEXT NOT NULL,
             target_scope  TEXT DEFAULT 'all',
             target_id     INTEGER,
+            -- scope='credentials' 时勾选的具体凭据 id，JSON 数组；其它 scope 为空数组
+            credential_ids TEXT DEFAULT '[]',
             enabled       INTEGER DEFAULT 1,
             last_run_at   TIMESTAMP,
             next_run_at   TIMESTAMP,
@@ -218,6 +220,13 @@ def _migrate(conn: sqlite3.Connection):
                 );
             """)
             conn.execute("UPDATE settings SET value='' WHERE key='global_proxy_id'")
+        conn.commit()
+
+    if from_version < 6:
+        # v6: schedules.credential_ids —— 定时计划可以只验证**勾选的具体凭据**
+        sched_cols = {r["name"] for r in conn.execute("PRAGMA table_info(schedules)")}
+        if "credential_ids" not in sched_cols:
+            conn.execute("ALTER TABLE schedules ADD COLUMN credential_ids TEXT DEFAULT '[]'")
         conn.commit()
 
 
@@ -452,9 +461,12 @@ def list_plugins(enabled_only: bool = False) -> list[dict]:
 
 
 def get_plugin_by_type(credential_type: str) -> Optional[dict]:
+    # 不按 enabled 过滤：本函数是「插件是否存在」的唯一判定入口，被备份导入/预设/字段净化
+    # 等一批**非插件功能**共用。禁用只是关掉功能闸门（plugin_manager.get_module），
+    # 插件元数据仍须可解析——否则禁用插件的凭据在导入时会被静默丢弃。
     with _lock:
         row = get_conn().execute(
-            "SELECT * FROM plugins WHERE credential_type=? AND enabled=1",
+            "SELECT * FROM plugins WHERE credential_type=?",
             (credential_type,),
         ).fetchone()
     if not row:
@@ -469,14 +481,17 @@ def upsert_plugin(
     plugin_path: str, author: str = "", description: str = "",
     icon: str = "🔑",
     category: str = "", category_name: str = "", batch_verify: bool = True,
+    enabled: bool = True,
 ):
+    # enabled 只是 plugins/.state.json 的**只读镜像**（由 plugin_manager.sync_plugins 写入），
+    # 不参与任何功能判定。默认 True 让不带该参数的调用方（如 scripts/check_schema.py）保持原语义。
     with _lock:
         conn = get_conn()
         conn.execute(
             """INSERT INTO plugins (name, version, author, description, credential_type,
                                     icon, fields_schema, plugin_path, category, category_name,
                                     batch_verify, enabled, installed_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(credential_type) DO UPDATE SET
                  name=excluded.name, version=excluded.version,
                  author=excluded.author, description=excluded.description,
@@ -484,10 +499,10 @@ def upsert_plugin(
                  plugin_path=excluded.plugin_path,
                  category=excluded.category, category_name=excluded.category_name,
                  batch_verify=excluded.batch_verify,
-                 enabled=1""",
+                 enabled=excluded.enabled""",
             (name, version, author, description, credential_type, icon,
              json.dumps(fields_schema, ensure_ascii=False), plugin_path,
-             category, category_name or category, int(batch_verify), _now()),
+             category, category_name or category, int(batch_verify), int(enabled), _now()),
         )
         conn.commit()
 
@@ -621,6 +636,30 @@ def count_active_tokens() -> int:
 
 # ── schedules ─────────────────────────────────────────────
 
+def _parse_id_list(raw) -> list[int]:
+    """把 credential_ids 规整成 int 列表。入参可以是 JSON 文本（存储层）或 list（调用方）。
+
+    坏值一律**丢掉而不是抛错**：一条计划的勾选数据坏了，顶多这条计划暂时没有可验证的凭据，
+    不能让整个计划列表（以及调度器启动时的 reload）跟着崩。
+    """
+    if isinstance(raw, (list, tuple)):
+        value = raw
+    else:
+        try:
+            value = json.loads(raw or "[]")
+        except (TypeError, ValueError):
+            return []
+    if not isinstance(value, list):
+        return []
+    out = []
+    for item in value:
+        try:
+            out.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def list_schedules() -> list[dict]:
     with _lock:
         rows = get_conn().execute("SELECT * FROM schedules ORDER BY created_at").fetchall()
@@ -628,6 +667,8 @@ def list_schedules() -> list[dict]:
     for r in rows:
         d = dict(r)
         d["trigger_args"] = json.loads(d.get("trigger_args") or "{}")
+        # credential_ids 对外一律是 list（存储层是 JSON 文本）——与 trigger_args 同一套约定
+        d["credential_ids"] = _parse_id_list(d.get("credential_ids"))
         results.append(d)
     return results
 
@@ -635,26 +676,33 @@ def list_schedules() -> list[dict]:
 def create_schedule(
     name: str, trigger_type: str, trigger_args: dict,
     target_scope: str = "all", target_id: Optional[Union[int, str]] = None,
+    credential_ids: Optional[list] = None,
 ) -> dict:
     with _lock:
         conn = get_conn()
         cur = conn.execute(
-            """INSERT INTO schedules (name, trigger_type, trigger_args, target_scope, target_id, created_at)
-               VALUES (?,?,?,?,?,?)""",
-            (name, trigger_type, json.dumps(trigger_args), target_scope, target_id, _now()),
+            """INSERT INTO schedules
+                   (name, trigger_type, trigger_args, target_scope, target_id, credential_ids, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (name, trigger_type, json.dumps(trigger_args), target_scope, target_id,
+             json.dumps(_parse_id_list(credential_ids)), _now()),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM schedules WHERE id=?", (cur.lastrowid,)).fetchone()
     d = dict(row)
     d["trigger_args"] = json.loads(d.get("trigger_args") or "{}")
+    d["credential_ids"] = _parse_id_list(d.get("credential_ids"))
     return d
 
 
 def update_schedule(schedule_id: int, **kwargs):
-    allowed = {"name", "trigger_type", "trigger_args", "target_scope", "target_id", "enabled", "last_run_at", "next_run_at"}
+    allowed = {"name", "trigger_type", "trigger_args", "target_scope", "target_id",
+               "credential_ids", "enabled", "last_run_at", "next_run_at"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if "trigger_args" in fields and isinstance(fields["trigger_args"], dict):
         fields["trigger_args"] = json.dumps(fields["trigger_args"])
+    if "credential_ids" in fields and isinstance(fields["credential_ids"], (list, tuple)):
+        fields["credential_ids"] = json.dumps(_parse_id_list(fields["credential_ids"]))
     if not fields:
         return
     sets = ", ".join(f"{k}=?" for k in fields)

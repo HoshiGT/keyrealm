@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Back, Delete, Edit, Expand, Fold, Plus, Refresh, Search, SetUp, Sort } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, Back, Check, CircleClose, Delete, Edit, Expand, Fold, Plus, Refresh, Search, SetUp, Sort } from '@element-plus/icons-vue'
 
 import CredentialForm from '@/components/CredentialForm.vue'
 import ScopeDefaultsDialog from '@/components/ScopeDefaultsDialog.vue'
@@ -31,10 +31,15 @@ const groupOptions = computed(() => vaultStore.groupOptions)
 const hasPlugins = computed(() => vaultStore.plugins.length > 0)
 
 // 添加凭据时的默认服务：跟随目录树当前选中项
-// （选中具体服务 → 该服务；选中类别 → 类别下第一个服务）
+// （选中具体服务 → 该服务；选中类别 → 类别下第一个**已启用**的服务）
 const createDefaultType = computed(() => {
   if (filters.credential_type) return filters.credential_type
-  if (filters.credential_types && filters.credential_types.length) return filters.credential_types[0]
+  if (filters.credential_types && filters.credential_types.length) {
+    // 类别里可能混着「已禁用、但名下还有凭据」的服务（禁用且无凭据的不会进树），
+    // 默认值要跳过它们：否则表单会默认落在一个类型下拉里根本选不到的值上。
+    // 全被禁用时返回空串，交给表单自己取第一个可用类型。
+    return filters.credential_types.find((type) => isPluginEnabled(type)) || ''
+  }
   return ''
 })
 
@@ -67,10 +72,10 @@ function isBatchVerifying(id) {
   return batchVerifyIds.value.has(String(id))
 }
 
-/** 该类型是否允许批量验证（manifest batch_verify=false 的类型只能手动单条验证） */
+/** 该类型是否允许批量验证（manifest batch_verify=false 的类型只能手动单条验证；插件被禁用的也排除） */
 function canBatchVerify(type) {
   const plugin = pluginFor(type)
-  return !plugin || plugin.batch_verify !== false
+  return isPluginEnabled(type) && (!plugin || plugin.batch_verify !== false)
 }
 
 const pickableCredentials = computed(() =>
@@ -835,6 +840,42 @@ function pluginFor(type) {
   return vaultStore.pluginByType[type] || null
 }
 
+/** 该凭据类型所属插件是否启用；插件记录缺失（孤儿凭据）时视为启用，不置灰 */
+function isPluginEnabled(type) {
+  const plugin = vaultStore.pluginByType[type]
+  return plugin ? !!plugin.enabled : true
+}
+
+/** 「操作」按钮不可用的原因；空串 = 可用（tooltip 随之关闭）。 */
+function actionHint(row) {
+  if (!isPluginEnabled(row.credential_type)) return '插件已禁用'
+  if (!pluginFor(row.credential_type)?.has_actions) return '暂无可用功能'
+  return ''
+}
+
+/** 「操作」按钮是否可点。批量进行时整页互斥（batchLocked），归入同一个闸门。 */
+function canOpenActions(row) {
+  return !batchLocked.value && !actionHint(row)
+}
+
+// ── 凭据的**显示**状态 ────────────────────────────────────
+// 插件被禁用时，这条凭据的显示状态改成「插件禁用」，盖过它库里的 status。
+//
+// **派生、绝不入库**：插件启用/禁用只是 plugins/.state.json 里的一个开关（可随时来回切），
+// 若把 plugin_disabled 写进 credentials.status，重新启用插件后这些凭据就永远停在「插件禁用」
+// ——成了洗不掉的脏数据。所以这里按插件启用状态实时算：重新启用，状态自动回到原值。
+function effectiveStatus(row) {
+  return isPluginEnabled(row.credential_type) ? row.status : 'plugin_disabled'
+}
+
+/** 显示状态对应的 tooltip：插件被禁用时不能回显库里那条**过期**的验证结论，改说明缘由 */
+function effectiveStatusDetail(row) {
+  if (isPluginEnabled(row.credential_type)) return row.status_detail
+  return {
+    message: `插件「${typeLabel(row.credential_type)}」已被禁用，该凭据暂时无法验证；可在「插件管理」中重新启用`,
+  }
+}
+
 function typeLabel(type) {
   const plugin = pluginFor(type)
   return plugin ? plugin.name : type
@@ -987,7 +1028,11 @@ function collectExpandable(nodes, acc = []) {
 
 function handleNodeExpand(node) {
   if (!expandedKeys.value.includes(node.id)) {
-    expandedKeys.value.push(node.id)
+    // 必须**赋新数组**、不能原地 push：el-tree 判定 `default-expanded-keys` 变化用的是数组
+    // **身份**（`hasChanged`），原地 push 不触发 watcher，`store.defaultExpandedKeys` 就会停在
+    // 旧值——而下一次 treeData 重建时，节点是否自动展开正是查这份旧值，于是刚展开的节点会被
+    // 自动收起（表现为「展开后随便动一下就自己收回去」）。赋新数组让它同步。
+    expandedKeys.value = [...expandedKeys.value, node.id]
     persistExpanded()
   }
 }
@@ -1002,29 +1047,54 @@ function toggleTreeCollapsed() {
   localStorage.setItem(TREE_COLLAPSED_KEY, treeCollapsed.value ? '1' : '0')
 }
 
-// ── 目录树右键菜单：删除插件（连其凭据一并删除）──
+// ── 目录树右键菜单：禁用/启用插件（凭据保留，只是依赖插件的能力不可用）──
 const ctxMenu = ref({
   visible: false, x: 0, y: 0, name: '',
-  scope: 'plugin', scopeKey: '', credentialType: '', canDelete: false,
+  scope: 'plugin', scopeKey: '', credentialType: '', canToggle: false, pluginEnabled: false,
 })
+const ctxMenuRef = ref(null)
 
-// 类别节点与服务节点都可右键：类别给「类别默认设置」，服务节点另有「删除插件」
+// 右键的**原始**落点。菜单尺寸要等它渲染出来才知道，所以先记点、下一帧再夹进视口。
+let ctxPoint = { x: 0, y: 0 }
+
+/** 把右键菜单夹进视口：右键落在窗口右/下边缘（最常见的是列表最后一项）时，菜单会有一半
+ *  跑到窗口外、点不到也看不见。这里在菜单渲染后按自身尺寸回拉，**不做翻转**——本菜单只有
+ *  一两项、不会挡住关键内容，回拉比「贴底就往上弹」更好预测，也不会在边缘反复跳。 */
+function clampCtxMenu() {
+  const el = ctxMenuRef.value
+  if (!el) return
+  const margin = 6
+  const maxX = window.innerWidth - el.offsetWidth - margin
+  const maxY = window.innerHeight - el.offsetHeight - margin
+  ctxMenu.value = {
+    ...ctxMenu.value,
+    x: Math.max(margin, Math.min(ctxPoint.x, maxX)),
+    y: Math.max(margin, Math.min(ctxPoint.y, maxY)),
+  }
+}
+
+// 类别节点与服务节点都可右键：类别给「类别默认设置」，服务节点另有「禁用/启用插件」
 function onTreeContextMenu(event, data) {
   if (!data) return
   const isCategory = !!data.category && !data.credential_type
   const isService = !!data.credential_type
   if (!isCategory && !isService) return
   event.preventDefault()
+  ctxPoint = { x: event.clientX, y: event.clientY }
   ctxMenu.value = {
     visible: true,
-    x: event.clientX,
-    y: event.clientY,
+    x: ctxPoint.x,
+    y: ctxPoint.y,
     name: data.label,
     scope: isService ? 'plugin' : 'category',
     scopeKey: isService ? data.credential_type : (data.category || data.rel_path || ''),
     credentialType: isService ? data.credential_type : '',
-    canDelete: isService,
+    canToggle: isService,
+    // 给菜单项切换「禁用插件 / 启用插件」文案用；类别节点不涉及插件，给 false 即可
+    pluginEnabled: isService ? isPluginEnabled(data.credential_type) : false,
   }
+  // 渲染后再量尺寸回拉（见 clampCtxMenu）
+  nextTick(clampCtxMenu)
 }
 
 function closeCtxMenu() {
@@ -1048,31 +1118,17 @@ function openScopeDefaults() {
   }
 }
 
-async function deletePluginFromTree() {
-  const { type, name } = ctxMenu.value
+async function togglePluginFromTree() {
+  // 注意：ctxMenu 里存的是 credentialType（不是 type），旧实现解构 type 拿到的是 undefined
+  const { credentialType, name, pluginEnabled } = ctxMenu.value
   closeCtxMenu()
+  const next = !pluginEnabled
   try {
-    await ElMessageBox.confirm(
-      `将删除插件「${name}」及其全部凭据（不可恢复，除非稍后在「插件管理」里重新添加该插件）。`,
-      '删除插件',
-      {
-        type: 'warning',
-        confirmButtonText: '删除',
-        cancelButtonText: '取消',
-        confirmButtonClass: 'el-button--danger',
-      },
-    )
-  } catch {
-    return
-  }
-  try {
-    const result = await vaultStore.deletePlugin(type)
-    ElMessage.success(
-      `已删除插件「${result.name || name}」，同时删除 ${result.deleted_credentials} 条凭据`,
-    )
-    resetTree()
+    await vaultStore.setPluginEnabled(credentialType, next)
+    ElMessage.success(`已${next ? '启用' : '禁用'}插件「${name}」`)
+    await load()
   } catch (err) {
-    ElMessage.error(err.message || '删除插件失败')
+    ElMessage.error(err.message || (next ? '启用插件失败' : '禁用插件失败'))
   }
 }
 
@@ -1357,7 +1413,9 @@ watch(sortField, (value) => localStorage.setItem(SORT_FIELD_KEY, value))
 watch(sortDir, (value) => localStorage.setItem(SORT_DIR_KEY, value))
 
 // 状态排序权重：需要处理的排前面（配合「升序」= 异常优先）
-const STATUS_ORDER = { invalid: 0, error: 1, unknown: 2, valid: 3 }
+// plugin_disabled 排最后：它的凭据是「暂时动不了」，不是「有问题等你处理」，
+// 混进异常堆里只会挡住真正要看的行。
+const STATUS_ORDER = { invalid: 0, error: 1, unknown: 2, valid: 3, plugin_disabled: 4 }
 
 /** 时间字符串 → 可比较的毫秒数（空值/非法值一律当 0，即最早） */
 function timeValue(value) {
@@ -1372,7 +1430,7 @@ const SORT_COMPARATORS = {
   created_at: (a, b) => timeValue(a.created_at) - timeValue(b.created_at),
   name: (a, b) => nameCollator.compare(a.name || '', b.name || ''),
   status: (a, b) =>
-    (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9) ||
+    (STATUS_ORDER[effectiveStatus(a)] ?? 9) - (STATUS_ORDER[effectiveStatus(b)] ?? 9) ||
     nameCollator.compare(a.name || '', b.name || ''),
   last_verified: (a, b) => timeValue(a.last_verified_at) - timeValue(b.last_verified_at),
   last_valid: (a, b) => timeValue(a.last_valid_at) - timeValue(b.last_valid_at),
@@ -1386,6 +1444,54 @@ const sortedCredentials = computed(() => {
   const compare = SORT_COMPARATORS[sortField.value] || SORT_COMPARATORS.created_at
   const sign = sortDir.value === 'asc' ? 1 : -1
   return rows.sort((a, b) => sign * compare(a, b))
+})
+
+// ── 分页：纯展示层（筛选走后端、排序在前端 computed），每页条数持久化 ──
+
+const PAGE_SIZE_KEY = 'vault.credentials.pageSize'
+// 预设值；但下拉允许手输（allow-create），所以 5/10/20/50 只是入口，不是白名单
+const PAGE_SIZES = [5, 10, 20, 50]
+const PAGE_SIZE_DEFAULT = 10
+
+/** 把任意来源的每页条数规整成合法值（正整数，否则回落默认）。
+ *  三个来源都要过这里：预设下拉、用户手输（allow-create 回传给 v-model 的是**字符串**）、
+ *  以及 localStorage 里的旧值（可能来自旧版本的预设，早已不是合法预设之一）。 */
+function normalizePageSize(value) {
+  const n = Math.floor(Number(value))
+  return Number.isFinite(n) && n > 0 ? n : PAGE_SIZE_DEFAULT
+}
+
+const pageSize = ref(normalizePageSize(localStorage.getItem(PAGE_SIZE_KEY)))
+// 当前页**不持久化**：页号是「我正看到哪儿」，下次启动还停在第 5 页只会让人以为
+// 列表少了内容；重新打开从第 1 页开始才符合直觉（与列宽/排序这类界面偏好不同）。
+const currentPage = ref(1)
+watch(pageSize, (value) => localStorage.setItem(PAGE_SIZE_KEY, String(value)))
+
+/** 手输的每页条数写回前先规整：`0` / 负数 / 字母 / 空都会落回默认值。
+ *  这种情况必须**说出来**——否则用户会以为自己填的 0 被界面悄悄改了。 */
+function onPageSizeChange(value) {
+  const normalized = normalizePageSize(value)
+  if (normalized !== pageSize.value) pageSize.value = normalized
+  if (!(Number(value) > 0)) {
+    ElMessage.warning(`每页条数需为正整数，已恢复为 ${PAGE_SIZE_DEFAULT}`)
+  }
+}
+
+const totalPages = computed(() =>
+  Math.max(1, Math.ceil((vaultStore.credentials?.length || 0) / pageSize.value)),
+)
+
+// 条数变少（删除 / 筛选命中更少 / 调大每页条数）后停在越界页会看到一张空表，
+// 这里把当前页夹回合法范围。用 watch 而不是在 computed 里顺手改：computed 里写 ref
+// 是反向依赖，会触发 Vue 的递归更新警告。
+watch(totalPages, () => {
+  if (currentPage.value > totalPages.value) currentPage.value = totalPages.value
+})
+
+/** 当前页要展示的行。总条数 ≤ 每页条数时就是全部行（1 页）。 */
+const pagedCredentials = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return sortedCredentials.value.slice(start, start + pageSize.value)
 })
 
 // ── 数据加载与操作 ────────────────────────────────────────
@@ -1404,12 +1510,16 @@ watch(
   () => {
     if (searchTimer) clearTimeout(searchTimer)
     searchTimer = setTimeout(() => {
+      currentPage.value = 1
       vaultStore.fetchCredentials().catch((err) => ElMessage.error(err.message || '搜索失败'))
     }, 350)
   },
 )
 
 function applyFilters() {
+  // 换了筛选条件就是另一批数据，停在第 5 页没有意义 —— 一律回第 1 页。
+  // （排序不在此列：顺序变了但总条数不变，留在原页更符合预期。）
+  currentPage.value = 1
   vaultStore.fetchCredentials().catch((err) => ElMessage.error(err.message || '筛选失败'))
 }
 
@@ -1424,6 +1534,16 @@ function resetFilters() {
 function openCreate() {
   if (!hasPlugins.value) {
     ElMessage.warning('未检测到可用插件，请将插件目录放入 plugins/ 文件夹后重启应用')
+    return
+  }
+  // 目录树当前选中的服务若已被禁用，就不许再往它名下加凭据：禁用插件连验证都做不了，
+  // 先加进去只会攒下一批「加完就验不了」的条目。**按钮本身不置灰**，点了给明确提示即可
+  // （与「插件管理」里那个灰着的「启用」按钮同理：给反馈比闷着不动强）。
+  const type = createDefaultType.value
+  if (type && !isPluginEnabled(type)) {
+    ElMessage.warning(
+      `插件「${typeLabel(type)}」已禁用，无法添加该类型的凭据；可在「插件管理」中重新启用`,
+    )
     return
   }
   editing.value = null
@@ -1556,6 +1676,32 @@ onMounted(async () => {
           <el-option v-for="option in statusOptions" :key="option.value" :label="option.label" :value="option.value" />
         </el-select>
         <el-button text @click="resetFilters">重置</el-button>
+        <!-- 分页整体靠右（.pager 的 margin-left:auto 把它推到边缘），顺序与用户要求一致：
+             最右是翻页箭头（左右箭头 = 上一页 / 下一页），其左是「每页 xx 条」。
+             条数下拉除预设值外允许手输（filterable + allow-create）。
+             空列表时不渲染（「1 / 1」和每页条数下拉在空表上没有意义）。 -->
+        <div v-if="vaultStore.credentials.length" class="pager">
+          <!-- 「每页」「条」写在选择框外面：allow-create 造出来的选项 label 就是用户输入的原文，
+               若把单位塞进预设项的 label（「每页 20 条」），自定义值就会显示成光秃秃的「37」，
+               两种形态混在一处很难看。单位放外面，两种来源的显示就一致了。 -->
+          <span class="pager-unit">每页</span>
+          <el-select
+            v-model="pageSize"
+            class="pager-size"
+            title="可选择预设值，也可直接输入自定义条数"
+            filterable
+            allow-create
+            default-first-option
+            :reserve-keyword="false"
+            @change="onPageSizeChange"
+          >
+            <el-option v-for="size in PAGE_SIZES" :key="size" :label="String(size)" :value="size" />
+          </el-select>
+          <span class="pager-unit">条</span>
+          <el-button :icon="ArrowLeft" :disabled="currentPage <= 1" title="上一页" @click="currentPage--" />
+          <span class="pager-page">{{ currentPage }} / {{ totalPages }}</span>
+          <el-button :icon="ArrowRight" :disabled="currentPage >= totalPages" title="下一页" @click="currentPage++" />
+        </div>
       </div>
     </el-card>
 
@@ -1592,6 +1738,13 @@ onMounted(async () => {
         >
           {{ selectedRelPath }}
         </div>
+        <!-- ⚠️ `:auto-expand-parent` 必须显式关掉（el-tree 默认为 true）。
+             根因：`:default-expanded-keys` 一变，el-tree 就对数组里**每个**节点调
+             `node.expand(null, autoExpandParent)`，而 `expandParent` 会把该节点的**所有祖先
+             一起撑开**。类别节点的祖先正是根「全部凭据」，所以只要 expandedKeys 里还剩任何
+             一个类别，用户收起根之后立刻会被下一个 expand 调用顶回来 —— 表现为「全部凭据」
+             怎么都收不起来（而类别本身不会，因为它的子节点是叶子、从不进 expandedKeys）。
+             关掉后只影响这一处：搜索展开走的是 `node.expand()`（不传该参数，本就是假）。 -->
         <el-tree
           v-show="!treeCollapsed"
           ref="treeRef"
@@ -1600,6 +1753,7 @@ onMounted(async () => {
           node-key="id"
           highlight-current
           :default-expanded-keys="expandedKeys"
+          :auto-expand-parent="false"
           :expand-on-click-node="false"
           :filter-node-method="filterTreeNode"
           @node-click="handleNodeClick"
@@ -1630,7 +1784,7 @@ onMounted(async () => {
         <el-table
           ref="tableRef"
           v-loading="vaultStore.loadingCredentials"
-          :data="sortedCredentials"
+          :data="pagedCredentials"
           empty-text="暂无凭据，点击右上角「添加凭据」开始"
           style="width: 100%"
         >
@@ -1677,7 +1831,9 @@ onMounted(async () => {
             </template>
 
             <template v-else-if="col.key === 'status'" #default="{ row }">
-              <StatusBadge :status="row.status" :detail="row.status_detail" />
+              <!-- 状态不是直接读 row.status，而是过一层 effectiveStatus()：插件被禁用时显示
+                   「插件禁用」并压过库里的值（派生、不入库，理由见 effectiveStatus 的注释） -->
+              <StatusBadge :status="effectiveStatus(row)" :detail="effectiveStatusDetail(row)" />
             </template>
 
             <template v-else-if="col.key === 'created_at'" #default="{ row }">
@@ -1694,26 +1850,47 @@ onMounted(async () => {
 
             <template v-else-if="col.key === 'actions'" #default="{ row }">
               <div class="action-cell">
-                <el-button
-                  v-if="pluginFor(row.credential_type)?.has_actions"
-                  size="small"
-                  :disabled="batchLocked"
-                  @click="openActions(row, $event)"
+                <!-- 「操作」「验证」这两个依赖插件的能力置灰时给出原因；编辑 / 删除是纯本地数据
+                     操作，插件禁用也照常可用。
+                     ⚠️ el-tooltip 不能直接包 disabled 的 el-button：disabled 控件收不到鼠标事件，
+                     提示不会弹。所以各用一层非 disabled 的 span 做锚点。 -->
+                <el-tooltip
+                  :content="actionHint(row)"
+                  placement="top"
+                  :disabled="!actionHint(row)"
                 >
-                  操作
-                </el-button>
-                <!-- 「验证」只按**本条是否在本次批量里**禁用：批量勾了 A/B/C，D 的按钮照常可用，
-                     用户想单条补验就补验。整页互斥（batchLocked）交给新增/编辑/删除那些会改数据的地方。 -->
-                <el-button
-                  size="small"
-                  type="primary"
-                  plain
-                  :loading="verifyingIds.includes(row.id) || isBatchVerifying(row.id)"
-                  :disabled="isBatchVerifying(row.id)"
-                  @click="verifyRow(row)"
+                  <span class="action-anchor">
+                    <!-- 「操作」常驻：插件没声明任何操作时也保留按钮（灰掉 + 悬停说明），
+                         免得同一列里按钮忽有忽无、每行的按钮位置都对不齐 -->
+                    <el-button
+                      size="small"
+                      :disabled="!canOpenActions(row)"
+                      @click="openActions(row, $event)"
+                    >
+                      操作
+                    </el-button>
+                  </span>
+                </el-tooltip>
+                <el-tooltip
+                  content="插件已禁用"
+                  placement="top"
+                  :disabled="isPluginEnabled(row.credential_type)"
                 >
-                  验证
-                </el-button>
+                  <span class="action-anchor">
+                    <!-- 「验证」只按**本条是否在本次批量里**禁用：批量勾了 A/B/C，D 的按钮照常可用，
+                         用户想单条补验就补验。整页互斥（batchLocked）交给新增/编辑/删除那些会改数据的地方。 -->
+                    <el-button
+                      size="small"
+                      type="primary"
+                      plain
+                      :loading="verifyingIds.includes(row.id) || isBatchVerifying(row.id)"
+                      :disabled="isBatchVerifying(row.id) || !isPluginEnabled(row.credential_type)"
+                      @click="verifyRow(row)"
+                    >
+                      验证
+                    </el-button>
+                  </span>
+                </el-tooltip>
                 <el-button size="small" :icon="Edit" :disabled="batchLocked" @click="openEdit(row)">编辑</el-button>
                 <el-button size="small" type="danger" plain :icon="Delete" :disabled="batchLocked" @click="removeRow(row)" />
               </div>
@@ -1780,7 +1957,7 @@ onMounted(async () => {
               <span class="pick-type text-muted">{{ typeLabel(row.credential_type) }}</span>
             </el-checkbox>
             <el-tag v-if="!canBatchVerify(row.credential_type)" size="small" type="info">
-              需手动验证
+              {{ isPluginEnabled(row.credential_type) ? '需手动验证' : '插件已禁用' }}
             </el-tag>
           </div>
         </el-checkbox-group>
@@ -1834,6 +2011,7 @@ onMounted(async () => {
 
     <div
       v-if="ctxMenu.visible"
+      ref="ctxMenuRef"
       class="ctx-menu"
       :style="{ left: `${ctxMenu.x}px`, top: `${ctxMenu.y}px` }"
     >
@@ -1841,9 +2019,12 @@ onMounted(async () => {
         <el-icon><SetUp /></el-icon>
         {{ ctxMenu.scope === 'category' ? '类别默认设置' : '插件默认设置' }}
       </div>
-      <div v-if="ctxMenu.canDelete" class="ctx-item is-danger" @click="deletePluginFromTree">
-        <el-icon><Delete /></el-icon>
-        删除插件「{{ ctxMenu.name }}」
+      <div v-if="ctxMenu.canToggle" class="ctx-item" @click="togglePluginFromTree">
+        <el-icon>
+          <CircleClose v-if="ctxMenu.pluginEnabled" />
+          <Check v-else />
+        </el-icon>
+        {{ ctxMenu.pluginEnabled ? '禁用' : '启用' }}插件「{{ ctxMenu.name }}」
       </div>
     </div>
 
@@ -2415,10 +2596,6 @@ onMounted(async () => {
   background: var(--el-fill-color-light);
 }
 
-.ctx-item.is-danger {
-  color: var(--el-color-danger);
-}
-
 .chat-model {
   display: flex;
   align-items: center;
@@ -2521,6 +2698,18 @@ onMounted(async () => {
 }
 
 .action-cell .el-button {
+  margin-left: 0;
+}
+
+/* 「操作」「验证」各自包一层非 disabled 的 span 作 el-tooltip 的锚点（disabled 的
+   el-button 收不到鼠标事件，直接包它提示不弹）。inline-flex 让锚点贴合按钮、
+   不额外撑出高度，也不影响 .action-cell 的 flex 间距。 */
+.action-anchor {
+  display: inline-flex;
+  align-items: center;
+}
+
+.action-anchor .el-button {
   margin-left: 0;
 }
 
@@ -2634,5 +2823,34 @@ onMounted(async () => {
 
 .sort-dir {
   width: 96px;
+}
+
+/* ── 分页（在筛选框 .filter-bar 内整体靠右，见该处模板） ── */
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* 把分页推到筛选框右边缘；比塞一个自撑开的 spacer 元素更省事，
+     且筛选框换行（flex-wrap）时也不会多出一个孤立元素 */
+  margin-left: auto;
+}
+
+/* 等宽数字 + 固定最小宽度：「9 / 9」→「10 / 10」时页面不左右跳 */
+.pager-page {
+  min-width: 56px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.pager-size {
+  width: 78px;   /* 选项 label 只是数字（单位在框外的 .pager-unit），无需更宽 */
+}
+
+.pager-unit {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
 }
 </style>

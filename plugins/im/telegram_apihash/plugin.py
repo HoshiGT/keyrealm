@@ -19,9 +19,10 @@
 联网复用会话——同一个会话从另一个出口登录，有可能触发风控把会话踢掉，把好凭据验废。因此格式
 正确时给的是「未验证」而不是「有效」，绝不下假结论。
 
-telethon 是可选依赖（已列入 requirements.txt，写作 ``telethon[socks]``）：缺席时联网校验跳过、
-只做本地解码与格式检查。装的 extras ``[socks]`` 会带上 ``python-socks``——**这个不能省**：若框架
-配了代理而该库缺席，Telethon 会**静默忽略代理直连**，脱离代理出口，所以此时一律中止联网校验。
+telethon 是可选依赖（已列入 requirements.txt，与 ``python-socks`` 分列两行）：缺席时联网校验跳过、
+只做本地解码与格式检查。``python-socks`` **不能省**：若框架配了代理而它缺席，Telethon 会**静默忽略
+代理直连**、脱离代理出口，所以此时一律中止联网校验。（别写 ``telethon[socks]``——telethon 的轮子里
+没有这个 extra，那个 extras 装不来 python-socks。）
 
 仅从 im_common 复用通用工具。
 

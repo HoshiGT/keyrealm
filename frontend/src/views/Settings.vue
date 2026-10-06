@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Connection, Delete, Edit, Key, Lock, Plus, Refresh, Timer, VideoPlay } from '@element-plus/icons-vue'
 
 import { api } from '@/api'
+import CredentialTreePicker from '@/components/CredentialTreePicker.vue'
 import { useAppStore } from '@/stores/app'
 import { useProxyStore } from '@/stores/proxy'
 import { useVaultStore } from '@/stores/vault'
@@ -127,6 +128,8 @@ const scheduleForm = reactive({
   triggerArgsText: '',
   target_scope: 'all',
   target_id: null,
+  // 仅 target_scope === 'credentials' 时使用：目录树勾选的具体凭据 id
+  credential_ids: [],
 })
 
 const isEdit = computed(() => editingId.value !== null)
@@ -203,6 +206,9 @@ function describeTarget(schedule) {
     const found = vaultStore.plugins.find((item) => item.credential_type === schedule.target_id)
     return found ? `类型：${found.name}` : `类型：${schedule.target_id}`
   }
+  if (schedule.target_scope === 'credentials') {
+    return `指定凭据：${(schedule.credential_ids || []).length} 条`
+  }
   return '全部凭据'
 }
 
@@ -218,6 +224,7 @@ function resetScheduleForm() {
   scheduleForm.triggerArgsText = ''
   scheduleForm.target_scope = 'all'
   scheduleForm.target_id = null
+  scheduleForm.credential_ids = []
 }
 
 function openCreate() {
@@ -233,6 +240,8 @@ function openEdit(row) {
   scheduleForm.trigger_type = row.trigger_type
   scheduleForm.target_scope = row.target_scope || 'all'
   scheduleForm.target_id = row.target_id ?? null
+  // 「指定凭据」的勾选结果（凭据 id 数组）；其它 scope 下后端存的是空数组
+  scheduleForm.credential_ids = Array.isArray(row.credential_ids) ? [...row.credential_ids] : []
 
   const args = row.trigger_args || {}
   if (row.trigger_type === 'interval') {
@@ -289,15 +298,23 @@ async function submitSchedule() {
     return
   }
 
+  // target_id 是多态字段，只对 group/type 有意义；「指定凭据」把勾选结果放 credential_ids。
+  // 两个字段都随 payload 全量送出（另一个置空/空数组），否则编辑时切走 scope 会留下上一次的残值。
+  const isCredentials = scheduleForm.target_scope === 'credentials'
   const payload = {
     name: scheduleForm.name.trim(),
     trigger_type: scheduleForm.trigger_type,
     trigger_args: triggerArgs,
     target_scope: scheduleForm.target_scope,
-    target_id: scheduleForm.target_scope === 'all' ? null : scheduleForm.target_id,
+    target_id: ['group', 'type'].includes(scheduleForm.target_scope) ? scheduleForm.target_id : null,
+    credential_ids: isCredentials ? [...scheduleForm.credential_ids] : [],
   }
 
-  if (payload.target_scope !== 'all' && payload.target_id === null) {
+  if (payload.target_scope === 'credentials' && payload.credential_ids.length === 0) {
+    ElMessage.warning('请至少选择一条凭据')
+    return
+  }
+  if (['group', 'type'].includes(payload.target_scope) && payload.target_id === null) {
     ElMessage.warning('请选择验证范围对应的目标')
     return
   }
@@ -335,12 +352,21 @@ async function toggleSchedule(row, enabled) {
 }
 
 async function runScheduleNow(row) {
+  const scope = row.target_scope || 'all'
+  const ids = Array.isArray(row.credential_ids) ? row.credential_ids : []
+  // 「指定凭据」却没勾任何一条：batch_verify 把空 credential_ids 视同「不带筛选」→ 会去验全库，
+  // 与该计划「一条也不验」的意图正好相反。这里必须拦住（后端 _run_schedule 同样拦）。
+  if (scope === 'credentials' && ids.length === 0) {
+    ElMessage.warning('该计划未选中任何凭据，无法运行')
+    return
+  }
   runningId.value = row.id
   try {
     await vaultStore.batchVerify(
-      row.target_scope || 'all',
-      row.target_scope === 'group' ? row.target_id : null,
-      row.target_scope === 'type' ? row.target_id : null,
+      scope,
+      scope === 'group' ? row.target_id : null,
+      scope === 'type' ? row.target_id : null,
+      scope === 'credentials' ? ids : null,
     )
     ElMessage.success(`已按计划「${row.name}」的范围启动验证`)
   } catch (err) {
@@ -977,6 +1003,7 @@ onMounted(async () => {
             <el-option label="全部凭据" value="all" />
             <el-option label="指定分组" value="group" :disabled="!groupOptions.length" />
             <el-option label="指定类型" value="type" :disabled="!typeOptions.length" />
+            <el-option label="指定凭据" value="credentials" />
           </el-select>
         </el-form-item>
 
@@ -990,6 +1017,11 @@ onMounted(async () => {
           <el-select v-model="scheduleForm.target_id" placeholder="请选择凭据类型" class="full-width">
             <el-option v-for="option in typeOptions" :key="option.value" :label="option.label" :value="option.value" />
           </el-select>
+        </el-form-item>
+
+        <el-form-item v-else-if="scheduleForm.target_scope === 'credentials'" label="选择凭据">
+          <!-- 与「备份 → 仅选中的凭据」同一个组件（勾选语义完全相同），对话框里放矮一点 -->
+          <CredentialTreePicker v-model="scheduleForm.credential_ids" :max-height="200" />
         </el-form-item>
 
         <el-form-item>

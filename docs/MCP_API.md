@@ -332,7 +332,9 @@ claude mcp add credential-vault \
 #### `vault_list_plugins`
 **默认权限：✅ 开启**
 
-列出当前已加载的全部插件（`plugins/` 目录扫描结果，放入即加载、删除即卸载，无安装接口）。
+列出当前扫描到的全部插件（`plugins/` 目录扫描结果，放入即加载、删除即卸载，无安装接口）。
+**被禁用的插件也在列表里**，看 `enabled` 字段区分（`plugins/.state.json` 决定；禁用只关功能闸门，
+其凭据仍可读写）。
 
 ```json
 // 出参

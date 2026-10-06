@@ -289,7 +289,7 @@ def _build_mcp_app() -> MCPServer:
     # ── vault_list_plugins ────────────────────────────────
     @mcp.tool()
     def vault_list_plugins() -> list[dict]:
-        """列出已安装插件"""
+        """列出全部插件（含 enabled 状态，被禁用的也在内）"""
         _require_perm("vault_list_plugins")
         return plugin_manager.list_installed_plugins()
 

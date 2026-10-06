@@ -89,74 +89,76 @@ for _pkg in [
         # 平台特有的可选依赖（如 Windows 的 clr）在当前系统不存在，跳过即可
         pass
 
+# ── 隐式依赖：缺一个就**中止构建** ─────────────────────────
+#
+# 下面几项都已经在 requirements.txt 里（socksio 由 httpx[socks] 带出），构建环境本该齐全。
+# 它们全都只在**函数体内**或**运行期动态加载的插件里**被 import：PyInstaller 的静态分析看不到，
+# 漏掉时构建**不报任何错**，代价却要在 exe 里才显形——「一用 socks5 代理就英文 ImportError」
+# 「配了代理却静默直连」。所以这里缺了就停下，宁可不产出，也不产出一个悄悄缺功能的包。
+#
+# 逃生口：CV_ALLOW_MISSING_DEPS=1（`python scripts/build.py --allow-missing-deps` 会设置它）。
+_ALLOW_MISSING_DEPS = os.environ.get("CV_ALLOW_MISSING_DEPS") == "1"
+
+
+def require(pkg: str, why: str, install: str) -> None:
+    """收集一个「PyInstaller 静态分析看不到」的依赖。缺失时默认中止构建。
+
+    只能用 .extend() 而不是 `datas += ...`：函数体内的 `+=` 会把 datas 变成局部名。
+    """
+    try:
+        __import__(pkg)
+    except Exception:
+        if _ALLOW_MISSING_DEPS:
+            print(f"[spec] 警告：构建环境未安装 {pkg} → 打出的程序{why}（已由 "
+                  f"--allow-missing-deps 放行）")
+            return
+        raise SystemExit(
+            f"[spec] 构建中止：构建环境未安装 {pkg} —— 打出的程序{why}。\n"
+            f"[spec]           修复：{install}\n"
+            f"[spec]           确实要忽略缺依赖继续构建：加 --allow-missing-deps"
+            f"（或直接设 CV_ALLOW_MISSING_DEPS=1）"
+        )
+    _d, _b, _h = collect_all(pkg)
+    datas.extend(_d)
+    binaries.extend(_b)
+    hiddenimports.extend(_h)
+    print(f"[spec] 已收集 {pkg}")
+
+
 # SOCKS 代理支持：httpx 在**函数体内**静态 import socksio（httpx/_transports/default.py），
 # 构建机没装这个包时 PyInstaller 既不报错也不会打包它，症状是 exe 里一用 socks5 代理
 # 就抛英文 ImportError("Using SOCKS proxy, but the 'socksio' package is not installed")。
-# 因此这里显式收集并大声警告——不中止构建：不用 SOCKS 代理的用户不受影响。
-try:
-    import socksio  # noqa: F401
-except Exception:
-    print(
-        "[spec] 警告：构建环境未安装 socksio → 打出的程序**无法使用 socks5 代理**。\n"
-        '[spec]       修复：pip install "httpx[socks]" 后重新构建。\n'
-        "[spec]       提示：改用 python scripts/build.py 会在构建前检查全部依赖并直接中止。"
-    )
-else:
-    _d, _b, _h = collect_all("socksio")
-    datas += _d
-    binaries += _b
-    hiddenimports += _h
-    print("[spec] SOCKS 代理支持：已收集 socksio")
+require(
+    "socksio",
+    "**无法使用 socks5 代理**",
+    'pip install "httpx[socks]"',
+)
 
 # 邮箱（SMTP/IMAP）走 SOCKS/HTTP CONNECT 隧道要靠 PySocks（import 名是 socks）。
 # 插件是运行时动态加载的，PyInstaller 静态分析看不到它，必须显式收集。
-try:
-    import socks  # noqa: F401  (PySocks)
-except Exception:
-    print(
-        "[spec] 警告：构建环境未安装 PySocks → 打出的程序**无法给邮箱设置代理**。\n"
-        "[spec]       修复：pip install PySocks 后重新构建。\n"
-        "[spec]       提示：改用 python scripts/build.py 会在构建前检查全部依赖并直接中止。"
-    )
-else:
-    _d, _b, _h = collect_all("socks")
-    datas += _d
-    binaries += _b
-    hiddenimports += _h
-    print("[spec] 邮箱代理支持：已收集 PySocks")
+require(
+    "socks",
+    "**无法给邮箱设置代理**",
+    "pip install PySocks",
+)
 
 # Telegram api_id/api_hash 校验（plugins/im/telegram_apihash）靠 telethon；它同样只在插件里被
-# import，PyInstaller 静态分析看不到，必须显式收集。telethon 的 socks 支持另需 python-socks，
-# **这一条要一起收**：缺它时 telethon 不报错，而是**静默忽略 proxy= 直连**——校验请求会脱离代理。
-try:
-    import telethon  # noqa: F401
-except Exception:
-    print(
-        "[spec] 警告：构建环境未安装 telethon → 打出的程序**无法校验 Telegram api_id/api_hash**。\n"
-        '[spec]       修复：pip install "telethon[socks]" 后重新构建。\n'
-        "[spec]       提示：改用 python scripts/build.py 会在构建前检查全部依赖并直接中止。"
-    )
-else:
-    _d, _b, _h = collect_all("telethon")
-    datas += _d
-    binaries += _b
-    hiddenimports += _h
-    print("[spec] Telegram 校验支持：已收集 telethon")
+# import，PyInstaller 静态分析看不到，必须显式收集。
+require(
+    "telethon",
+    "**无法校验 Telegram api_id/api_hash**",
+    "pip install -r requirements.txt（含 telethon + python-socks）",
+)
 
-try:
-    import python_socks  # noqa: F401
-except Exception:
-    print(
-        "[spec] 警告：构建环境未安装 python-socks → 打出的程序校验 Telegram 时**会绕过代理直连**\n"
-        "[spec]       （telethon 缺此库时不报错，只是静默忽略 proxy 参数）。\n"
-        '[spec]       修复：pip install "telethon[socks]" 后重新构建。'
-    )
-else:
-    _d, _b, _h = collect_all("python_socks")
-    datas += _d
-    binaries += _b
-    hiddenimports += _h
-    print("[spec] Telegram 代理支持：已收集 python-socks")
+# telethon 的 socks 支持另需 python-socks，**这一条要一起收**：缺它时 telethon 不报错，
+# 而是**静默忽略 proxy= 直连**（插件因此拒绝联网校验，不会漏出直连出口，但配了代理的凭据
+# 只能降级成「未验证」）。注意别指望 `telethon[socks]`：telethon 的轮子里没有 socks extra
+# （Provides-Extra 只有 cryptg），装不来 python-socks，所以 requirements.txt 里是单独一行。
+require(
+    "python_socks",
+    "**无法校验配了代理的 Telegram 凭据**",
+    "pip install python-socks（telethon 没有 socks extra，写 telethon[socks] 装不来它）",
+)
 
 # plugins/ 下的标准库导入：**必须手工补**，否则打包后的 exe 一用到就崩。
 #
@@ -168,10 +170,10 @@ else:
 # 这里扫一遍 plugins/**/*.py 的顶层 import，把其中属于标准库的名字补进 hiddenimports，
 # 新增插件用到新的标准库时自动生效，无需再回来手工维护这张清单。
 #
-# `plugins_optin/` **一并扫**：那里的插件是默认不启用、等用户点「添加」才复制进 plugins/ 的，
-# 但 exe 早在构建时就定下了带哪些 stdlib —— 漏掉它，用户装完插件一点就 ModuleNotFoundError。
+# `plugins/` 是插件的**唯一来源**（不再有 plugins_builtin/ 与 plugins_optin/ 两份副本），
+# 因此这里只扫它一处即可覆盖全部插件用到的标准库。
 def _plugin_stdlib_imports() -> list[str]:
-    roots = [ROOT / "plugins", ROOT / "plugins_optin"]
+    roots = [ROOT / "plugins"]
     pat = re.compile(
         r"^\s*(?:import\s+([A-Za-z_][\w.]*)|from\s+([A-Za-z_][\w.]*)\s+import)\b", re.M
     )

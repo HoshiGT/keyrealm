@@ -65,6 +65,10 @@ const STATUS_TEXT = {
   invalid: '失效',
   error: '错误',
   unknown: '未验证',
+  // 派生状态：凭据所属的**插件**被禁用。它不是 DB 里 status 列的取值——插件启用/禁用只是
+  // plugins/.state.json 里的一个开关，重新启用后状态必须能自动回到原值，所以这个状态由前端
+  // 按插件启用状态实时派生（见 Credentials.vue 的 effectiveStatus()），绝不写进库。
+  plugin_disabled: '插件禁用',
 }
 
 export function statusText(status) {
@@ -79,11 +83,14 @@ export function statusTagType(status) {
       return 'danger'
     case 'error':
       return 'warning'
+    // 「未验证」与「插件禁用」都是「没有结论」，共用灰色标签；插件禁用另有 tooltip 说明缘由
     default:
       return 'info'
   }
 }
 
+// 注意：这里**不含** plugin_disabled。它是前端派生状态，不是 DB 里的值，而这个下拉是直接
+// 递给后端 list_credentials(status=…) 做 SQL 过滤的，加进来只会永远筛出 0 条。
 export const STATUS_OPTIONS = [
   { label: '有效', value: 'valid' },
   { label: '失效', value: 'invalid' },

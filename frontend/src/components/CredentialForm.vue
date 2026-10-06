@@ -31,6 +31,8 @@ const form = reactive({
 
 const isEdit = computed(() => !!(props.credential && props.credential.id))
 
+// **仅已启用**的插件：只有「新建」路径该用它（挑首个可选类型、切换类型时套默认值）。
+// 渲染 schema 不要用它——见下面 currentPlugin 的说明。
 const plugins = computed(() => vaultStore.enabledPlugins)
 
 const groupOptions = computed(() => vaultStore.groupOptions)
@@ -38,8 +40,14 @@ const groupOptions = computed(() => vaultStore.groupOptions)
 // 类型选项按插件类别分组（el-option-group），下拉支持关键词搜索
 const typeGroups = computed(() => vaultStore.typeGroups)
 
+// ⚠️ 这里必须用 pluginByType（**含已禁用插件**），不能用 plugins（= enabledPlugins，仅已启用）。
+// 插件被禁用只是关掉功能闸门，插件的数据形状（fields_schema）没有任何变化，编辑一条
+// 「插件已禁用」的凭据时照样要按 schema 把字段渲染出来。曾用 enabledPlugins 查，结果：
+// 找不到插件 → currentPlugin 为 null → schema 为空 → 表单一个字段都不渲染，
+// 数据明明已经装进 form.data 了却「看不见凭据值」。
+// 新建路径不受影响：类型下拉由 typeGroups（enabledPlugins 派生）提供，选不到禁用插件。
 const currentPlugin = computed(
-  () => plugins.value.find((plugin) => plugin.credential_type === form.credential_type) || null,
+  () => vaultStore.pluginByType[form.credential_type] || null,
 )
 
 const schema = computed(() => (currentPlugin.value && currentPlugin.value.fields_schema) || [])

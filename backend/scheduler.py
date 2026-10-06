@@ -139,9 +139,13 @@ def batch_verify(
 ):
     """批量验证，后台线程池**并发**执行。
 
-    - 显式传入 `credential_ids` 时只验证这些凭据（前端手动勾选）；否则按 scope/group/type 取。
+    - 显式传入 `credential_ids` 时只验证这些凭据（前端手动勾选 / 定时计划勾选）；
+      否则按 scope/group/type 取。注意 `credential_ids` 为**空列表/None 时等同于「不带筛选」**，
+      会验证全部凭据 —— 调用方要「一条也不验」必须自己先拦住（`_run_schedule` 就是这么做的）。
     - 禁用批量验证的插件（manifest 中 batch_verify=false）会被排除：这类插件无法
       自动化验证或有写副作用，只能手动单个验证，计入「跳过」。
+    - **被禁用的插件**（plugins/.state.json）同样排除：它没有可加载的模块，逐条打起来只会
+      得到一串「插件已禁用」，白白占用并发与接口配额。
     - `concurrency` 为本次并发线程数（前端在批量验证对话框里设置）；不传则读已保存的设置。
       定时触发的批量验证走同一份设置——见 verify_options。
     """
@@ -155,7 +159,7 @@ def batch_verify(
         )
     no_batch = {
         p["credential_type"] for p in db.list_plugins()
-        if not p.get("batch_verify", 1)
+        if not p.get("batch_verify", 1) or not p.get("enabled", 1)
     }
     creds = [c for c in all_creds if c.get("credential_type") not in no_batch]
     skipped = len(all_creds) - len(creds)
@@ -250,14 +254,26 @@ def _run_schedule(schedule: dict):
     """执行定时任务"""
     scope = schedule.get("target_scope", "all")
     target_id = schedule.get("target_id")
-    # target_id 是多态字段：scope=="group" 时为分组 ID（int），
-    # scope=="type" 时为凭据类型名（str，前端直接存入 target_id）。
-    batch_verify(
-        scope=scope,
-        group_id=target_id if scope == "group" else None,
-        credential_type=target_id if scope == "type" else None,
-        trigger_type="schedule",
-    )
+    if scope == "credentials":
+        # 勾选的**具体凭据**（前端目录树，与备份页同一个组件）。
+        # 空选择必须在这里拦住：batch_verify 的 `if credential_ids:` 对空列表为假，会掉进
+        # 「不带筛选」的分支去验证**全库** —— 与「一条也不验」正好相反，是危险的反向默认。
+        ids = schedule.get("credential_ids") or []
+        if not ids:
+            _log.warning("定时计划 #%s「%s」未选中任何凭据，本次跳过",
+                         schedule.get("id"), schedule.get("name", ""))
+        else:
+            batch_verify(credential_ids=ids, trigger_type="schedule")
+    else:
+        # target_id 是多态字段：scope=="group" 时为分组 ID（int），
+        # scope=="type" 时为凭据类型名（str，前端直接存入 target_id）。
+        batch_verify(
+            scope=scope,
+            group_id=target_id if scope == "group" else None,
+            credential_type=target_id if scope == "type" else None,
+            trigger_type="schedule",
+        )
+    # 跳过也算「运行过」：否则界面上会一直停在「从未运行」，而 next_run_at 却在正常往前走。
     db.update_schedule(schedule["id"], last_run_at=datetime.now(timezone.utc).isoformat())
 
 

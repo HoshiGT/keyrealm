@@ -138,6 +138,84 @@ def test_target_id_roundtrips_int_and_str():
     db.delete_schedule(t["id"])
 
 
+# ── scope=='credentials'：只验证勾选的具体凭据 ────────────
+
+def test_credentials_scoped_schedule_passes_credential_ids():
+    """_run_schedule 在 scope=='credentials' 时应把勾选 id 原样交给 batch_verify"""
+    captured = {}
+
+    def fake_batch_verify(**kwargs):
+        captured.update(kwargs)
+
+    orig = scheduler.batch_verify
+    orig_update = db.update_schedule
+    scheduler.batch_verify = fake_batch_verify
+    db.update_schedule = lambda *a, **k: None
+    try:
+        scheduler._run_schedule({
+            "id": 997,
+            "name": "勾选巡检",
+            "target_scope": "credentials",
+            "target_id": None,
+            "credential_ids": [3, 1, 2],
+        })
+    finally:
+        scheduler.batch_verify = orig
+        db.update_schedule = orig_update
+
+    assert captured.get("credential_ids") == [3, 1, 2], \
+        f"未把勾选 id 交给 batch_verify: {captured}"
+    assert captured.get("trigger_type") == "schedule"
+
+
+def test_credentials_scoped_empty_selection_is_skipped():
+    """空勾选必须短路：batch_verify 对空 credential_ids 视同「不带筛选」→ 会去验全库"""
+    called = {"n": 0}
+
+    def fake_batch_verify(**kwargs):
+        called["n"] += 1
+
+    ran = {"n": 0}
+    orig = scheduler.batch_verify
+    orig_update = db.update_schedule
+    scheduler.batch_verify = fake_batch_verify
+    db.update_schedule = lambda *a, **k: ran.__setitem__("n", ran["n"] + 1)
+    try:
+        scheduler._run_schedule({
+            "id": 996, "name": "空勾选", "target_scope": "credentials",
+            "target_id": None, "credential_ids": [],
+        })
+        # 字段缺失（老记录 / 坏数据）同样按空处理，不许掉进全库分支
+        scheduler._run_schedule({
+            "id": 995, "name": "字段缺失", "target_scope": "credentials", "target_id": None,
+        })
+    finally:
+        scheduler.batch_verify = orig
+        db.update_schedule = orig_update
+
+    assert called["n"] == 0, "空勾选不应触发任何验证（否则会验全库）"
+    assert ran["n"] == 2, "跳过也算「运行过」，应刷新 last_run_at"
+
+
+def test_credential_ids_roundtrip():
+    """credential_ids 列须能存入并读回为 int 列表；坏值丢弃而非抛错"""
+    sched = db.create_schedule(
+        name="ids", trigger_type="interval", trigger_args={"hours": 1},
+        target_scope="credentials", target_id=None, credential_ids=[5, 2],
+    )
+    read = next(s for s in db.list_schedules() if s["id"] == sched["id"])
+    assert read["credential_ids"] == [5, 2], f"credential_ids 未原样读回: {read['credential_ids']!r}"
+
+    # 其它 scope 不传时为空列表（不是 None，前端 v-model 需要数组）
+    plain = db.create_schedule(name="plain", trigger_type="interval",
+                               trigger_args={"hours": 1}, target_scope="all", target_id=None)
+    plain_read = next(s for s in db.list_schedules() if s["id"] == plain["id"])
+    assert plain_read["credential_ids"] == []
+
+    db.delete_schedule(sched["id"])
+    db.delete_schedule(plain["id"])
+
+
 if __name__ == "__main__":
     setup_module()
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

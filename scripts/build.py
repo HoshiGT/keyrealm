@@ -9,8 +9,9 @@ release/CredentialVault。**要生成 Windows exe，必须在 Windows 上运行�
 --------
 - 进 exe：后端代码 + frontend/dist（只读资源）。
 - 不进 exe、以外部目录放在 release/ 下：
-    · plugins/  —— 内置插件，用户可直接编辑（改完重启即生效）
-    · data/     —— 运行时自动创建（数据库、已装插件、主密码校验）
+    · plugins/  —— 插件**唯一事实来源**，用户可直接编辑（改完重启即生效）；打包源码，
+                   但**不带 `.state.json`**（启用/禁用状态是本机运行时状态，不入分发包）
+    · data/     —— 运行时自动创建（数据库、主密码校验、日志）
   release/ 因此是一个自包含、可便携分发的目录，且不被 git 追踪。
 
 用法
@@ -26,6 +27,8 @@ release/CredentialVault。**要生成 Windows exe，必须在 Windows 上运行�
 并中止，提示 pip install -r requirements.txt；确实要忽略可加 --allow-missing-deps。
 extras 必须查：httpx 是在函数体内 import socksio 的，构建机没装时 PyInstaller 既不报错
 也不打包，问题要到 exe 里真的用 socks5 代理才暴露。
+同一条检查在 `CredentialVault.spec` 里也有一份（那四个隐式依赖），**默认缺一个即中止构建**；
+`--allow-missing-deps` 会以 CV_ALLOW_MISSING_DEPS=1 透传给 spec，两边口径一致。
 """
 from __future__ import annotations
 
@@ -209,13 +212,35 @@ def build_frontend() -> None:
     npm = "npm.cmd" if IS_WINDOWS else "npm"
     if shutil.which(npm) is None:
         sys.exit("未找到 npm，请先安装 Node.js，或去掉 --frontend 手动构建")
-    if not (FRONTEND / "node_modules").exists():
+
+    node_modules = FRONTEND / "node_modules"
+    # node_modules **存在**不等于能用，故不能只看目录在不在：
+    #   1) 从 Linux/macOS 直接拷过来的 node_modules，`.bin/vite` 是 POSIX 脚本，
+    #      Windows 找的是 `.bin/vite.cmd` —— 于是 `npm run build` 报
+    #      「'vite' is not recognized as an internal or external command」；
+    #   2) 装的时候用了 `--omit=dev` / `--production`，而 vite 在 devDependencies 里，被跳过。
+    # 两种都不是代码问题，但 npm 那句英文报错看着很像代码问题。这里先自己判一次并给出修法。
+    vite_bin = node_modules / ".bin" / ("vite.cmd" if IS_WINDOWS else "vite")
+    if node_modules.exists() and not vite_bin.exists():
+        sys.exit(
+            "frontend/node_modules 里没有可用的 vite（多半是跨平台拷贝过来的 node_modules，"
+            "或安装时用了 --omit=dev）。\n"
+            "请删掉该目录后重装：\n"
+            f"    {'rmdir /s /q' if IS_WINDOWS else 'rm -rf'} \"{node_modules}\"\n"
+            f"    cd \"{FRONTEND}\" && npm install"
+        )
+    if not node_modules.exists():
         _run([npm, "install"], cwd=FRONTEND)
     _run([npm, "run", "build"], cwd=FRONTEND)
 
 
-def run_pyinstaller(console: bool) -> None:
-    """调用当前解释器的 PyInstaller，按 spec 打包到 dist/。"""
+def run_pyinstaller(console: bool, allow_missing: bool = False) -> None:
+    """调用当前解释器的 PyInstaller，按 spec 打包到 dist/。
+
+    ``--allow-missing-deps`` 必须**透传给 spec**：spec 自己也会对那几个「静态分析看不到」
+    的隐式依赖（socksio / PySocks / telethon / python-socks）做检查，缺了默认直接中止构建。
+    不透传的话，本脚本放行了、spec 照样会停，flag 等于白给。
+    """
     if not FRONTEND_DIST.exists():
         sys.exit(
             "未找到 frontend/dist —— 前端尚未构建。\n"
@@ -228,6 +253,12 @@ def run_pyinstaller(console: bool) -> None:
         env["CV_CONSOLE"] = "1"
     else:
         env.pop("CV_CONSOLE", None)
+    # 与 --allow-missing-deps 打通：spec 里对那四个隐式依赖默认「缺了即中止」，
+    # 这里显式跑一次 PyInstaller（而非经本脚本）时，逃生口就是这个环境变量。
+    if allow_missing:
+        env["CV_ALLOW_MISSING_DEPS"] = "1"
+    else:
+        env.pop("CV_ALLOW_MISSING_DEPS", None)
 
     _run(
         [
@@ -262,7 +293,8 @@ def assemble_release() -> Path:
     shutil.copy2(built, exe_dest)
 
     # 外部可改插件目录：复制源码形式的 plugins/（manifest.json + plugin.py）
-    # 排除 __pycache__/*.pyc，避免把构建机的字节码带进分发包
+    # 排除 __pycache__/*.pyc，避免把构建机的字节码带进分发包；
+    # 同时排除 .state.json*（启用/禁用状态是本机运行时状态）——出厂时全部插件启用。
     src_plugins = ROOT / "plugins"
     dest_plugins = RELEASE / "plugins"
     if dest_plugins.exists():
@@ -271,34 +303,10 @@ def assemble_release() -> Path:
         shutil.copytree(
             src_plugins,
             dest_plugins,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".state.json*"),
         )
     else:
         print("警告：未找到 plugins/，release/ 将不含内置插件", file=sys.stderr)
-
-    # 内置插件纯净源：与 plugins/ 同内容的一份只读副本，「插件管理 → 添加」从这里恢复
-    dest_builtin = RELEASE / "plugins_builtin"
-    if dest_builtin.exists():
-        shutil.rmtree(dest_builtin)
-    if src_plugins.exists():
-        shutil.copytree(
-            src_plugins,
-            dest_builtin,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-        )
-
-    # 默认不启用的插件源：同样只出现在「插件管理 → 可添加」，装着不生效，
-    # 等用户点「添加」或日后验证通过挪进 plugins/ 才算启用。缺目录不算错（可以一个都没有）。
-    src_optin = ROOT / "plugins_optin"
-    dest_optin = RELEASE / "plugins_optin"
-    if dest_optin.exists():
-        shutil.rmtree(dest_optin)
-    if src_optin.exists():
-        shutil.copytree(
-            src_optin,
-            dest_optin,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-        )
 
     # 约定：plugins/ 是插件的唯一事实来源；data/installed_plugins/ 是旧版本
     # （zip 安装时代）遗留的运行期缓存，应用启动时由 migrate_legacy_installed_plugins()
@@ -371,7 +379,7 @@ def main() -> None:
 
     if args.frontend:
         build_frontend()
-    run_pyinstaller(console)
+    run_pyinstaller(console, args.allow_missing_deps)
     exe = assemble_release()
 
     if not args.keep_intermediates:

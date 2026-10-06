@@ -106,7 +106,7 @@ API-Key-Checker/
 
 **职责**：扫描 `plugins/` 目录、注册插件、按需加载插件模块。**放入即加载，删除目录即卸载**。
 
-**插件删除 / 添加（插件管理）**：`delete_plugin(credential_type)` 删除该插件的 `plugins/` 目录、卸载模块、删除插件记录，并（默认）删除该类型下全部凭据；`list_available_plugins()` / `install_plugin()` 从「可添加」来源把插件复制回 `plugins/` 并加载。来源有两个（`ADDABLE_SOURCE_DIRS`）：`plugins_builtin/`（全量纯净副本，用于恢复被删掉的插件，发行包随 exe 同级提供）与 `plugins_optin/`（**默认不启用**的新插件——缺乏实例验证，故不随 `plugins/` 上架，只在「可添加」里露面，用户点「添加」或日后验证通过再挪进 `plugins/` 才算启用）。两者同名时只出一条（`plugins_builtin/` 优先）。目录删除有路径越界保护。
+**插件禁用 / 启用（插件管理）**：插件只来自 `plugins/` 一处（不再有「可添加」来源）。启用/禁用**不改动磁盘目录**，由 `plugins/.state.json`（`{"disabled": ["<credential_type>", …]}`；文件**不存在或损坏都当全部启用**）决定；`sync_plugins()` 每次扫描时把该状态文件**镜像**进 DB 的 `plugins.enabled` 列——该列**降级为只读镜像**，**不再是功能闸门**，`get_plugin_by_type()` **不按 `enabled` 过滤**。真正的闸门是 `get_module()`：插件被禁用即返回 `None`，于是它的操作 / 模型 / 能力一律为空、`run` 与 `verify_credential` 直接报「插件已禁用」，而**凭据本身仍照常显示与存取**（列表里状态显示为**派生的「插件禁用」**——由插件启用状态实时算出、不写库，重新启用即回弹；编辑表单的 `fields_schema` 仍取自 `pluginByType`（含已禁用插件），故已存值照常带出）。状态文件「先写 `.tmp` 再原子替换」。界面**不再提供**「删除插件」入口——要彻底卸载，自己删掉插件目录即可：**删目录 = 卸载，凭据保留**，插件记录与状态文件里残留的 key 由下次 `sync_plugins()` 扫描清理。
 
 **插件目录**：`<app>/plugins/` 是唯一事实来源，采用两层结构：
 
@@ -121,10 +121,10 @@ plugins/
 │   │   └── plugin.py
 │   ├── deepseek/
 │   └── …                     # 共 19 个 LLM 子插件
-├── api/                      # API 服务类别：firecrawl / tavily / metaso / coze / dify / app_secret / gateway（共 7 个）
+├── api/                      # API 服务类别：firecrawl / tavily / metaso / fofa / coze / dify / google_api_credentials / gateway（共 8 个）
 ├── dns/                      # 域名解析：dnspod / duckdns / godaddy / cloudflare
-├── dev/                      # 开发者平台：github / huggingface / wandb
-├── im/                       # 即时通讯：feishu / dingtalk / telegram / telegram_apihash / discord / qq_bot / wechat_ilink / webhook
+├── dev/                      # 开发者平台：github / huggingface / wandb / npm
+├── im/                       # 即时通讯：feishu / dingtalk / wecom / telegram / telegram_apihash / discord / qq_bot / wechat_ilink（dingtalk、wecom 为「应用 / Webhook 双形态」）
 ├── cloud/                    # 云服务商：aliyun / tencentcloud / aws / gcp / huaweicloud / firebase（另含 google_sa.py 协议级共享模块）
 ├── exchange/                 # 交易所：okx / binance
 └── mail/                     # 邮箱：smtp（通用 SMTP，覆盖 Gmail/QQ/163/126）
@@ -134,7 +134,7 @@ plugins/
 > HTTPS API，与 api/ 其余服务同形，故并入 api/ 而不单开类别——新建类别要连带克隆一份 `*_common.py`，
 > 代价大于收益。
 
-> 八个类别共 50 个子插件：llm 19 / im 8 / api 7 / cloud 6 / dns 4 / dev 3 / exchange 2 / mail 1。
+> 八个类别共 52 个子插件：llm 19 / api 8 / im 8 / cloud 6 / dns 4 / dev 4 / exchange 2 / mail 1。
 > 每个类别目录都带一个 `<类别>_common.py`（**类别共享模块**）；**协议级模块**另立——`cloud/google_sa.py`
 > （把服务账号的邮箱 + 私钥签成 RS256 JWT 换 token，gcp / firebase 共用）与 `llm/llm_protocols.py`。这些都不是子插件。
 
@@ -193,8 +193,10 @@ plugins/
 ```
 调度器触发
     │
-    ▼ 查询目标凭据（全部 / 指定分组 / 指定类型）
-    │   （自动剔除 batch_verify=false 的类型，计为「跳过」）
+    ▼ 查询目标凭据（全部 / 指定分组 / 指定类型 / 指定凭据）
+    │   scope 与目标的对应：group/type 读 target_id（多态），
+    │   credentials 读 credential_ids（勾选的具体凭据 id 数组）
+    │   （自动剔除 batch_verify=false 与被禁用插件的类型，计为「跳过」）
     │
     ▼ 并发调用各插件的 verify()（每条凭据一个任务，并发数可配，见下）
     │
@@ -203,6 +205,10 @@ plugins/
     │
     ▼ 通过 pywebview 事件通知前端刷新
 ```
+
+> `scope='credentials'` 时空勾选**必须在 `_run_schedule()` 里短路**：`batch_verify()` 对空
+> `credential_ids` 视同「不带筛选」，会去验证**全库**——与「一条也不验」正好相反。短路时只记
+> 一条告警日志并照常刷新 `last_run_at`（跳过也算运行过，否则界面永远停在「从未运行」）。
 
 **验证代理（多代理 + 按调用生效）**：代理存在 `proxies` 表里、各自取名，**其它地方一律按 id 引用**
 （`proxy_store`）。id 是 **UUID 而非自增整数**——自增只在单库唯一，备份导入（代理按原样沿用 id 重建）
@@ -283,7 +289,7 @@ plugins/
 
 | 层 | 位置 | 行为 |
 |----|------|------|
-| 构建期 | `scripts/build.py` / `CredentialVault.spec` | 构建前按 `requirements.txt`（**含 extras 展开**）核对当前环境，缺包就打印清单并**中止**（`--allow-missing-deps` 可放行），提示 `pip install -r requirements.txt`；spec 里显式 `collect_all("socksio")`，直接用 `pyinstaller CredentialVault.spec` 时也会警告 |
+| 构建期 | `scripts/build.py` / `CredentialVault.spec` | 构建前按 `requirements.txt`（**含 extras 展开**）核对当前环境，缺包就打印清单并**中止**（`--allow-missing-deps` 可放行），提示 `pip install -r requirements.txt`；spec 自己还会再核对一遍那四个「静态分析看不到」的依赖（socksio / PySocks / telethon / python-socks），**缺一个即中止构建**——直接用 `pyinstaller CredentialVault.spec` 时同样会停，逃生口是 `CV_ALLOW_MISSING_DEPS=1`（`--allow-missing-deps` 会自动设上） |
 | 诊断 | `backend/proxy_test.py` | `proxy_config.needs_socks()` + `socks_available()` 提前判定，socks 代理 + 缺依赖时**不发请求直接短路**，给出 `fail` 结论与中文处理办法（伪造一份代理侧探测结构，界面两列卡片照常渲染） |
 | 插件 | `backend/plugin_base.py` | `_friendly_error()` 把异常文本里的 socksio 报错换成中文处理办法；原始异常仍完整写入日志，不缺排查线索 |
 
@@ -291,7 +297,7 @@ plugins/
 
 **备份 / 恢复**：`backend/backup.py` 负责构建/导入备份文档（JSON）。加密备份的敏感字段直接沿用库中密文，只能用同一主密码导入；明文备份可跨主密码导入（以当前主密钥重新加密写库）。导入按「类型 + 敏感值」去重，并跳过插件未安装的条目；文件读写通过 pywebview 的原生文件对话框（`api._file_dialog`，优先用 `webview.FileDialog` 枚举——旧的模块级 `SAVE_DIALOG`/`OPEN_DIALOG` 常量会打印弃用警告）。
 
-导出有两个**互不重叠**的维度：`scope` 决定是否附带**分组与偏好设置**（`all` 带、`credentials` 不带），`credential_ids` 决定**导出哪些凭据**（`None` = 全部，给定列表 = 只导这些；不影响 scope 语义）。因此「全部 + 勾选若干」与「仅凭据 + 勾选若干」的差别仍然只是分组/偏好设置那部分，文档里写入 `credential_ids` 便于回溯。前端「备份」页把两者做成两组控件（范围单选 + 凭据勾选列表）。
+导出有两个**互不重叠**的维度：`scope` 决定是否附带**分组与偏好设置**（`all` 带、`credentials` 不带），`credential_ids` 决定**导出哪些凭据**（`None` = 全部，给定列表 = 只导这些；不影响 scope 语义）。因此「全部 + 勾选若干」与「仅凭据 + 勾选若干」的差别仍然只是分组/偏好设置那部分，文档里写入 `credential_ids` 便于回溯。前端「备份」页把两者做成两组控件（范围单选 + 凭据目录树勾选，勾选器是共享组件 `components/CredentialTreePicker.vue`——「系统设置 → 定时计划 → 指定凭据」用的是同一个）。
 
 ---
 

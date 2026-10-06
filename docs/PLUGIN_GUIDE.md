@@ -1,8 +1,11 @@
 # 插件开发指南
 
 Credential Vault 的插件用于**验证一类凭据的有效性**（如某家 LLM 厂商的 API Key）。
-每个服务是一个独立插件，放入 `plugins/` 目录即自动加载，删除即卸载——没有安装器、
-没有启停开关（「插件管理」只负责**删除插件**与**从内置源恢复/添加**，本身不带启停开关）。
+每个服务是一个独立插件，放入 `plugins/` 目录即自动加载，删除即卸载。没有安装器、也没有
+「插件商店」——`plugins/` 就是插件的**唯一事实来源**；「插件管理」页只做一件事：
+**禁用 / 启用**插件（状态写 `plugins/.state.json`，见 §1.1）。要彻底卸载某个插件，自己删掉
+`plugins/<类别>/<服务>/` 目录即可——**凭据保留**，插件记录与状态里的残留 key 由下次
+`sync_plugins()` 扫描清理。
 
 ---
 
@@ -29,7 +32,8 @@ plugins/
 │   ├── metaso/
 │   ├── coze/
 │   ├── dify/
-│   ├── app_secret/
+│   ├── fofa/
+│   ├── google_api_credentials/
 │   └── gateway/
 ├── dns/                        # 类别目录（域名解析）
 │   ├── category.json
@@ -48,13 +52,13 @@ plugins/
 │   ├── category.json
 │   ├── im_common.py
 │   ├── feishu/
-│   ├── dingtalk/
+│   ├── dingtalk/               # 应用 / Webhook 双形态
+│   ├── wecom/                  # 企业微信，应用 / Webhook 双形态
 │   ├── telegram/
 │   ├── discord/
 │   ├── qq_bot/
 │   ├── wechat_ilink/
-│   ├── telegram_apihash/
-│   └── webhook/
+│   └── telegram_apihash/
 ├── cloud/                      # 类别目录（云服务商）
 │   ├── category.json
 │   ├── cloud_common.py
@@ -90,53 +94,60 @@ plugins/
   **只放通用工具**（结果类型、HTTP 客户端、解析/兜底辅助），具体验证逻辑在各子插件内。
 - 名称以 `_` 或 `.` 开头的目录会被跳过（可用于临时禁用）。
 
-### 1.1 `plugins_optin/` —— 默认不启用的插件源
+### 1.1 启用 / 禁用：`plugins/.state.json`
 
-与 `plugins/` **完全同构**（`<类别>/<服务>/{manifest.json,plugin.py}`，`category.json` 也有副本），
-但 `sync_plugins()` **不扫它**，所以放着也不生效。它只让插件在「插件管理 → 可添加」里露一面，
-用户点「添加」才被复制进 `plugins/` —— 与从 `plugins_builtin/` 恢复被删插件**同一条路径**
-（见 `backend/plugin_manager.py` 的 `ADDABLE_SOURCE_DIRS`）。
+插件**只以 `plugins/` 为准**，没有第二份来源。启用/禁用**不改动磁盘目录**，只改一个状态文件。
 
-**用途**：放**缺乏实例验证**的新插件。它们照现有类型与服务仿写，但端点是照官方文档写的、
-判定阈值是照同类插件推的，只跑过阴性对照、**没拿真凭据跑过阳性验证**，因此不随包上架。
-等用真凭据验过（**乱写的凭据必须判 `invalid`**）再由人工把目录**挪进** `plugins/`，
-那时才成为「默认启用项」——`plugins/` 始终是插件的唯一事实来源。
+**位置与结构**：`plugins/.state.json`，形如
 
-**当前共 34 个**（8 个类别，2026-10-06 一次性启发式新增）：
+```json
+{"disabled": ["llm_groq", "api_shodan"]}
+```
 
-| 类别 | 子插件 |
-|------|--------|
-| `api`（7） | airtable、censys、fofa、notion、shodan、stripe、virustotal |
-| `cloud`（3） | azure_sp（Entra 服务主体）、backblaze_b2、digitalocean |
-| `dev`（3） | gitee、npm、vercel |
-| `dns`（2） | namecheap、porkbun |
-| `exchange`（4） | bitget、bybit、gate、kucoin |
-| `im`（3） | line、slack、wecom（企业微信） |
-| `llm`（7） | azure_openai、cerebras、groq、hunyuan、mistral、stepfun、xai |
-| `mail`（5） | brevo、mailgun、postmark、resend、sendgrid |
+键是插件的 `credential_type`。
 
-> 这批**只做过离线契约冒烟**（`tmp/smoke_optin_contract.py`：就地加载 + 有 verify/validate +
-> 参考链接不外泄）与**阴性对照**（`tmp/smoke_optin_negative.py`：乱写凭据必须判 `invalid`／
-> 不报错）——**没有拿真凭据跑过阳性验证**，所以仍留在 `plugins_optin/`。
-> 缺的正是「真凭据能判 valid」这一半。
+**读取约定**（`sync_plugins()` 每次扫描时读）：
+
+- **文件不存在 = 全部启用**（出厂态：发行包不带该文件，见 `scripts/build.py`）。
+- **文件损坏同样退化为全部启用**——非法 JSON、根不是对象、`disabled` 不是数组，一律当作
+  「一个都不禁用」，**绝不显示空列表**（宁可多显示，也不能因为一个坏文件让插件整片消失）。
+- 目录被删掉后，状态文件里对应的 `credential_type` 会在下次扫描时**自动清理**。
+
+**写入约定**：先写 `plugins/.state.json.tmp`，再**原子替换**成 `.state.json`——避免写到一半崩溃
+留下半截文件（半截文件虽然也能被上面的兜底救回，但仍不该产生）。
+
+**与数据库的关系**：`sync_plugins()` 把状态文件**镜像**进 DB 的 `plugins.enabled` 列——该列只是
+**只读镜像**，**不再是功能闸门**；`get_plugin_by_type()` **不按 `enabled` 过滤**。真正的闸门是
+`plugin_manager.get_module()`：插件被禁用即返回 `None`，于是它的 `has_actions` 为假、
+`plugin_actions` / `plugin_models` 返回 `[]`、`plugin_capabilities` 返回
+`{"available": None, "note": "", "error": True}`、`run` / `stream_plugin_action` 返回
+`{"ok": False, "error": …}`、`get_display_summary` 返回 `""`、`plugin_uses_proxy` 返回 `False`、
+`verify_credential` 返回 `status="error"` 且 message 为 `插件已禁用: <credential_type>`。
+
+**手工编辑**：`.state.json` 可以手工改，**改完重启应用生效**（只有扫描时才读它）。
+
+**界面行为**：插件被禁用**不等于未安装**——其名下凭据**照常显示、可编辑、可删除**，也能随备份
+正常导入/导出（见 `backend/backup.py`）；只是该插件的**「操作」「验证」按钮置灰**（悬停提示
+「插件已禁用」），且**批量验证自动不含**它的凭据。
+
+禁用还带来三处**显示层**变化，全部由前端按插件启用状态**实时派生**，**不写进库**：
+
+| 位置 | 表现 |
+|---|---|
+| 凭据列表「状态」列 | 显示为**「插件禁用」**（压过库里的 `status`），悬停说明缘由；排序时排在**最后**（它是「暂时动不了」，不是「待处理」）。前端 `Credentials.vue` 的 `effectiveStatus()` 派生 |
+| 「添加凭据」 | **不允许**给已禁用插件加新凭据：点了给提示且不打开表单（按钮**不置灰**——给反馈比闷着不动强）；若目录树选中的是**类别**，默认服务会跳过类别下的已禁用服务 |
+| 「编辑凭据」 | **照常可编辑**：编辑表单的字段（`fields_schema`）取自 `pluginByType`（**含已禁用插件**），已存的值照常带出。这里必须用 `pluginByType` 而非「仅已启用」列表，否则插件查不到 → 表单一个字段都不渲染，看起来就是「凭据值没带出来」 |
+
+> **为什么派生而不入库**：启用/禁用只是 `.state.json` 里的一个开关（可随时来回切），若把
+> `plugin_disabled` 写进 `credentials.status`，重新启用后这些凭据就永远停在「插件禁用」——成了
+> 洗不掉的脏数据。按插件启用状态实时算，**重新启用即自动回弹**到原值。
 >
-> 阴性对照 2026-10-06 用代理跑过（34 个逐一出网）：**31 个**判 `invalid`，**无一被误判为
-> `valid`**；余下 **3 个**落在 `error` —— `dns/namecheap`（假 ClientIp 被拒：Namecheap 要求
-> 调用 IP 加白名单，没走到密钥校验）、`exchange/bybit`（HTTP 403 地域限制）、
-> `llm/azure_openai`（本就无默认端点，必须自填）。这 3 个的「乱写必须判 invalid」
-> **未被真正行使**，等有实例时补跑。
+> 「状态」**筛选**下拉里**没有**「插件禁用」这一项：该下拉的取值是直接递给后端
+> `list_credentials(status=…)` 做 SQL 过滤的，而派生状态在库里查不到，加进去只会永远筛出 0 条。
 
-约定：
-
-- **只放已存在类别下的服务目录**，不要在这里新开类别（新类别要连带克隆一份 `<类别>_common.py`）。
-- **这里不放 `<类别>_common.py`**：类别共享模块仍由 `plugins/<类别>/` 提供。插件被「添加」进
-  `plugins/` 之后，同层的 `from api_common import …` 才解析得到；**直接就地加载会 ImportError，
-  这是预期的**——它本就不该就地跑。
-- 发行包会把本目录整体复制到 `release/plugins_optin/`（见 `scripts/build.py`）；`CredentialVault.spec`
-  的标准库 hiddenimports 扫描**同时覆盖这里**——插件是运行时才复制进 `plugins/` 的，漏扫会导致
-  用户装完一点就 `ModuleNotFoundError`。
-
-详见 `plugins_optin/README.md`。
+> 后端接口是 `set_plugin_enabled(credential_type, enabled)`（`backend/api.py` + `main.py` 转发），
+> 只推 `vault:plugins_changed` 事件；旧的 `delete_plugin` / `list_available_plugins` / `install_plugin`
+> **已删除**。
 
 ---
 
@@ -262,8 +273,11 @@ def proxy():
 > PyInstaller 既不报错也不会打包它，症状是 exe 里一用 socks5 代理就抛
 > `the 'socksio' package is not installed`。因此 `scripts/build.py` **构建前会按
 > `requirements.txt`（含 extras 展开，所以 `httpx[socks]` → `socksio` 会被查出来）核对环境**，
-> 缺包就打印清单并中止，提示 `pip install -r requirements.txt`（`--allow-missing-deps` 可强行继续）；
-> `CredentialVault.spec` 里也显式 `collect_all("socksio")`。
+> 缺包就打印清单并中止，提示 `pip install -r requirements.txt`（`--allow-missing-deps` 可强行继续，
+> 该 flag 会以 `CV_ALLOW_MISSING_DEPS=1` 透传给 spec）；
+> **`CredentialVault.spec` 自己还会再核对一遍** socksio / PySocks / telethon / python-socks
+> 这四个「静态分析看不到」的依赖，**缺一个即中止构建**（直接 `pyinstaller CredentialVault.spec`
+> 同样会停；逃生口就是那个环境变量）。
 
 注意：SMTP / IMAP 走的是**裸 TCP**，不吃 HTTP 代理那一套，但可以走 SOCKS / HTTP CONNECT 隧道
 （依赖 PySocks，见 §2.6），所以邮箱同样支持「使用代理」。
@@ -455,8 +469,8 @@ class TunneledSMTP_SSL(smtplib.SMTP_SSL):  # SMTPS
 - `open_socket()` 自己读 `proxy()`（与其它类别同一套优先级），**没配代理就退回普通 `create_connection`**，
   所以插件可以无脑用它，不必分两条路径。
 - 隧道依赖 **PySocks**（`import socks`，见 `requirements.txt`）。它是运行时动态加载的插件用到的，
-  PyInstaller 静态分析看不到，**spec 里显式 `collect_all("socks")`**；缺失时 `open_socket()` 抛一句
-  中文处理办法，而不是甩 `ImportError`。
+  PyInstaller 静态分析看不到，**spec 里显式 `collect_all("socks")`**（构建环境缺它即中止打包，
+  见 §2.1）；缺失时 `open_socket()` 抛一句中文处理办法，而不是甩 `ImportError`。
 - 支持的协议：`socks5` / `socks5h` / `socks4` / `socks4a` / `http`(CONNECT)。账号密码写在 URL 里
   （`socks5://user:pass@host:port`），百分号编码会还原。
 
@@ -552,7 +566,7 @@ def get_display_summary(data):
 
 | 函数 | 必需 | 作用 |
 |------|------|------|
-| `actions(data) -> list[dict]` | ✅ | 声明有哪些操作；返回 `[]` 表示没有（前端不显示按钮）。**必须是本地、便宜、无副作用的**——它只负责渲染菜单 |
+| `actions(data) -> list[dict]` | ✅ | 声明有哪些操作；返回 `[]` 表示没有可用操作（凭据行的按钮**仍然显示**，只是置灰 + 悬停提示「暂无可用功能」，见 §5）。**必须是本地、便宜、无副作用的**——它只负责渲染菜单 |
 | `run_action(action_id, params, data) -> dict` | ✅ | 执行操作 |
 | `capabilities(data) -> dict` | 可选 | **探测该凭据真正能用哪些操作**（可联网）；没实现 = 全部可用 |
 | `list_models(data) -> list` | 可选 | 可用模型名列表（LLM「简单对话」把它变成可搜索下拉） |
@@ -849,8 +863,9 @@ sensenova（商汤日日新，OpenAI 兼容）、codebuddy（腾讯 CodeBuddy �
 > ——**1.0 之前不考虑向下兼容（含旧版本数据库）**，旧的 `llm_glm_anthropic` /
 > `llm_anthropic_compatible` 类型不再有对应插件，那类凭据直接在界面上删掉、按新插件重建即可。
 
-**api/ 类别（7 个）**：firecrawl（网页抓取）、tavily（搜索）、metaso（秘塔 AI 搜索）、coze（字节扣子）、
-dify（Dify 应用 / 工作流）、app_secret（通用应用密钥，一对 key/secret）、gateway（短信网关 / 接码服务商，
+**api/ 类别（8 个）**：firecrawl（网页抓取）、tavily（搜索）、metaso（秘塔 AI 搜索）、fofa（FOFA 网络空间测绘）、
+coze（字节扣子）、dify（Dify 应用 / 工作流）、google_api_credentials（Google API 凭据，一对 key/secret）、
+gateway（短信网关 / 接码服务商，
 字段按各厂商叫法通用化——`app_key` / `app_secret` 装不下的一律塞 `extra_params`；实测有可用只读校验接口的
 8 家：Engagelab、Infobip、CM、laaffic、nxcloud、buka、Ultramsg——Infobip 印度 200 有效、香港那把在该
 入口 403「无权限」故判 `error`；Ultramsg 域名对任意实例/口令都返回同一段文案，只能报「未验证」；其余 8 家
@@ -858,11 +873,13 @@ dify（Dify 应用 / 工作流）、app_secret（通用应用密钥，一对 key
 
 **dns/ 类别（4 个）**：dnspod、duckdns、godaddy、cloudflare（从 cloud/ 移入：它就是域名解析类）。
 
-**dev/ 类别（3 个）**：github（令牌）、huggingface、wandb（Weights & Biases）。
+**dev/ 类别（4 个）**：github（令牌）、huggingface、wandb（Weights & Biases）、npm（npm 访问令牌）。
 
-**im/ 类别（8 个）**：feishu（飞书）、dingtalk（钉钉）、telegram（Bot）、discord（Webhook）、
-qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）、telegram_apihash（Telegram API ID / Hash）、
-webhook（通用群机器人 Webhook）。
+**im/ 类别（8 个）**：feishu（飞书）、dingtalk（钉钉）、wecom（企业微信）、telegram（Bot）、discord（Webhook）、
+qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）、telegram_apihash（Telegram API ID / Hash）。
+其中 **dingtalk 与 wecom 是「应用 / Webhook 双形态」**插件：`kind` 下拉选 `app`（自建应用）或
+`webhook`（群机器人），字段用 `show_if` 按 `kind` 显隐；`kind` 缺省回落 `app`，故旧的 `im_dingtalk`
+凭据不受影响（原独立的通用 `im_webhook` 插件已按厂商拆入这两个插件）。
 
 **cloud/ 类别（6 个）**：aliyun（阿里云 AK/SK）、tencentcloud（腾讯云 SecretId/Key）、aws（AWS Access Key）、
 gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Firebase 管理密钥）。
@@ -882,14 +899,17 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
 > （先写入 `1.1.1.1` 确认生效再还原原值）；`telegram_apihash` 与 `api/gateway` 则是判定常为
 > 「未验证」（前者要登录态、后者多数厂商没有只读接口），批量跑会把人工判定的状态刷成「未验证」。
 
-> 本节的 50 个是 `plugins/` 下**默认启用**的全部。另有 `plugins_optin/` 里 34 个
-> **默认不启用、尚无实例验证**的插件（含 airtable / censys / shodan / stripe / mistral 等主流
-> 服务），清单见 §1.1 —— 它们装了不生效，须在「插件管理 → 可添加」里手动添加。
+> 本节共 **52 个**，即 `plugins/` 下的**全部**插件，**默认全部启用**。想临时停用某个用
+> 「插件管理」里的**禁用**即可（状态记在 `plugins/.state.json`，见 §1.1），无需删除目录——
+> 禁用后其功能选项在界面置灰、批量验证自动跳过，其凭据**状态显示为「插件禁用」（派生，重新启用
+> 即回弹）、且不许再给它添加凭据**，而编辑 / 删除与已有数据照常保留。
 
 ### 内置「简易操作」一览
 
-凭据齐全时，凭据行会出现「操作」按钮（见 §3.1）。一个凭据有多个操作时先弹选择菜单，
-**只有一个就直接进**；带「（写）」的是 `write: true`，提交前会二次确认。
+凭据行的「操作」按钮**常驻**（见 §3.1）。按钮可点即说明该凭据至少有一个操作；点开后一个凭据有
+多个操作时先弹选择菜单，**只有一个就直接进**；带「（写）」的是 `write: true`，提交前会二次确认。
+**没有声明 `actions()` 或声明了但返回 `[]` 的插件，按钮仍显示但置灰，悬停提示「暂无可用功能」**
+——按钮时有时无会让同一列里每行的按钮位置都对不齐。下表只列**真有操作**的插件。
 
 - **llm**：18 个厂商 —— 简单对话（`chat`，流式）；其中 **openai** 另有「认证方式」下拉，
   选「ChatGPT 登录态（Codex）」时改为「登录态详情」（`token_info`，只读解析本地 JWT，**不回显任何令牌**）；
@@ -929,8 +949,9 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
   metaso（搜索（`list`，行内「阅读」下钻）· 网页解析）
 - **mail**：smtp —— 收件箱（`list`，可填拉取封数/文件夹/IMAP 主机与端口）→ 行内「看正文」下钻
 
-> 以上按**声明了操作（`actions()`）**的插件列举。新加入的 `api/app_secret`、`api/dify`、`cloud/aws`、
-> `cloud/gcp`、`cloud/huaweicloud`、`cloud/firebase`、`im/telegram_apihash`、`im/webhook`、`api/gateway`
+> 以上按**声明了操作（`actions()`）**的插件列举。`api/google_api_credentials`（原 `api/app_secret`）、
+> `api/dify`、`cloud/aws`、`cloud/gcp`、`cloud/huaweicloud`、`cloud/firebase`、`im/telegram_apihash`、
+> `im/wecom`、`im/dingtalk`（后两者拆分自原 `im/webhook`）、`api/gateway`
 > 目前只做凭据验证，未声明任何「操作」。
 
 > **按权限显隐**：aliyun / tencentcloud / feishu / github 实现了 `capabilities()`，没权限的操作不会出现在菜单里；

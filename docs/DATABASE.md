@@ -32,7 +32,7 @@ CREATE TABLE settings (
 
 | key | 说明 | 示例值 |
 |-----|------|--------|
-| `schema_version` | 数据库版本号 | `"5"` |
+| `schema_version` | 数据库版本号 | `"6"` |
 | `salt` | PBKDF2 盐值（base64） | `"a3f2..."` |
 | `verify_token` | 主密码验证密文（base64） | `"x9k1..."` |
 | `mcp_host` | MCP Server 监听地址（仅 IP / localhost，默认 `127.0.0.1`） | `"127.0.0.1"` |
@@ -131,13 +131,16 @@ CREATE TABLE plugins (
     plugin_path     TEXT NOT NULL,         -- 插件目录路径（plugins/<类别>/<服务>/）
     category        TEXT DEFAULT '',       -- 类别目录名（llm / api / dns / …，空 = 根级平铺插件）
     category_name   TEXT DEFAULT '',       -- 类别显示名（来自 category.json）
-    enabled         INTEGER DEFAULT 1,
+    enabled         INTEGER DEFAULT 1,    -- plugins/.state.json 的只读镜像（不是功能闸门，见「迁移策略」）
     batch_verify    INTEGER DEFAULT 1,    -- 1=参与批量验证；0=禁用（仅手动，v3 新增）
     installed_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
 > 插件不再区分「内置 / 外置」，全部来自 `plugins/` 目录。
+> **`plugins.enabled` 只是 `plugins/.state.json` 的只读镜像**：插件启用/禁用由该状态文件决定，
+> `sync_plugins()` 每次扫描把它镜像进这一列；`get_plugin_by_type()` 查询**不按 `enabled` 过滤**，
+> 真正的功能闸门是 `plugin_manager.get_module()`（禁用即返回 `None`）。
 
 **fields_schema 示例**（llm_openai 子插件）：
 ```json
@@ -295,18 +298,24 @@ Agent 请求 Header: Authorization: Bearer cv_a3f2...
 
 ```sql
 CREATE TABLE schedules (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    name          TEXT NOT NULL,
-    trigger_type  TEXT NOT NULL,     -- interval / cron
-    trigger_args  TEXT NOT NULL,     -- JSON：{"hours": 24} 或 {"cron": "0 2 * * *"}
-    target_scope  TEXT DEFAULT 'all', -- all / group / type
-    target_id     INTEGER,           -- group_id 或 credential_type
-    enabled       INTEGER DEFAULT 1,
-    last_run_at   TIMESTAMP,
-    next_run_at   TIMESTAMP,
-    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT NOT NULL,
+    trigger_type   TEXT NOT NULL,     -- interval / cron
+    trigger_args   TEXT NOT NULL,     -- JSON：{"hours": 24} 或 {"cron": "0 2 * * *"}
+    target_scope   TEXT DEFAULT 'all', -- all / group / type / credentials
+    target_id      INTEGER,           -- group_id 或 credential_type（scope=credentials 时为 NULL）
+    credential_ids TEXT DEFAULT '[]', -- scope='credentials' 时勾选的具体凭据 id，JSON 数组；其它 scope 为空数组
+    enabled        INTEGER DEFAULT 1,
+    last_run_at    TIMESTAMP,
+    next_run_at    TIMESTAMP,
+    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+> `target_id` 是**多态字段**：`scope='group'` 存分组 id（int），`scope='type'` 存凭据类型名（str）。
+> `credential_ids` 只在 `scope='credentials'` 时有值，由前端「目录树勾选」得到（与「备份 → 仅选中的凭据」
+> 用同一个组件 `CredentialTreePicker.vue`）。DAO 层读写都经 `_parse_id_list()` 归一为 **int 列表**
+> （存储层是 JSON 文本，与 `trigger_args` 同一套约定）；坏值丢弃而非抛错。
 
 ---
 
@@ -323,14 +332,14 @@ plugins (credential_type ←→ credentials.credential_type)
 mcp_permissions (tool_name)          ← 全局工具开关
 mcp_tokens (tools_allowed JSON)      ← Token 级范围，与 mcp_permissions 取交集
 
-schedules (target_id → groups.id 或 NULL)
+schedules (target_id → groups.id 或 NULL；credential_ids → 勾选的凭据 id 列表)
 ```
 
 ---
 
 ## 迁移策略
 
-`settings.schema_version` 记录当前版本（当前为 **4**）。应用启动时按版本号顺序执行迁移：
+`settings.schema_version` 记录当前版本（当前为 **6**）。应用启动时按版本号顺序执行迁移：
 
 - **v1 → v2**：`credentials` 新增 `last_valid_at`；`plugins` 新增 `category` / `category_name`；
   凭据类型从整包命名（`llm_api_key` / `api_service`）迁移为子插件命名
@@ -338,3 +347,10 @@ schedules (target_id → groups.id 或 NULL)
   移除 `vault_install_plugin` 权限记录。
 - **v2 → v3**：`plugins` 新增 `batch_verify`（默认 1）；`settings` 新增 `verify_proxy`（验证代理）。
 - **v3 → v4**：插件不再区分内置/外置，移除 `plugins.is_builtin`。
+- **v4 → v5**：代理 id 由自增整数改为 UUID。
+- **v5 → v6**：`schedules` 新增 `credential_ids`（默认 `'[]'`）—— 定时计划可只验证**勾选的具体凭据**
+  （`target_scope='credentials'`）。老库按 `PRAGMA table_info` 判存在后补列，已有计划读作空数组。
+
+> **`plugins.enabled` 的语义变更**：它已由「功能闸门」**降级为只读镜像**——插件的启用/禁用改由
+> `plugins/.state.json` 决定，`sync_plugins()` 在每次扫描时把该状态文件镜像进这一列；
+> `get_plugin_by_type()` **不按 `enabled` 过滤**。因此**禁用插件不影响其凭据的读写与备份导入**。

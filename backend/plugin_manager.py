@@ -4,6 +4,7 @@
 目录结构（一服务一插件，同类插件可按类别目录归组）：
 
     plugins/
+      .state.json             # 启用/禁用状态（{"disabled": [credential_type, ...]}），缺失=全启用
       llm/                    # 类别目录（对应左侧树的一层）
         category.json         # 可选：{"name": "LLM 模型", "icon": "🤖"}
         llm_common.py         # 可选：子插件共享代码
@@ -15,13 +16,13 @@
         manifest.json
         plugin.py
 
-放入插件目录即自动加载，删除目录即在下次扫描时自动卸载，无需手动管理。
+放入插件目录即自动加载、删除目录即在下次扫描时自动卸载，均无需手动管理；启用/禁用只写在
+plugins/.state.json 里（禁用即卸载模块，凭据与插件目录原样保留）。
 """
 from __future__ import annotations
 
 import base64
 import json
-import shutil
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -50,13 +51,16 @@ _log = logger.get_logger(__name__)
 # plugins/ 是插件的【唯一事实来源】，不打包进 exe，随 exe 同级以外部目录形式提供。
 BASE_DIR = app_dir()
 PLUGINS_DIR = BASE_DIR / "plugins"
-# 内置插件纯净源（随发行包提供一份）：插件管理里「添加」时从这里恢复到 plugins/
-BUILTIN_SOURCE_DIR = BASE_DIR / "plugins_builtin"
-# 默认不启用的插件源：同样只在「插件管理 → 可添加」里露面，装到 plugins/ 之后才生效。
-# 放的是**缺乏实例验证**的新插件——先不上架，等用真凭据验过再从 plugins_optin/ 挪进 plugins/
-# 成为默认启用项。两者都是「可添加」的来源，故一起遍历（见 list_available_plugins）。
-OPTIN_SOURCE_DIR = BASE_DIR / "plugins_optin"
-ADDABLE_SOURCE_DIRS = (BUILTIN_SOURCE_DIR, OPTIN_SOURCE_DIR)
+# 启用/禁用状态的**唯一事实来源**：plugins/ 下的一个点文件。
+# {"disabled": ["llm_groq", "api_shodan"]}（键是 credential_type）。
+# 文件不存在 = 全部启用；文件损坏也退化为全部启用（见 _read_disabled）。
+# 插件目录本身仍是唯一事实来源——这里只记「关掉了哪几个」，不记插件清单。
+STATE_FILE = PLUGINS_DIR / ".state.json"
+
+# 已禁用的 credential_type 缓存（按 mtime 失效）：批量验证会对每条凭据调一次
+# is_plugin_enabled，不缓存的话每个凭据都要 stat + 读一次文件。
+_state_cache: Optional[set[str]] = None
+_state_mtime: Optional[float] = None
 
 # 内存中的插件模块缓存  credential_type -> module
 _loaded_modules: dict[str, Any] = {}
@@ -79,6 +83,55 @@ _icon_image_cache: dict[str, Optional[str]] = {}
 
 # 类别目录 category.json 的 icon 缓存（category_folder -> icon）
 _category_icon_cache: dict[str, Optional[str]] = {}
+
+
+def _read_disabled() -> set[str]:
+    """读 .state.json 的 disabled 集合（按 mtime 缓存）。
+
+    **任何异常都退化为空集（= 全部启用）**：一个坏掉的状态文件绝不能让所有插件在界面上
+    集体消失——那是最糟的失败模式（用户会以为插件全丢了）。
+    """
+    global _state_cache, _state_mtime
+    try:
+        mtime = STATE_FILE.stat().st_mtime
+    except OSError:
+        # 文件不存在 = 全部启用（出厂默认）
+        _state_cache, _state_mtime = set(), None
+        return set()
+    if _state_cache is not None and _state_mtime == mtime:
+        return _state_cache
+    try:
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        raw = data.get("disabled") if isinstance(data, dict) else None
+        disabled = {x for x in raw if isinstance(x, str)} if isinstance(raw, list) else set()
+        if raw is not None and not isinstance(raw, list):
+            _log.warning("插件状态文件的 disabled 不是数组（%s），按全部启用处理", type(raw).__name__)
+    except Exception as e:  # noqa: BLE001 - 坏 JSON / 非对象 / 编码错，一律回落全启用
+        _log.warning("插件状态文件不可读，按全部启用处理: %s", e)
+        disabled = set()
+    _state_cache, _state_mtime = disabled, mtime
+    return disabled
+
+
+def _write_disabled(disabled: set[str]) -> None:
+    """原子写 .state.json：先写同目录的 .tmp 再 Path.replace，避免读到半截文件。"""
+    global _state_cache, _state_mtime
+    tmp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
+    tmp.write_text(
+        json.dumps({"disabled": sorted(disabled)}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    tmp.replace(STATE_FILE)
+    try:
+        _state_mtime = STATE_FILE.stat().st_mtime
+    except OSError:
+        _state_mtime = None
+    _state_cache = set(disabled)
+
+
+def is_plugin_enabled(credential_type: str) -> bool:
+    """该 credential_type 的插件当前是否启用（禁用 = 功能闸门关闭）。"""
+    return credential_type not in _read_disabled()
 
 
 def get_category_icon(category: str) -> Optional[str]:
@@ -186,14 +239,20 @@ def _category_display(category: str, meta: dict) -> str:
 
 
 def sync_plugins():
-    """扫描 plugins/ 目录，同步插件注册表与已加载模块。
+    """扫描 plugins/ 目录，同步插件注册表、DB 的 enabled 镜像与已加载模块。
 
     - 新目录 → 注册并加载（放入即生效）；
     - 已存在目录 → 更新记录并重载模块（改完重启/刷新即生效）；
-    - 磁盘上已消失的目录 → 移除模块与数据库记录（删除即卸载，凭据保留）。
+    - 被禁用的插件 → 卸载模块（功能闸门随之关闭），记录里 enabled 记 0；
+    - 磁盘上已消失的目录 → 移除模块、删除数据库记录、清理状态文件里的残余键
+      （删除即卸载，凭据保留）。
+
+    启用/禁用的唯一事实来源是 plugins/.state.json；DB 的 plugins.enabled 列只是它的
+    **只读镜像**，不参与任何功能判定（真正的闸门是 get_module）。
     """
     _icon_image_cache.clear()
     _category_icon_cache.clear()
+    disabled = _read_disabled()
     found: set[str] = set()
     for plugin_dir, category, cat_meta in _scan_plugin_dirs():
         try:
@@ -203,6 +262,7 @@ def sync_plugins():
             continue
         ct = manifest.credential_type
         found.add(ct)
+        is_on = ct not in disabled
         try:
             db.upsert_plugin(
                 name=manifest.name,
@@ -216,8 +276,14 @@ def sync_plugins():
                 category=category,
                 category_name=_category_display(category, cat_meta),
                 batch_verify=manifest.batch_verify,
+                enabled=is_on,
             )
-            load_plugin(ct)
+            if is_on:
+                load_plugin(ct)
+            else:
+                # 禁用的插件不该占着内存；顺带清掉加载错误，免得重新启用后还带着旧提示
+                _unload_plugin(ct)
+                _load_errors.pop(ct, None)
         except Exception as e:
             _log.error("插件加载失败 %s (%s): %s", plugin_dir, ct, e)
 
@@ -229,143 +295,52 @@ def sync_plugins():
         db.delete_plugin_record(ct)
         _log.info("插件已移除（目录不存在）: %s", ct)
 
+    # 目录都没了，状态文件里对应的键也该清掉，否则会无限累积
+    stale = disabled - found
+    if stale:
+        _write_disabled(disabled - stale)
+        _log.info("清理状态文件中已失效的插件: %s", ", ".join(sorted(stale)))
+
 
 def _unload_plugin(credential_type: str):
     _loaded_modules.pop(credential_type, None)
     sys.modules.pop(f"_vault_plugin_{credential_type}", None)
 
 
-def _safe_rmtree(target: Path, root: Path) -> bool:
-    """仅当 target 位于 root 之内时删除，防止路径越界误删。"""
-    try:
-        t = target.resolve()
-        r = root.resolve()
-        if t != r and t.is_relative_to(r) and t.is_dir():
-            shutil.rmtree(t)
-            return True
-    except Exception as e:
-        _log.warning("删除插件目录失败 %s: %s", target, e)
-    return False
+def set_plugin_enabled(credential_type: str, enabled: bool) -> dict:
+    """启用/禁用插件。
 
-
-def delete_plugin(credential_type: str, delete_credentials: bool = True) -> dict:
-    """删除一个插件：移除其 plugins/ 目录、卸载模块、删除插件记录。
-
-    delete_credentials=True（默认）时一并删除该类型下的全部凭据。
+    只写 .state.json（唯一事实来源），随后交给 sync_plugins() 去镜像 DB 的 enabled 列
+    并加载/卸载模块。禁用**不动**插件的任何凭据，也不动插件目录本身——要物理移除插件，
+    由用户自己删掉 plugins/<类别>/<服务>/ 目录（下次扫描即卸载，凭据保留）。
     """
     record = db.get_plugin_by_type(credential_type)
     if not record:
         return {"ok": False, "message": "插件不存在"}
-
-    name = record.get("name") or credential_type
-    removed = 0
-    if delete_credentials:
-        for cred in db.list_credentials(credential_type=credential_type):
-            db.delete_credential(cred["id"])
-            removed += 1
-
-    _unload_plugin(credential_type)
-    db.delete_plugin_record(credential_type)
-    # 目录删除放在最后：即便删除失败，记录也已清理，重启扫描时不会被再次加载
-    deleted_dir = _safe_rmtree(Path(record["plugin_path"]), PLUGINS_DIR)
-
-    _log.info("插件已删除 %s（凭据 %d 条，目录删除=%s）", credential_type, removed, deleted_dir)
-    return {"ok": True, "name": name, "deleted_credentials": removed, "deleted_dir": deleted_dir}
-
-
-def list_available_plugins() -> list[dict]:
-    """列出「可添加」的插件：内置源里、当前尚未安装（或已被删除）的那些。
-
-    两个来源一起看：`plugins_builtin/`（全量纯净副本，用于恢复被删掉的插件）与
-    `plugins_optin/`（默认不启用的新插件，缺乏实例验证，先不上架）。同一 credential_type
-    只出一条——`plugins_builtin/` 优先，免得两个源里的同名校本各列一遍。
-    """
-    installed = {p["credential_type"] for p in db.list_plugins()}
-    available: list[dict] = []
-    seen: set[str] = set()
-    for source_dir in ADDABLE_SOURCE_DIRS:
-        if not source_dir.exists():
-            continue
-        for cat_dir in sorted(source_dir.iterdir()):
-            if not cat_dir.is_dir() or cat_dir.name.startswith(("_", ".")):
-                continue
-            cat_meta: dict = {}
-            cat_file = cat_dir / "category.json"
-            if cat_file.exists():
-                try:
-                    data = json.loads(cat_file.read_text(encoding="utf-8"))
-                    if isinstance(data, dict):
-                        cat_meta = data
-                except Exception:
-                    pass
-            for sub in sorted(cat_dir.iterdir()):
-                if not sub.is_dir() or sub.name.startswith(("_", ".")):
-                    continue
-                manifest_file = sub / "manifest.json"
-                if not manifest_file.exists():
-                    continue
-                try:
-                    manifest = load_manifest(manifest_file)
-                except Exception:
-                    continue
-                if manifest.credential_type in installed or manifest.credential_type in seen:
-                    continue
-                seen.add(manifest.credential_type)
-                available.append({
-                    "category": cat_dir.name,
-                    "category_name": _category_display(cat_dir.name, cat_meta),
-                    # 与「已安装」列表保持一致的展示字段：缺这两个的话，可添加卡片的类别标题
-                    # 只能退到子插件 emoji、单条也没有 logo，两张卡片看起来像两套设计
-                    "category_icon": cat_meta.get("icon", ""),
-                    "icon_image": get_icon_image({
-                        "icon": manifest.icon,
-                        "plugin_path": str(sub),
-                        "credential_type": manifest.credential_type,
-                    }),
-                    "service": sub.name,
-                    "credential_type": manifest.credential_type,
-                    "name": manifest.name,
-                    "icon": manifest.icon,
-                    "description": manifest.description,
-                })
-    return available
-
-
-def _find_addable_source(category: str, service: str) -> Optional[Path]:
-    """在「可添加」的各来源里按 `<来源>/<类别>/<服务>` 找插件目录，找不到返回 None。"""
-    for source_dir in ADDABLE_SOURCE_DIRS:
-        candidate = source_dir / category / service
-        if (candidate / "manifest.json").exists():
-            return candidate
-    return None
-
-
-def install_plugin(category: str, service: str) -> dict:
-    """从「可添加」的来源把某个插件复制回 plugins/ 并同步加载。"""
-    src = _find_addable_source(category, service)
-    if src is None:
-        return {"ok": False, "message": "内置源中未找到该插件"}
-    dest = PLUGINS_DIR / category / service
-    if dest.exists():
-        return {"ok": False, "message": "该插件已存在"}
-    try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        # 连同类别元数据一并补齐（若目标类别目录尚无 category.json）——
-        # 从插件所在的那个来源取，而不是写死内置源：opt-in 插件的类别元数据在 opt-in 源里
-        cat_src = src.parent / "category.json"
-        cat_dest = PLUGINS_DIR / category / "category.json"
-        if cat_src.exists() and not cat_dest.exists():
-            shutil.copy2(cat_src, cat_dest)
-        shutil.copytree(src, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    except Exception as e:
-        _log.error("安装插件失败 %s/%s: %s", category, service, e)
-        return {"ok": False, "message": f"安装失败: {e}"}
+    disabled = set(_read_disabled())
+    if enabled:
+        disabled.discard(credential_type)
+    else:
+        disabled.add(credential_type)
+    _write_disabled(disabled)
     sync_plugins()
-    return {"ok": True}
+    _log.info("插件已%s: %s", "启用" if enabled else "禁用", credential_type)
+    return {
+        "ok": True,
+        "name": record.get("name") or credential_type,
+        "credential_type": credential_type,
+        "enabled": bool(enabled),
+    }
 
 
 def _module_missing_error(credential_type: str) -> str:
-    """插件模块不可用时的用户可见提示；带上最近一次加载失败的真实缘由。"""
+    """插件模块不可用时的用户可见提示；带上最近一次加载失败的真实缘由。
+
+    禁用与「未安装/加载失败」是两回事，提示必须分开——否则用户看到「插件未安装」会去
+    翻插件目录，而其实只是被自己关掉了。
+    """
+    if not is_plugin_enabled(credential_type):
+        return f"插件已禁用: {credential_type}"
     reason = _load_errors.get(credential_type)
     base = f"插件未安装或加载失败: {credential_type}"
     return f"{base}（{reason}）" if reason else base
@@ -395,7 +370,9 @@ def _resolve_plugin_path(record: dict) -> Path:
 
 
 def load_plugin(credential_type: str) -> Optional[Any]:
-    """加载插件模块到内存"""
+    """加载插件模块到内存（被禁用的插件不加载）"""
+    if not is_plugin_enabled(credential_type):
+        return None
     record = db.get_plugin_by_type(credential_type)
     if not record:
         _load_errors[credential_type] = "数据库中没有该插件的记录"
@@ -414,14 +391,17 @@ def load_plugin(credential_type: str) -> Optional[Any]:
         return None
 
 
-def reload_plugin(credential_type: str) -> Optional[Any]:
-    """热重载插件"""
-    _unload_plugin(credential_type)
-    return load_plugin(credential_type)
-
-
 def get_module(credential_type: str) -> Optional[Any]:
-    """获取已加载的插件模块（懒加载）"""
+    """获取已加载的插件模块（懒加载）。
+
+    **这是唯一的「功能闸门」**：插件被禁用时恒返回 None。下游无需各自判断——
+    has_actions→False、plugin_actions/plugin_models→[]、plugin_capabilities→
+    {"available": None, "note": "", "error": True}、run/stream_plugin_action→
+    {"ok": False, "error": ...}、get_display_summary→""、plugin_uses_proxy→False、
+    verify_credential→status="error"（message 为「插件已禁用: …」）。
+    """
+    if not is_plugin_enabled(credential_type):
+        return None
     if credential_type not in _loaded_modules:
         return load_plugin(credential_type)
     return _loaded_modules[credential_type]
@@ -515,7 +495,7 @@ def validate_credential(credential_type: str, data: dict) -> list[str]:
     """调用插件校验字段"""
     module = get_module(credential_type)
     if module is None:
-        return [f"插件未安装: {credential_type}"]
+        return [_module_missing_error(credential_type)]
     return call_validate(module, data)
 
 

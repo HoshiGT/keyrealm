@@ -3,15 +3,36 @@
   "version": "1.0.0",
   "credential_type": "im_dingtalk",
   "author": "Credential Vault",
-  "description": "验证钉钉应用 App Key / App Secret 有效性",
+  "description": "验证钉钉：企业内部应用（App Key / App Secret）或自定义群机器人 Webhook 密钥",
   "icon": "📌",
   "fields": [
+    {
+      "key": "kind",
+      "label": "类型",
+      "type": "select",
+      "required": true,
+      "default": "app",
+      "options": [
+        {
+          "value": "app",
+          "label": "企业内部应用（App Key + App Secret）"
+        },
+        {
+          "value": "webhook",
+          "label": "自定义群机器人 Webhook（access_token=64 位十六进制）"
+        }
+      ],
+      "hint": "按凭据形态选：ding 开头的 App Key 选「企业内部应用」；64 位十六进制串是群机器人的 access_token，选「自定义群机器人 Webhook」。"
+    },
     {
       "key": "app_key",
       "label": "App Key",
       "type": "text",
       "required": true,
-      "placeholder": "ding..."
+      "placeholder": "ding...",
+      "show_if": {
+        "kind": "app"
+      }
     },
     {
       "key": "app_secret",
@@ -19,7 +40,22 @@
       "type": "password",
       "required": true,
       "sensitive": true,
-      "placeholder": "应用密钥"
+      "placeholder": "应用密钥",
+      "show_if": {
+        "kind": "app"
+      }
+    },
+    {
+      "key": "webhook_key",
+      "label": "Webhook 凭据（access_token）",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "64 位十六进制",
+      "hint": "群机器人地址里 access_token= 后面那段。校验时会把它拼进官方 webhook 地址的查询串，故加密存储、绝不回显。发送接口无只读版本，校验用一条非法消息类型做探测，不会把内容投递到群里。",
+      "show_if": {
+        "kind": "webhook"
+      }
     },
     {
       "key": "notes",

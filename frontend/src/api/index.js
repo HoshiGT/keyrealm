@@ -190,9 +190,8 @@ export const api = {
 
   // ── 插件（放入 plugins/ 目录即自动加载，无需手动管理）────
   listPlugins: () => call('list_plugins'),
-  deletePlugin: (credentialType) => call('delete_plugin', credentialType),
-  listAvailablePlugins: () => call('list_available_plugins'),
-  installPlugin: (category, service) => call('install_plugin', category, service),
+  // 启用/禁用插件（credential_type, enabled）
+  setPluginEnabled: (credentialType, enabled) => call('set_plugin_enabled', credentialType, enabled),
 
   // ── MCP ─────────────────────────────────────────────────
   getMcpStatus: () => call('get_mcp_status'),
@@ -215,6 +214,7 @@ export const api = {
       payload.trigger_args ?? {},
       payload.target_scope ?? 'all',
       payload.target_id ?? null,
+      payload.credential_ids ?? [],
     ),
   updateSchedule: (id, payload) => call('update_schedule', id, payload),
   deleteSchedule: (id) => call('delete_schedule', id),

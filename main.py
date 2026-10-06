@@ -100,11 +100,8 @@ class VaultApi:
     def list_plugins(self):
         return api.list_plugins()
 
-    def delete_plugin(self, credential_type: str):
-        return api.delete_plugin(credential_type)
-
-    def list_available_plugins(self):
-        return api.list_available_plugins()
+    def set_plugin_enabled(self, credential_type: str, enabled: bool):
+        return api.set_plugin_enabled(credential_type, enabled)
 
     def list_credential_actions(self, credential_id: int):
         return api.list_credential_actions(credential_id)
@@ -136,9 +133,6 @@ class VaultApi:
 
     def clear_finished_tasks(self):
         return api.clear_finished_tasks()
-
-    def install_plugin(self, category: str, service: str):
-        return api.install_plugin(category, service)
 
     # ── MCP ───────────────────────────────────────────────
     def get_mcp_status(self):
@@ -173,8 +167,9 @@ class VaultApi:
         return api.list_schedules()
 
     def create_schedule(self, name: str, trigger_type: str, trigger_args: dict,
-                        target_scope: str = "all", target_id=None):
-        return api.create_schedule(name, trigger_type, trigger_args, target_scope, target_id)
+                        target_scope: str = "all", target_id=None, credential_ids=None):
+        return api.create_schedule(name, trigger_type, trigger_args, target_scope, target_id,
+                                   credential_ids)
 
     def update_schedule(self, schedule_id: int, **kwargs):
         return api.update_schedule(schedule_id, **kwargs)

@@ -55,16 +55,22 @@ export const useVaultStore = defineStore('vault', {
       return map
     },
 
-    typeOptions: (state) =>
-      state.plugins.map((plugin) => ({
+    // 类型下拉一律只列**已启用**的插件：禁用插件不该出现在「新建凭据」的类型里
+    // （选不到就不会新建出「一建好就验证不了」的凭据），
+    // 也不该出现在系统设置的「指定类型」里（定时验证本就跳过禁用插件）。
+    // 注意：这只是**下拉可选项**的收窄；已禁用插件名下**已有**凭据的渲染（编辑表单的
+    // fields_schema、凭据列表的置灰与状态）一律走 pluginByType，不受这里影响。
+    typeOptions() {
+      return this.enabledPlugins.map((plugin) => ({
         label: `${inlineIcon(plugin.icon, '')} ${plugin.name}`.trim(),
         value: plugin.credential_type,
-      })),
+      }))
+    },
 
     /** 按类别分组的类型选项（供可搜索下拉的分组展示） */
-    typeGroups: (state) => {
+    typeGroups() {
       const groups = {}
-      state.plugins.forEach((plugin) => {
+      this.enabledPlugins.forEach((plugin) => {
         const key = plugin.category || ''
         if (!groups[key]) {
           groups[key] = { label: plugin.category_name || plugin.category || '其他', options: [] }
@@ -81,6 +87,8 @@ export const useVaultStore = defineStore('vault', {
     pluginTree: (state) => {
       const categories = {}
       state.plugins.forEach((plugin) => {
+        // 被禁用且名下没有凭据的插件：目录树里不再显示它（避免树里挂一堆点进去没内容的空节点）
+        if (!plugin.enabled && !(plugin.credential_count || 0)) return
         const key = plugin.category || ''
         if (!categories[key]) {
           categories[key] = {
@@ -238,22 +246,9 @@ export const useVaultStore = defineStore('vault', {
       return this.plugins
     },
 
-    /** 内置源中尚未安装的插件（插件管理页用） */
-    async fetchAvailablePlugins() {
-      const items = await api.listAvailablePlugins()
-      return Array.isArray(items) ? items : []
-    },
-
-    /** 删除插件（连同其凭据），随后刷新列表 */
-    async deletePlugin(credentialType) {
-      const result = await api.deletePlugin(credentialType)
-      await Promise.all([this.fetchPlugins(), this.fetchCredentials()])
-      return result
-    },
-
-    /** 从内置源恢复插件 */
-    async installPlugin(category, service) {
-      const result = await api.installPlugin(category, service)
+    /** 启用/禁用插件；随后刷新插件列表（凭据行的置灰由 pluginByType 派生，无需重拉凭据） */
+    async setPluginEnabled(credentialType, enabled) {
+      const result = await api.setPluginEnabled(credentialType, enabled)
       await this.fetchPlugins()
       return result
     },

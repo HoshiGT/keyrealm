@@ -1,14 +1,13 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, ArrowRight, Delete, Plus, Refresh, Search, SetUp } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { ArrowDown, ArrowRight, Check, CircleClose, Refresh, Search, SetUp } from '@element-plus/icons-vue'
 
 import ScopeDefaultsDialog from '@/components/ScopeDefaultsDialog.vue'
 import { useVaultStore } from '@/stores/vault'
 
 const vaultStore = useVaultStore()
 const loading = ref(false)
-const available = ref([])
 const pluginSearch = ref('')
 
 const installedGroups = computed(() => {
@@ -44,30 +43,7 @@ const filteredInstalledGroups = computed(() =>
     .filter((group) => group.items.length),
 )
 
-const filteredAvailable = computed(() => available.value.filter(matchesSearch))
-
-// 「可添加」按类别分组。折叠 key 加 avail: 前缀，与已安装插件的类别 key 区分，共用同一份持久化。
-const AVAIL_KEY_PREFIX = 'avail:'
-
-const availableGroups = computed(() => {
-  const groups = {}
-  filteredAvailable.value.forEach((item) => {
-    const key = item.category || '(根目录)'
-    if (!groups[key]) {
-      groups[key] = {
-        key,
-        collapseKey: AVAIL_KEY_PREFIX + key,
-        name: item.category_name || key,
-        category_icon: item.category_icon || null,
-        items: [],
-      }
-    }
-    groups[key].items.push(item)
-  })
-  return Object.values(groups)
-})
-
-// ── 类别折叠：状态持久化到 localStorage（键内同时存放已安装与可添加两类 key）──
+// ── 类别折叠：状态持久化到 localStorage ──
 const COLLAPSED_CATS_KEY = 'vault.plugins.collapsedCats'
 
 function readCollapsedCats() {
@@ -102,20 +78,15 @@ function toggleCat(key) {
   persistCollapsedCats()
 }
 
-// 两个卡片各自判断「有内容但全被过滤掉」，分别给空状态提示（避免出现只有标题的空卡片）
+// 有插件但全被过滤掉时给空状态提示（避免出现只有标题的空卡片）
 const noInstalledMatch = computed(
   () => searchTerms.value.length > 0 && vaultStore.plugins.length > 0 && !filteredInstalledGroups.value.length,
-)
-
-const noAvailableMatch = computed(
-  () => searchTerms.value.length > 0 && available.value.length > 0 && !filteredAvailable.value.length,
 )
 
 async function load() {
   loading.value = true
   try {
     await vaultStore.fetchPlugins()
-    available.value = await vaultStore.fetchAvailablePlugins()
   } catch (err) {
     ElMessage.error(err.message || '加载插件失败')
   } finally {
@@ -123,39 +94,14 @@ async function load() {
   }
 }
 
-async function remove(plugin) {
+async function toggleEnabled(plugin) {
+  const next = !plugin.enabled
   try {
-    await ElMessageBox.confirm(
-      `将删除插件「${plugin.name}」及其全部凭据（不可恢复，除非稍后重新添加该插件）。`,
-      '删除插件',
-      {
-        type: 'warning',
-        confirmButtonText: '删除',
-        cancelButtonText: '取消',
-        confirmButtonClass: 'el-button--danger',
-      },
-    )
-  } catch {
-    return
-  }
-  try {
-    const result = await vaultStore.deletePlugin(plugin.credential_type)
-    ElMessage.success(
-      `已删除「${result.name || plugin.name}」，同时删除 ${result.deleted_credentials} 条凭据`,
-    )
+    await vaultStore.setPluginEnabled(plugin.credential_type, next)
+    ElMessage.success(`已${next ? '启用' : '禁用'}「${plugin.name}」`)
     await load()
   } catch (err) {
-    ElMessage.error(err.message || '删除失败')
-  }
-}
-
-async function add(item) {
-  try {
-    await vaultStore.installPlugin(item.category, item.service)
-    ElMessage.success(`已添加「${item.name}」`)
-    await load()
-  } catch (err) {
-    ElMessage.error(err.message || '添加失败')
+    ElMessage.error(err.message || (next ? '启用失败' : '禁用失败'))
   }
 }
 
@@ -180,7 +126,7 @@ function openDefaults(scope, scopeKey, credentialType, name) {
   <div class="page">
     <div class="page-toolbar">
       <h2 class="section-title">插件管理</h2>
-      <span class="text-muted">已安装 {{ vaultStore.plugins.length }} 个</span>
+      <span class="text-muted">共 {{ vaultStore.plugins.length }} 个</span>
       <div class="spacer" />
       <el-input
         v-model="pluginSearch"
@@ -193,7 +139,7 @@ function openDefaults(scope, scopeKey, credentialType, name) {
     </div>
 
     <el-card v-loading="loading" shadow="never">
-      <template #header><span>已安装插件</span></template>
+      <template #header><span>插件列表</span></template>
 
       <div v-for="group in filteredInstalledGroups" :key="group.key" class="pm-group">
         <div class="pm-cat" @click="toggleCat(group.key)">
@@ -222,7 +168,15 @@ function openDefaults(scope, scopeKey, credentialType, name) {
           </span>
         </div>
         <template v-if="!isCatCollapsed(group.key)">
-          <div v-for="plugin in group.items" :key="plugin.credential_type" class="pm-row">
+          <div v-for="plugin in group.items" :key="plugin.credential_type" class="pm-row" :class="{ 'is-disabled': !plugin.enabled }">
+            <!-- 启用状态写在条目**最左侧**，且「已启用」「已禁用」两种都显示：
+                 右边按钮上的「禁用」/「启用」是**动作**（点了会发生什么），不是状态，
+                 靠它反推当前状态容易看反。左侧固定宽度的一列状态标签，竖着扫一遍就清楚了。 -->
+            <el-tag
+              :type="plugin.enabled ? 'success' : 'info'"
+              size="small"
+              class="pm-state"
+            >{{ plugin.enabled ? '已启用' : '已禁用' }}</el-tag>
             <img v-if="plugin.icon_image" class="pm-icon" :src="plugin.icon_image" alt="" />
             <span v-else class="pm-icon-emoji">{{ plugin.icon }}</span>
             <div class="pm-main">
@@ -239,62 +193,25 @@ function openDefaults(scope, scopeKey, credentialType, name) {
                 @click="openDefaults('plugin', plugin.credential_type, plugin.credential_type, plugin.name)"
               />
             </el-tooltip>
-            <el-button type="danger" plain size="small" :icon="Delete" @click="remove(plugin)">
-              删除
+            <el-button
+              :type="plugin.enabled ? 'danger' : 'primary'"
+              plain
+              size="small"
+              :icon="plugin.enabled ? CircleClose : Check"
+              @click="toggleEnabled(plugin)"
+            >
+              {{ plugin.enabled ? '禁用' : '启用' }}
             </el-button>
           </div>
         </template>
       </div>
 
-      <el-empty v-if="!vaultStore.plugins.length" description="暂无已安装插件" :image-size="60" />
+      <el-empty v-if="!vaultStore.plugins.length" description="暂无插件" :image-size="60" />
       <el-empty
         v-else-if="noInstalledMatch"
-        description="没有匹配的已安装插件"
+        description="没有匹配的插件"
         :image-size="60"
       />
-    </el-card>
-
-    <el-card v-if="availableGroups.length || noAvailableMatch" shadow="never">
-      <template #header><span>可添加（内置源）</span></template>
-      <el-empty
-        v-if="noAvailableMatch"
-        description="内置源里没有匹配的插件"
-        :image-size="60"
-      />
-      <div v-for="group in availableGroups" :key="group.collapseKey" class="pm-group">
-        <div class="pm-cat" @click="toggleCat(group.collapseKey)">
-          <el-icon class="pm-cat-arrow">
-            <ArrowDown v-if="!isCatCollapsed(group.collapseKey)" />
-            <ArrowRight v-else />
-          </el-icon>
-          <span class="pm-cat-icon">
-            <img
-              v-if="!group.category_icon && group.items[0].icon_image"
-              :src="group.items[0].icon_image"
-              alt=""
-            />
-            <template v-else>{{ group.category_icon || group.items[0].icon || '📁' }}</template>
-          </span>
-          <span class="pm-cat-name">{{ group.name }}（{{ group.items.length }}）</span>
-          <!-- 预留：类别默认设置按钮 -->
-          <span class="pm-cat-actions" @click.stop />
-        </div>
-        <template v-if="!isCatCollapsed(group.collapseKey)">
-          <div v-for="item in group.items" :key="item.credential_type" class="pm-row">
-            <img v-if="item.icon_image" class="pm-icon" :src="item.icon_image" alt="" />
-            <span v-else class="pm-icon-emoji">{{ item.icon }}</span>
-            <div class="pm-main">
-              <div class="pm-name">{{ item.name }}</div>
-              <div class="pm-sub text-muted">
-                {{ item.credential_type }} · {{ item.category_name }}
-              </div>
-            </div>
-            <el-button type="primary" plain size="small" :icon="Plus" @click="add(item)">
-              添加
-            </el-button>
-          </div>
-        </template>
-      </div>
     </el-card>
 
     <ScopeDefaultsDialog
@@ -362,6 +279,20 @@ function openDefaults(scope, scopeKey, credentialType, name) {
 
 .pm-row:last-child {
   border-bottom: none;
+}
+
+/* 禁用行的弱化**只压文字**，不再整行 opacity。
+   整行 opacity 会连右侧的「启用」按钮一起压灰，看着像不可点——其实可点，而且用户正是该点它
+   来恢复。状态已经由左侧固定宽度的那枚「已禁用」标签说清楚了，不需要再拿按钮去暗示。 */
+.pm-row.is-disabled .pm-name,
+.pm-row.is-disabled .pm-sub {
+  opacity: .55;
+}
+
+/* 条目左侧的状态标签：定宽，让「已启用」/「已禁用」竖着扫下来对齐成一列 */
+.pm-state {
+  flex-shrink: 0;
+  min-width: 54px;
 }
 
 .pm-icon {

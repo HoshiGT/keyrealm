@@ -466,6 +466,7 @@ def list_plugins() -> list:
     for record in plugins:
         record["icon_image"] = plugin_manager.get_icon_image(record)
         record["batch_verify"] = bool(record.get("batch_verify", 1))
+        record["enabled"] = bool(record.get("enabled", 1))
         record["has_actions"] = plugin_manager.has_actions(record["credential_type"])
     return plugins
 
@@ -766,30 +767,13 @@ def clear_finished_tasks() -> dict:
     return {"ok": True, "removed": tasks.clear_finished()}
 
 
-def delete_plugin(credential_type: str) -> dict:
-    """删除插件及其凭据（前端确认后调用）。"""
-    result = plugin_manager.delete_plugin(credential_type, delete_credentials=True)
-    if result.get("ok"):
-        push_event("vault:credentials_changed")
-        push_event("vault:plugins_changed")
-    return result
+def set_plugin_enabled(credential_type: str, enabled: bool) -> dict:
+    """启用/禁用插件（前端调用）。
 
-
-def list_available_plugins() -> list:
-    """内置源中尚未安装的插件。"""
-    available = plugin_manager.list_available_plugins()
-    for item in available:
-        item["icon_image"] = plugin_manager.get_icon_image({
-            "icon": item.get("icon", ""),
-            "credential_type": item["credential_type"],
-            "plugin_path": str(plugin_manager.BUILTIN_SOURCE_DIR / item["category"] / item["service"]),
-        })
-    return available
-
-
-def install_plugin(category: str, service: str) -> dict:
-    """从内置源恢复插件并加载。"""
-    result = plugin_manager.install_plugin(category, service)
+    只推 plugins_changed：禁用不动任何凭据，前端凭据行的置灰由插件状态派生，
+    多推一次 credentials_changed 只会白白触发一次全量重拉。
+    """
+    result = plugin_manager.set_plugin_enabled(credential_type, bool(enabled))
     if result.get("ok"):
         push_event("vault:plugins_changed")
     return result
@@ -986,8 +970,12 @@ def create_schedule(
     trigger_args: dict,
     target_scope: str = "all",
     target_id: Optional[Union[int, str]] = None,
+    credential_ids: Optional[list] = None,
 ) -> dict:
-    sched = db.create_schedule(name, trigger_type, trigger_args, target_scope, target_id)
+    """新建定时计划。`target_scope="credentials"` 时由 `credential_ids` 指定**具体凭据**
+    （前端用目录树勾选，与备份页「仅选中的凭据」同一个组件），此时 `target_id` 为空。"""
+    sched = db.create_schedule(name, trigger_type, trigger_args, target_scope, target_id,
+                               credential_ids)
     scheduler.reload_schedules()
     return sched
 
