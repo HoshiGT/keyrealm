@@ -325,6 +325,15 @@ plugins/
 
 **传输**：SSE（Server-Sent Events），默认监听 `127.0.0.1:8765`。不随应用自动启动，由用户在「MCP 设置」页手动开启；开启后窗口最小化到托盘仍持续运行。
 
+**重依赖按需导入**：`mcp` / `starlette` / `uvicorn`（连带 `pydantic`）实测在应用自身的导入链上
+多占约 **33MB** RSS，而这套东西**只有真正启动服务时才用得到**。因此本模块顶层只留标准库与
+`backend` 内部模块，`mcp`/`uvicorn` 降级到 `TYPE_CHECKING` 仅供类型标注，实际导入下沉到
+`_build_mcp_app()`（构造工具）、`start_server()`（起 uvicorn）里；鉴权中间件 `BearerAuthMiddleware`
+也挪进 `_make_asgi_app()` 内部定义——它要继承 starlette 的 `BaseHTTPMiddleware`，类体在导入期就得
+解析基类，留在模块顶层会把 starlette 一起拽进常驻内存。**注意**：`main.py` / `api.py` 仍照常
+`import mcp_server`，无需改动；打包侧 `CredentialVault.spec` 用 `collect_all()` 显式收了这三个包，
+不受延迟导入影响，新增重依赖时照此办理。
+
 **监听地址可配**：`settings` 的 `mcp_host` / `mcp_port`（默认 `127.0.0.1` / `8765`）。
 `start_server(host, port)` 不再把 `127.0.0.1` 写死，也**去掉了原来的「端口被占就 +1/+2」降级**
 ——端口是用户显式配的，悄悄换一个会让人对着「配了 9000 却在 9001」的界面发懵；现在占用就直接

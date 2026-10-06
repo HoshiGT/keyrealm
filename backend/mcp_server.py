@@ -9,13 +9,15 @@ import threading
 import time
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-import uvicorn
-from mcp.server.mcpserver import MCPServer
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import JSONResponse
+# MCP 这一串依赖（mcp / starlette / uvicorn，连带 pydantic…）实测常驻约 58MB RSS，
+# 但本模块**只有真正启动服务**时才需要它们，而 MCP 默认关闭、要用户手动开启
+# （见 main.py 的启动注释）。所以全部下沉到用到的函数里按需导入，顶层只留标准库
+# 与 backend 内部模块——否则「从头到尾没开过 MCP」也要一直背着这 58MB。
+if TYPE_CHECKING:  # 仅供类型标注；本文件有 `from __future__ import annotations`，运行期不求值
+    import uvicorn
+    from mcp.server.mcpserver import MCPServer
 
 from . import backup
 from . import database as db
@@ -55,41 +57,6 @@ def _push_event(name: str, detail: dict):
             pass
 
 
-# ── Bearer Token 中间件 ────────────────────────────────────
-
-class BearerAuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        # SSE 连接和消息端点需要鉴权
-        auth = request.headers.get("authorization", "")
-        if not auth.startswith("Bearer "):
-            return JSONResponse({"error": "missing_token", "message": "需要 Bearer Token"}, status_code=401)
-
-        token = auth[7:].strip()
-        token_hash = hash_token(token)
-        record = db.get_token_by_hash(token_hash)
-
-        if not record:
-            return JSONResponse({"error": "invalid_token", "message": "Token 无效或已撤销"}, status_code=401)
-
-        # 检查过期
-        expires_at = record.get("expires_at")
-        if expires_at:
-            try:
-                exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-                if exp < datetime.now(timezone.utc):
-                    return JSONResponse({"error": "token_expired", "message": "Token 已过期"}, status_code=401)
-            except Exception:
-                pass
-
-        # 更新最后使用时间（异步，不阻塞）
-        threading.Thread(target=db.touch_token, args=(token_hash,), daemon=True).start()
-
-        # 将 token 记录注入 request.state 与 ContextVar（工具内通过 ContextVar 读取）
-        request.state.mcp_token = record
-        _current_token_var.set(record)
-        return await call_next(request)
-
-
 # ── 权限检查 ──────────────────────────────────────────────
 
 def _check_permission(tool_name: str, token_record: dict) -> bool:
@@ -112,6 +79,8 @@ def _require_perm(tool_name: str) -> None:
 # ── MCP 工具定义 ──────────────────────────────────────────
 
 def _build_mcp_app() -> MCPServer:
+    from mcp.server.mcpserver import MCPServer  # 重依赖下沉，见文件头注释
+
     mcp = MCPServer(
         "CredentialVault",
         instructions="Credential Vault MCP Server — 管理、验证 LLM API Key 及其他凭据",
@@ -393,11 +362,49 @@ def _build_mcp_app() -> MCPServer:
 def _make_asgi_app(mcp: MCPServer):
     """将 MCPServer 的 SSE app 包装上 Bearer 鉴权中间件"""
     from starlette.applications import Starlette
+    from starlette.middleware import Middleware as MW
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
     from starlette.routing import Mount
+
+    # 中间件定义在函数内：它继承 starlette 的 BaseHTTPMiddleware，类体在导入期就要
+    # 解析基类，放模块顶层会把 starlette 连同 MCP 一起拽进常驻内存（见文件头注释）。
+    # 它只被这一个函数用，就近定义。
+    class BearerAuthMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            # SSE 连接和消息端点需要鉴权
+            auth = request.headers.get("authorization", "")
+            if not auth.startswith("Bearer "):
+                return JSONResponse({"error": "missing_token", "message": "需要 Bearer Token"}, status_code=401)
+
+            token = auth[7:].strip()
+            token_hash = hash_token(token)
+            record = db.get_token_by_hash(token_hash)
+
+            if not record:
+                return JSONResponse({"error": "invalid_token", "message": "Token 无效或已撤销"}, status_code=401)
+
+            # 检查过期
+            expires_at = record.get("expires_at")
+            if expires_at:
+                try:
+                    exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                    if exp < datetime.now(timezone.utc):
+                        return JSONResponse({"error": "token_expired", "message": "Token 已过期"}, status_code=401)
+                except Exception:
+                    pass
+
+            # 更新最后使用时间（异步，不阻塞）
+            threading.Thread(target=db.touch_token, args=(token_hash,), daemon=True).start()
+
+            # 将 token 记录注入 request.state 与 ContextVar（工具内通过 ContextVar 读取）
+            request.state.mcp_token = record
+            _current_token_var.set(record)
+            return await call_next(request)
 
     sse_app = mcp.sse_app()
     # 在 sse_app 外包一层中间件
-    from starlette.middleware import Middleware as MW
     wrapped = Starlette(
         routes=[Mount("/", app=sse_app)],
         middleware=[MW(BearerAuthMiddleware)],
@@ -427,6 +434,8 @@ def start_server(port: int = 8765, host: str = "127.0.0.1") -> tuple[bool, int, 
     悄悄换一个会让人对着一个「配了 9000 却在 9001」的界面发懵。
     """
     global _server_thread, _uvicorn_server, _mcp_app, _port, _host
+
+    import uvicorn  # 重依赖下沉，见文件头注释
 
     if _running:
         return True, _port, _url()
