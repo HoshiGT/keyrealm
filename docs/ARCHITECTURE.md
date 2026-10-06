@@ -361,8 +361,11 @@ MCP 全局只保留**一个活跃 Token**，且**默认即存在**（无则自�
 2. **Token 级范围**（`mcp_tokens.tools_allowed`）：鉴权层仍支持按 Token 限定工具子集，
    但界面不再暴露该配置——默认空值表示继承全局开关
 
-调用需同时通过全局开关与 Token 范围（当前默认继承全局，等价于只受全局开关约束），
-任一层拒绝则返回 `permission_denied`。
+调用需同时通过全局开关与 Token 范围（当前默认继承全局，等价于只受全局开关约束）。
+任一层的拒绝形态不同：Token 缺失/无效/过期由 SSE 中间件返回 **401 JSON**
+（`missing_token` / `invalid_token` / `token_expired`）；**工具权限**不足则由工具内
+`_require_perm` 抛 `PermissionError`，客户端收到的是 `isError` 的工具结果
+（正文 `权限不足：<tool> 未授权`），而不是 `permission_denied` 之类的 JSON 体。
 
 详见 [MCP_API.md](MCP_API.md)。
 

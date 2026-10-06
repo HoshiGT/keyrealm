@@ -36,19 +36,23 @@ Authorization: Bearer cv_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7
 
 ### 鉴权失败响应
 
-```json
-// 401 Unauthorized — Token 无效、已吊销或已过期
-{
-  "error": "unauthorized",
-  "message": "Invalid or expired token"
-}
+Bearer Token 由 SSE 中间件校验，失败时在建立连接前直接返回 **401** JSON：
 
-// 403 Forbidden — Token 有效但无权调用该工具
-{
-  "error": "permission_denied",
-  "message": "Token does not have access to vault_create_credential"
-}
+```json
+// 缺少 Authorization 头
+{"error": "missing_token", "message": "需要 Bearer Token"}
+
+// Token 无效或已被吊销
+{"error": "invalid_token", "message": "Token 无效或已撤销"}
+
+// Token 已过期（expires_at 早于当前时间）
+{"error": "token_expired", "message": "Token 已过期"}
 ```
+
+> **权限不足不是 HTTP 403**：它发生在工具调用内部——`_require_perm` 抛 `PermissionError`，
+> MCP 客户端收到的是一次 `isError` 的工具结果，正文形如
+> `权限不足：vault_create_credential 未授权`。「全局开关关闭」与「Token 范围不匹配」都走这
+> 一条路径，错误文本相同（不区分是哪一层拒绝的）。
 
 ### Token 管理（默认存在 · 仅轮换）
 
@@ -114,35 +118,29 @@ claude mcp add credential-vault \
 #### `vault_list_credentials`
 **默认权限：✅ 开启**
 
-列出所有凭据（不返回敏感字段明文）。
+列出所有凭据（不返回敏感字段明文）。返回值为**裸数组**（不是带 `credentials` / `total` 的对象）。
 
 ```json
 // 入参
 {
-  "group_id": 1,           // 可选，按分组过滤
+  "group_id": 1,                    // 可选，按分组过滤
   "credential_type": "llm_openai",  // 可选，按类型过滤
-  "status": "valid"        // 可选，按状态过滤
+  "status": "valid",                // 可选，按状态过滤
+  "search": "生产"                   // 可选，按名称模糊搜索
 }
 
-// 出参
-{
-  "credentials": [
-    {
-      "id": 1,
-      "name": "OpenAI 生产账号",
-      "credential_type": "llm_openai",
-      "group_id": 1,
-      "group_name": "工作项目",
-      "status": "valid",
-      "last_verified_at": "2026-10-03T10:30:00Z",
-      "last_valid_at": "2026-10-03T10:30:00Z",
-      "data_plain": {"base_url": "https://api.openai.com/v1", "notes": "主账号"},
-      "data_masked": {"api_key": "sk-pro…abcd"},
-      "created_at": "2026-10-01T08:00:00Z"
-    }
-  ],
-  "total": 1
-}
+// 出参（裸数组）
+[
+  {
+    "id": 1,
+    "name": "OpenAI 生产账号",
+    "credential_type": "llm_openai",
+    "group_name": "工作项目",          // 未分组时为 null
+    "status": "valid",
+    "data_plain": {"base_url": "https://api.openai.com/v1", "notes": "主账号"},
+    "last_verified_at": "2026-10-03T10:30:00Z"
+  }
+]
 ```
 
 ---
@@ -150,22 +148,26 @@ claude mcp add credential-vault \
 #### `vault_get_credential`
 **默认权限：❌ 关闭（需授权）**
 
-获取单条凭据详情，敏感字段以掩码形式返回（如 `sk-****...****`）。
+获取单条凭据详情。**敏感字段既不返回明文、也不返回掩码**（要明文请用 `vault_get_secret`）。
+凭据不存在时返回 `{"error": "not_found"}`。
 
 ```json
 // 入参
-{"id": 1}
+{"credential_id": 1}
 
 // 出参
 {
   "id": 1,
   "name": "OpenAI 生产账号",
   "credential_type": "llm_openai",
-  "data_plain": {"base_url": "https://api.openai.com/v1", "notes": "主账号"},
-  "data_masked": {"api_key": "sk-pro…abcd"},
+  "group_id": 1,
+  "group_name": "工作项目",
   "status": "valid",
   "status_detail": {"account": "user@example.com", "org": "MyOrg"},
-  "last_verified_at": "2026-10-03T10:30:00Z"
+  "data_plain": {"base_url": "https://api.openai.com/v1", "notes": "主账号"},
+  "last_verified_at": "2026-10-03T10:30:00Z",
+  "created_at": "2026-10-01T08:00:00Z",
+  "updated_at": "2026-10-03T10:30:00Z"
 }
 ```
 
@@ -174,63 +176,76 @@ claude mcp add credential-vault \
 #### `vault_get_secret`
 **默认权限：❌ 关闭（高危，需显式授权）**
 
-获取解密后的敏感字段明文。Agent 调用此工具时，应用会弹出确认对话框。
+获取解密后的敏感字段明文。`field` 省略时返回该凭据的全部字段。
 
 ```json
-// 入参
-{"id": 1, "field": "api_key"}
+// 入参：只要一个字段
+{"credential_id": 1, "field": "api_key"}
 
 // 出参
-{"value": "sk-proj-xxxxxxxxxxxxxxxx"}
+{"field": "api_key", "value": "sk-proj-xxxxxxxxxxxxxxxx"}
+
+// 入参：省略 field（返回全部）
+{"credential_id": 1}
+
+// 出参
+{"data": {"api_key": "sk-proj-xxxxxxxxxxxxxxxx", "base_url": "https://api.openai.com/v1"}}
 ```
+
+> 凭据不存在返回 `{"error": "not_found"}`；解密失败返回
+> `{"error": "decrypt_failed", "message": "..."}`；保险库锁定时返回 `{"error": "vault_locked"}`。
 
 ---
 
 #### `vault_create_credential`
 **默认权限：❌ 关闭（需授权）**
 
-创建新凭据，自动触发验证。
+创建新凭据。与界面「添加凭据」共用**同一份实现**，因此同样会继承类别 / 插件的默认设置
+（预填值、代理预留键等）。`auto_verify=true`（默认）时创建后立即验证并写回状态。
 
 ```json
 // 入参
 {
   "name": "OpenAI 测试账号",
   "credential_type": "llm_openai",
-  "group_id": 1,
   "data": {
     "base_url": "https://api.openai.com/v1",
     "api_key": "sk-test-xxx",
     "notes": "测试环境"
-  }
+  },
+  "group_id": 1,          // 可选
+  "auto_verify": true     // 可选，默认 true
 }
 
-// 出参
-{
-  "id": 2,
-  "status": "valid",
-  "message": "凭据创建成功，验证通过"
-}
+// 出参：credential 为新建的凭据记录（字段同 vault_get_credential）
+{"ok": true, "credential": {"id": 2, "name": "OpenAI 测试账号", "status": "valid", "...": "..."}}
 ```
+
+> 参数校验失败或插件不存在时，直接返回该错误对象（形如 `{"error": "..."}`），不包 `ok`。
 
 ---
 
 #### `vault_update_credential`
 **默认权限：❌ 关闭（需授权）**
 
-修改凭据，仅传入需要修改的字段。
+修改凭据。`name` / `group_id` / `data` 都会按传入值覆盖，未传的字段不动。
 
 ```json
 // 入参
 {
-  "id": 1,
+  "credential_id": 1,
   "name": "OpenAI 生产账号（已更新）",  // 可选
-  "group_id": 2,                          // 可选
-  "data": {"api_key": "sk-new-xxx"}       // 可选，仅更新指定字段
+  "group_id": 2,                       // 可选
+  "data": {"api_key": "sk-new-xxx"}    // 可选
 }
 
-// 出参
-{"id": 1, "message": "更新成功", "reverify": true}
+// 出参：credential 为更新后的记录
+{"ok": true, "credential": {"id": 1, "name": "OpenAI 生产账号（已更新）", "...": "..."}}
 ```
+
+> **`data` 是整体替换**：其中**敏感字段**（manifest 里 `sensitive: true`）若缺失或为空，会用
+> 库中已存明文回填，避免「只改备注却把密钥抹掉」；**非敏感字段**则以传入内容为准——没传的
+> 非敏感字段会丢失，建议一并传入。凭据不存在返回 `{"error": "not_found"}`。
 
 ---
 
@@ -239,10 +254,10 @@ claude mcp add credential-vault \
 
 ```json
 // 入参
-{"id": 1}
+{"credential_id": 1}
 
 // 出参
-{"message": "删除成功"}
+{"ok": true}
 ```
 
 ---
@@ -252,20 +267,20 @@ claude mcp add credential-vault \
 #### `vault_verify_credential`
 **默认权限：✅ 开启**
 
-对指定凭据触发验证，同步等待结果（最长 30 秒）。
+对指定凭据触发验证，**同步**等待并返回结果（耗时由插件与超时设置决定）。返回内容即为该
+凭据写入 `status_detail` 的那份数据。同一凭据正在验证中时直接返回
+`{"status": "unknown", "message": "该凭据正在验证中，请稍候"}`。
 
 ```json
 // 入参
-{"id": 1}
+{"credential_id": 1}
 
 // 出参
 {
-  "id": 1,
-  "status": "valid",
+  "status": "valid",                                               // valid / invalid / error / unknown
   "message": "API Key 有效",
-  "account_info": {"account": "user@example.com", "org": "MyOrg"},
-  "duration_ms": 420,
-  "verified_at": "2026-10-03T10:35:00Z"
+  "account_info": {"account": "user@example.com", "org": "MyOrg"}, // 可能为 null
+  "duration_ms": 420
 }
 ```
 
@@ -274,7 +289,8 @@ claude mcp add credential-vault \
 #### `vault_batch_verify`
 **默认权限：❌ 关闭（需授权）**
 
-批量验证，异步执行，立即返回任务 ID。
+**异步**：立即返回、不等结果，进度通过 SSE 事件推送
+（`vault:batch_verify_started` / `vault:batch_verify_progress` / `vault:batch_verify_done`）。
 
 > 声明 `batch_verify: false` 的凭据类型（无法自动化验证或有写副作用，如 `sms_gateway`、
 > `dns_duckdns`、`im_telegram_apihash`）会被自动跳过，不计入本次验证范围。
@@ -287,12 +303,8 @@ claude mcp add credential-vault \
   "credential_type": null  // scope=type 时必填
 }
 
-// 出参
-{
-  "task_id": "verify_20261003_103500",
-  "total": 12,
-  "message": "批量验证已启动，共 12 条凭据"
-}
+// 出参：仅表示已启动，不回传条数（总数以下发的进度事件为准）
+{"ok": true, "message": "批量验证已启动"}
 ```
 
 ---
@@ -303,13 +315,13 @@ claude mcp add credential-vault \
 **默认权限：✅ 开启**
 
 ```json
-// 出参
-{
-  "groups": [
-    {"id": 1, "name": "工作项目", "description": "", "color": "#409EFF", "credential_count": 5},
-    {"id": 2, "name": "个人", "description": "", "color": "#67C23A", "credential_count": 3}
-  ]
-}
+// 出参（裸数组，含分组全字段与 credential_count）
+[
+  {"id": 1, "name": "工作项目", "description": "", "color": "#409EFF",
+   "sort_order": 0, "created_at": "2026-10-01T08:00:00Z", "credential_count": 5},
+  {"id": 2, "name": "个人", "description": "", "color": "#67C23A",
+   "sort_order": 0, "created_at": "2026-10-01T08:00:00Z", "credential_count": 3}
+]
 ```
 
 ---
@@ -321,8 +333,8 @@ claude mcp add credential-vault \
 // 入参
 {"name": "新项目", "description": "2026年Q4项目", "color": "#E6A23C"}
 
-// 出参
-{"id": 3, "message": "分组创建成功"}
+// 出参：group 为新建的分组记录
+{"ok": true, "group": {"id": 3, "name": "新项目", "description": "2026年Q4项目", "color": "#E6A23C", "...": "..."}}
 ```
 
 ---
@@ -337,24 +349,31 @@ claude mcp add credential-vault \
 其凭据仍可读写）。
 
 ```json
-// 出参
-{
-  "plugins": [
-    {
-      "name": "OpenAI",
-      "version": "1.0.0",
-      "credential_type": "llm_openai",
-      "author": "Credential Vault",
-      "description": "验证 OpenAI API Key 有效性",
-      "icon": "🤖",
-      "category": "llm",
-      "category_name": "LLM 模型",
-      "enabled": true,
-      "credential_count": 8
-    }
-  ]
-}
+// 出参（裸数组；下列为节选，实际是 plugins 表整行 + 三个附加字段）
+[
+  {
+    "id": 3,
+    "name": "OpenAI",
+    "version": "1.0.0",
+    "author": "Credential Vault",
+    "description": "验证 OpenAI API Key 有效性",
+    "credential_type": "llm_openai",
+    "icon": "🤖",
+    "category": "llm",
+    "category_name": "LLM 模型",
+    "plugin_path": "plugins/llm/openai",
+    "enabled": 1,               // 0/1 整数（1=启用，0=禁用），不是布尔
+    "batch_verify": 1,          // 0/1 整数（0=不参与批量验证）
+    "installed_at": "2026-10-01T08:00:00Z",
+    "fields_schema": [{"key": "api_key", "label": "API Key", "sensitive": true, "...": "..."}],
+    "credential_count": 8,      // 附加字段
+    "category_icon": "🧠",       // 附加字段
+    "rel_path": "llm/openai"    // 附加字段
+  }
+]
 ```
+
+> 调用时会先做一次插件目录扫描（`sync_plugins()`），使新放入 `plugins/` 的插件即时可见。
 
 ---
 
@@ -427,20 +446,26 @@ claude mcp add credential-vault \
 |----------|------|------|
 | 只读 | `vault_list_credentials`, `vault_verify_credential`, `vault_list_groups`, `vault_list_plugins` | ✅ 开启 |
 | 写操作 | `vault_get_credential`, `vault_create_*`, `vault_update_*`, `vault_delete_*`, `vault_batch_verify` | ❌ 关闭 |
-| 高危 | `vault_get_secret`, `vault_export_backup`, `vault_import_backup` | ❌ 关闭（需二次确认） |
+| 高危 | `vault_get_secret`, `vault_export_backup`, `vault_import_backup` | ❌ 关闭 |
+
+> **二次确认只在界面**：在 MCP 设置页**开启**高危 / 写操作工具时会弹确认框（清单见
+> `docs/FRONTEND.md`）。它约束的是「用户开不开这个开关」，与 Agent 的调用无关——Agent 调用
+> 一个已开启的工具时**不会**再弹任何确认。
 
 ### 未授权调用响应
 
-```json
-// Token 无效
-{"error": "unauthorized", "message": "Invalid or expired token"}
+两层权限对应两种**不同形态**的失败，不要混淆：
 
-// 全局工具未开启
-{"error": "permission_denied", "message": "工具 vault_create_credential 全局未启用，请在 MCP 设置中开启"}
+- **Token 层（HTTP 401）**：连接建立前即被 SSE 中间件拒绝，返回 JSON，见上文
+  「鉴权失败响应」的 `missing_token` / `invalid_token` / `token_expired`。
+- **工具权限层**：`_require_perm` 在工具内部抛 `PermissionError`，客户端收到的是一次
+  `isError` 的**工具结果**（非 401/403），正文形如：
 
-// Token 范围不含该工具（鉴权层保留该分支；当前无配置入口，正常不会出现）
-{"error": "permission_denied", "message": "当前 Token 无权调用 vault_create_credential"}
 ```
+权限不足：vault_create_credential 未授权
+```
+
+> 全局开关关闭与 Token 范围不匹配都走这条路径，错误文本相同，不区分是哪一层拒绝的。
 
 ---
 

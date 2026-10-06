@@ -441,7 +441,7 @@ App.vue
 ✅ vault_verify_credential   触发验证
 ✅ vault_list_groups         列出分组
 ✅ vault_list_plugins        列出插件
-⬜ vault_get_credential      获取凭据详情（掩码）
+⬜ vault_get_credential      获取凭据详情
 ⬜ vault_create_credential   创建凭据
 ⬜ vault_update_credential   修改凭据
 ⬜ vault_delete_credential   删除凭据

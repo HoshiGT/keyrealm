@@ -145,7 +145,7 @@ def _build_mcp_app() -> MCPServer:
     # ── vault_get_credential ──────────────────────────────
     @mcp.tool()
     def vault_get_credential(credential_id: int) -> dict:
-        """获取单条凭据详情（敏感字段掩码）"""
+        """获取单条凭据详情（不含敏感字段明文）"""
         _require_perm("vault_get_credential")
         c = db.get_credential(credential_id)
         if not c:

@@ -188,7 +188,7 @@ function createState() {
     { tool_name: 'vault_verify_credential', enabled: true, description: '触发验证' },
     { tool_name: 'vault_list_groups', enabled: true, description: '列出分组' },
     { tool_name: 'vault_list_plugins', enabled: true, description: '列出插件' },
-    { tool_name: 'vault_get_credential', enabled: false, description: '获取凭据详情（掩码）' },
+    { tool_name: 'vault_get_credential', enabled: false, description: '获取凭据详情' },
     { tool_name: 'vault_create_credential', enabled: false, description: '创建凭据' },
     { tool_name: 'vault_update_credential', enabled: false, description: '修改凭据' },
     { tool_name: 'vault_delete_credential', enabled: false, description: '删除凭据' },

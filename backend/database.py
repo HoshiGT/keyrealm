@@ -233,7 +233,7 @@ def _migrate(conn: sqlite3.Connection):
 def _seed_mcp_permissions(conn: sqlite3.Connection):
     defaults = [
         ("vault_list_credentials",  1, "列出凭据（不含敏感字段明文）"),
-        ("vault_get_credential",    0, "获取单条凭据详情（掩码）"),
+        ("vault_get_credential",    0, "获取单条凭据详情"),
         ("vault_create_credential", 0, "创建凭据"),
         ("vault_update_credential", 0, "修改凭据"),
         ("vault_delete_credential", 0, "删除凭据"),
