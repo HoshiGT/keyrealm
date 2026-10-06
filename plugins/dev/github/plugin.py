@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote
 
-from dev_common import (
+from backend.plugin_sdk import (
     VerifyResult,
     body_snippet,
     download_to_file,

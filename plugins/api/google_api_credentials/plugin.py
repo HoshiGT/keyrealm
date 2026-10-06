@@ -20,13 +20,21 @@
   客户端凭据是**成对**校验的，所以这个种类必须同时给出配对的 Client ID，缺了只能报「无法确认」。
 
 全部只读，且两个接口都不会产生任何资源变更（授权码是现场编的假值）。
-仅从 api_common 复用通用工具。
+仅从框架层 backend.plugin_sdk 复用通用工具。
 """
 from __future__ import annotations
 
 import re
 
-from api_common import VerifyResult, body_snippet, guarded, log, make_client, safe_json
+from backend.plugin_sdk import (
+    VerifyResult,
+    body_snippet,
+    guarded,
+    log,
+    make_client,
+    mask_secret,
+    safe_json,
+)
 
 NAME = "Google API 凭据"
 DISPLAY_FIELD = "secret"
@@ -58,7 +66,7 @@ def _kind(data: dict) -> str:
 # ── Google API Key ──────────────────────────────────────
 
 def _verify_api_key(api_key: str) -> VerifyResult:
-    log(f"校验 Google API Key {api_key[:8]}…")
+    log(f"校验 Google API Key {mask_secret(api_key)}")
     with make_client() as client:
         resp = client.get(IDENTITYTOOLKIT_URL, params={"key": api_key})
 
@@ -131,7 +139,7 @@ def _verify_oauth_secret(client_secret: str, client_id: str) -> VerifyResult:
                     "Google 对客户端凭据是成对校验的，单凭密钥无法判定",
         )
 
-    log(f"校验 Google OAuth 客户端密钥 {client_secret[:9]}…")
+    log(f"校验 Google OAuth 客户端密钥 {mask_secret(client_secret)}")
     with make_client() as client:
         resp = client.post(
             TOKEN_URL,

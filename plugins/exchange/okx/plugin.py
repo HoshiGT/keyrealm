@@ -1,7 +1,7 @@
 """OKX API 凭证验证插件（plugins/exchange/ 类别下的独立子插件）。
 
 OKX：GET /api/v5/account/balance，HMAC-SHA256（base64）签名鉴权，
-需 Passphrase。签名算法与判定逻辑随插件自带，不依赖 exchange_common。
+需 Passphrase。签名算法与判定逻辑随插件自带，不依赖类别共享模块。
 
 参考文档：https://www.okx.com/docs-v5/en/
 参考文档：https://www.okx.com/docs-v5/en/#overview-rest-authentication-signature
@@ -12,7 +12,7 @@ import hmac
 from datetime import datetime, timezone
 from typing import Any
 
-from exchange_common import VerifyResult, body_snippet, guarded, make_client, safe_json
+from backend.plugin_sdk import VerifyResult, body_snippet, guarded, make_client, safe_json
 
 SERVICE_NAME = "OKX"
 

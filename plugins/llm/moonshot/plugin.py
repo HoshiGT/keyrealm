@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from llm_common import VerifyResult, guarded, make_client, make_quota_probe, plausible_amount, safe_json
+from backend.plugin_sdk import VerifyResult, guarded, make_client, safe_json
+from llm_common import make_quota_probe, plausible_amount
 from llm_protocols import probe_openai_models, chat_completion, fetch_models, chat_completion_stream
 
 NAME = "月之暗面 Moonshot"

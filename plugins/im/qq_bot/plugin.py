@@ -5,7 +5,7 @@
 
 参考文档：https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/access-token.html
 """
-from im_common import VerifyResult, body_snippet, guarded, make_client, safe_json
+from backend.plugin_sdk import VerifyResult, body_snippet, guarded, make_client, safe_json
 
 SERVICE = "qq_bot"
 NAME = "QQ 频道机器人"

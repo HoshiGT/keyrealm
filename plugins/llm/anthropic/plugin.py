@@ -4,7 +4,8 @@
 """
 from __future__ import annotations
 
-from llm_common import VerifyResult, guarded, make_quota_probe
+from backend.plugin_sdk import VerifyResult, guarded
+from llm_common import make_quota_probe
 from llm_protocols import probe_anthropic_models, chat_completion, fetch_models, chat_completion_stream
 
 NAME = "Anthropic"

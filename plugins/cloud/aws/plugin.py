@@ -10,8 +10,8 @@ Access Key 当前有效、并给出它代表谁（root / IAM 用户 / 角色）�
 - 全局端点 ``sts.amazonaws.com`` 与账号所在地域无关，签名固定用 ``us-east-1``，
   因此不需要用户填地域。
 
-自带完整实现（AWS Signature Version 4 只在这里维护，不依赖 cloud_common）。
-全部调用均为只读，不产生任何资源变更。仅从 cloud_common 复用通用工具。
+自带完整实现（AWS Signature Version 4 只在这里维护，不依赖类别共享模块）。
+全部调用均为只读，不产生任何资源变更。仅从框架层 backend.plugin_sdk 复用通用工具。
 
 参考文档：https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_aws-signing.html
 参考文档：https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html
@@ -25,7 +25,14 @@ import xml.etree.ElementTree as ET
 
 import httpx
 
-from cloud_common import VerifyResult, body_snippet, guarded, log, make_client
+from backend.plugin_sdk import (
+    VerifyResult,
+    body_snippet,
+    guarded,
+    log,
+    make_client,
+    mask_secret,
+)
 
 NAME = "AWS"
 # 全局 STS 端点：签名区域固定 us-east-1，与账号实际所处地域无关
@@ -200,7 +207,7 @@ def verify(data) -> VerifyResult:
             status="error",
             message="以 ASIA 开头的 Access Key ID 属临时凭据，缺少 Session Token 无法签名验证",
         )
-    log(f"校验 AWS 凭据 {access_key[:4]}…")
+    log(f"校验 AWS 凭据 {mask_secret(access_key)}")
     return _verify(access_key, secret_key, token)
 
 

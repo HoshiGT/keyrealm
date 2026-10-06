@@ -30,6 +30,7 @@ from typing import Any, Optional
 from . import database as db
 from . import logger
 from . import proxy_store
+from . import redact
 from .paths import app_dir
 from .plugin_base import (
     VerifyResult,
@@ -132,6 +133,28 @@ def _write_disabled(disabled: set[str]) -> None:
 def is_plugin_enabled(credential_type: str) -> bool:
     """该 credential_type 的插件当前是否启用（禁用 = 功能闸门关闭）。"""
     return credential_type not in _read_disabled()
+
+
+def batchable_types() -> set[str]:
+    """可参与「批量验证」的 credential_type 全集（**唯一的判定处**）。
+
+    只有**同时**满足两条的插件才算数：
+
+    - manifest 未声明 ``batch_verify=false``（那类插件无法自动化验证，或有写副作用）；
+    - 当前处于启用状态（`plugins/.state.json`，即 `is_plugin_enabled` 的事实来源）。
+
+    `scheduler.batch_verify` 用它挑要验的凭据、`api.batch_verify` 用它算返回给前端的
+    ``total`` —— 两边各写一份筛选逻辑，正是「total 与实际执行数口径不一致」的成因。
+
+    这是**白名单**语义：插件表为空（尚未 `sync_plugins`）时返回空集，等于「一条都不批量
+    验证」。失败方向刻意选安全的那个 —— 反向默认会去跑那些「有写副作用、已标注不可批量」
+    的插件。
+    """
+    disabled = _read_disabled()
+    return {
+        p["credential_type"] for p in db.list_plugins()
+        if p.get("batch_verify", 1) and p["credential_type"] not in disabled
+    }
 
 
 def get_category_icon(category: str) -> Optional[str]:
@@ -262,6 +285,14 @@ def sync_plugins():
             continue
         ct = manifest.credential_type
         found.add(ct)
+        # lint：声明了字段却一个 sensitive 都没有 → 该插件的密钥完全不参与输出净化。
+        # 这是**静默失效**的一种（用户与作者都看不出区别），加载时点出来。
+        if manifest.fields and not any(f.sensitive for f in manifest.fields):
+            _log.warning(
+                "插件 %s 声明了 %d 个字段，但没有任何 sensitive:true —— "
+                "其密钥不会被输出净化（错误消息里的密钥会落日志/落库）",
+                ct, len(manifest.fields),
+            )
         is_on = ct not in disabled
         try:
             db.upsert_plugin(
@@ -429,6 +460,23 @@ def _log_proxy_outlet(what: str, credential_type: str, resolved, data: dict = No
         pass
 
 
+def _redact_result(credential_type: str, data: dict, result: VerifyResult) -> VerifyResult:
+    """净化 verify 结果里回显的敏感字段值（就地改 message / account_info）。
+
+    这是**唯一**的收口点：单条 / 批量 / MCP / 定时四条验证路径都经 ``verify_credential``，
+    而下游 ``backend/scheduler.py`` 会把 ``result.message`` **落日志 + 落 DB 的
+    ``status_detail``**——不在这里净化，插件经 ``body_snippet`` / ``str(exc)`` 原样带出的
+    上游响应（部分服务的密钥就在 URL query 里）就会持久化到磁盘。
+    """
+    record = db.get_plugin_by_type(credential_type) or {}
+    secrets = redact.secrets_of(record.get("fields_schema"), data, credential_type=credential_type)
+    if not secrets:
+        return result
+    result.message = redact.redact_text(result.message, secrets)
+    result.account_info = redact.redact_deep(result.account_info, secrets)
+    return result
+
+
 def verify_credential(credential_type: str, data: dict) -> VerifyResult:
     """调用插件验证凭据（含「按凭据解析代理」与「欠费探测」）"""
     module = get_module(credential_type)
@@ -440,7 +488,7 @@ def verify_credential(credential_type: str, data: dict) -> VerifyResult:
         _log_proxy_outlet("验证", credential_type, outlet, data)
         result = call_verify(module, data)
         _apply_quota_probe(credential_type, module, data, result)
-    return result
+    return _redact_result(credential_type, data, result)
 
 
 def plugin_uses_proxy(credential_type: str) -> bool:

@@ -10,18 +10,15 @@ from __future__ import annotations
 import httpx
 from typing import Any, Optional
 
-from llm_common import (
+from backend.plugin_sdk import (
     VerifyResult,
     body_snippet,
     guarded,
     make_client,
-    probe_model,
-    probe_requested,
-    quota_insufficient,
-    quota_ok,
     safe_json,
     timeout,
 )
+from llm_common import probe_model, probe_requested, quota_insufficient, quota_ok
 from llm_protocols import is_insufficient_balance
 
 NAME = "百度文心"

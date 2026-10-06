@@ -17,14 +17,14 @@ Firebase 的「服务账号私钥」（控制台导出的 ``*-firebase-adminsdk-
 
 字段按「一行一项」拆平（邮箱 / 私钥 / 密钥 ID / 项目 ID），不接收整段 JSON。
 
-仅从 cloud_common 复用通用工具。
+仅从框架层 backend.plugin_sdk 复用通用工具。
 
 参考文档：https://firebase.google.com/docs/projects/api/reference/rest/v1beta1/projects/get
 参考文档：https://developers.google.com/identity/protocols/oauth2/service-account
 """
 from __future__ import annotations
 
-from cloud_common import VerifyResult, guarded, log
+from backend.plugin_sdk import VerifyResult, guarded, log
 from google_sa import (
     GoogleSAError,
     classify_token_error,

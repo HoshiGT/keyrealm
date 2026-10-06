@@ -27,7 +27,7 @@ import time
 
 import httpx
 
-from im_common import (
+from backend.plugin_sdk import (
     VerifyResult,
     body_snippet,
     first_list,

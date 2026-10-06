@@ -148,6 +148,9 @@ def batch_verify(
       得到一串「插件已禁用」，白白占用并发与接口配额。
     - `concurrency` 为本次并发线程数（前端在批量验证对话框里设置）；不传则读已保存的设置。
       定时触发的批量验证走同一份设置——见 verify_options。
+
+    **返回本次实际要验证的条数**（已排除跳过项）。调用方（`api.batch_verify`）拿它当
+    返回给前端的 ``total``，而不是自己另查一遍 —— 否则前后端会看到两个口径。
     """
     if credential_ids:
         wanted = set(int(i) for i in credential_ids)
@@ -157,18 +160,15 @@ def batch_verify(
             group_id=group_id if scope == "group" else None,
             credential_type=credential_type if scope == "type" else None,
         )
-    no_batch = {
-        p["credential_type"] for p in db.list_plugins()
-        if not p.get("batch_verify", 1) or not p.get("enabled", 1)
-    }
-    creds = [c for c in all_creds if c.get("credential_type") not in no_batch]
+    batchable = plugin_manager.batchable_types()
+    creds = [c for c in all_creds if c.get("credential_type") in batchable]
     skipped = len(all_creds) - len(creds)
 
     total = len(creds)
     if total == 0:
         _push_event("vault:batch_verify_done",
                     {"total": 0, "valid": 0, "invalid": 0, "error": 0, "skipped": skipped})
-        return
+        return 0
 
     # 批量验证登记成一条**后台任务**：界面上只弹一条横幅提示，进度在「任务」页看。
     # 不再用「不可关闭的模态弹窗」把用户按在前台（那是「卡住」的来源）。
@@ -248,6 +248,7 @@ def batch_verify(
                   trigger_type, total, valid, invalid, error, skipped)
 
     _executor.submit(_run)
+    return total
 
 
 def _run_schedule(schedule: dict):

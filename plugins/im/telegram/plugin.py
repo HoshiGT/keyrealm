@@ -3,19 +3,13 @@
 端点：GET https://api.telegram.org/bot<token>/getMe，成功返回机器人自身信息。
 
 安全提示：Bot Token 直接拼在 URL 路径中，任何异常文本都可能带完整 URL，
-因此网络异常只返回异常类型（见 im_common.guarded）。
+因此网络异常只返回异常类型（见 backend.plugin_sdk.guarded）。
 
 参考文档：https://core.telegram.org/bots/api
 """
 import httpx
 
-from im_common import (
-    VerifyResult,
-    body_snippet,
-    guarded,
-    make_client,
-    safe_json,
-)
+from backend.plugin_sdk import VerifyResult, body_snippet, guarded, make_client, safe_json
 
 SERVICE = "telegram"
 NAME = "Telegram Bot"

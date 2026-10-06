@@ -11,7 +11,7 @@
 
 参考文档：https://developer.godaddy.com/en/docs/references/rest/domains/v1/list
 """
-from dns_common import VerifyResult, body_snippet, guarded, make_client
+from backend.plugin_sdk import VerifyResult, body_snippet, guarded, make_client
 
 
 def _unconfirmed(status: int, snippet: str) -> VerifyResult:

@@ -1,4 +1,4 @@
-"""按调用生效的代理上下文 —— 框架与插件之间「本次调用走哪个代理」的唯一通道。
+"""按调用生效的代理上下文 —— 框架与插件之间「本次调用走哪个代理」的通道。
 
 为什么需要它
 ------------
@@ -10,8 +10,9 @@
 ----
 - 本模块由**框架持有**；``main.py`` 启动时以固定别名注册进 ``sys.modules``：
   ``sys.modules.setdefault("vault_proxy_ctx", vault_proxy_ctx)``
-- 各 ``<类别>_common.py`` 的 ``proxy()`` **懒查** ``sys.modules.get("vault_proxy_ctx")``：
-  插件脱离主程序单独跑时该模块不在，自然回退到环境变量，不需要 try/except、也不需要 import。
+- 插件侧 ``backend/plugin_sdk.py`` 的 ``proxy()`` **懒查** ``sys.modules.get("vault_proxy_ctx")``：
+  插件不直接 import backend 内部模块，只经 SDK 取用；脱离主程序单独跑时该模块不在，
+  自然回退到环境变量，不需要 try/except。
 - 值存在 ``threading.local()`` 里——每个并发任务各一份，天然隔离；线程池复用的 worker
   靠 ``begin/end`` 成对还原，不会把上一条凭据的代理带给下一条。
 

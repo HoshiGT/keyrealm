@@ -7,7 +7,7 @@
 参考文档：https://fofa.info/api
 """
 
-from api_common import VerifyResult, guarded, make_client, safe_json, body_snippet
+from backend.plugin_sdk import VerifyResult, guarded, make_client, safe_json, body_snippet
 
 NAME = "FOFA"
 INFO_URL = "https://fofa.info/api/v1/info/my"

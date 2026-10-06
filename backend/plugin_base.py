@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from .plugin_sdk import VerifyResult
 from .proxy import SOCKS_HINT
 
 _log = logging.getLogger("plugin")
@@ -35,19 +36,9 @@ def _plugin_name(module: Any) -> str:
     return getattr(module, "__name__", "?").replace("_vault_plugin_", "")
 
 
-@dataclass
-class VerifyResult:
-    """插件验证结果"""
-    status: str                          # valid / invalid / error
-    message: str = ""
-    account_info: Optional[dict] = None  # 账号名、组织、余额等
-
-    def to_dict(self) -> dict:
-        return {
-            "status": self.status,
-            "message": self.message,
-            "account_info": self.account_info,
-        }
+# VerifyResult 是框架与插件**共用**的权威定义，住在 backend/plugin_sdk.py（插件唯一
+# 被允许 import 的 backend 模块）。这里只把它引进来供类型标注与鸭子类型适配使用；
+# 插件返回自己的同名 dataclass 也能被 call_verify 归一化（见下）。
 
 
 @dataclass

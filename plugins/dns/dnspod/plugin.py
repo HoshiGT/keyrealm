@@ -10,7 +10,7 @@
 
 参考文档：https://support.dnspod.cn/api/domains-list/
 """
-from dns_common import VerifyResult, body_snippet, guarded, make_client, safe_json
+from backend.plugin_sdk import VerifyResult, body_snippet, guarded, make_client, safe_json
 
 # DNSPod 明确的鉴权/账号类失败状态码：
 # "-1" 登录失败、"-2" 需要实名认证、"-3" 缺少参数或 token 非法、

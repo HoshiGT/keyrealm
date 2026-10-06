@@ -2,7 +2,7 @@
 
 参考文档：https://metaso.cn/search-api/playground
 
-自带完整的校验与展示逻辑，只复用 api_common 的通用工具；
+自带完整的校验与展示逻辑，只复用框架层 backend.plugin_sdk 的通用工具；
 复制本目录即可派生出新的服务插件。
 
 本插件提供：
@@ -22,7 +22,7 @@
 端点、参数名与错误码均来自**真机实测**（``q`` 是参数名，`query` 会返回「系统内部错误」；
 ``GET /search`` 返回 405，只支持 POST）。
 """
-from api_common import VerifyResult, body_snippet, guarded, make_client, safe_json
+from backend.plugin_sdk import VerifyResult, body_snippet, guarded, make_client, safe_json
 
 NAME = "秘塔 AI 搜索"
 DEFAULT_BASE_URL = "https://metaso.cn/api/v1"

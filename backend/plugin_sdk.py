@@ -1,19 +1,51 @@
-"""云服务商 类别共享模块：底层通用工具 + 子插件原型接口。
+"""插件 SDK：框架向插件暴露的**唯一**接口层。
 
-只提供与具体服务无关的最底层能力：
+框架把「与具体服务无关的通用能力」全部收在这里，插件只需 `import` 本模块 + 写自己的
+功能逻辑，不必再照抄一份工具代码（历史包袱：这些函数曾被复制进每个类别的
+`plugins/<类别>/<类别>_common.py`，五份逐字节相同）。
+
+提供的能力：
 
 - 结果类型 `VerifyResult`
+- 日志 `log` / `log_debug`
 - 代理读取 `proxy`、HTTP 客户端 `make_client`
 - 响应解析 `safe_json` / `body_snippet`
-- 异常兜底 `guarded`、日志 `log`
+- 异常兜底 `guarded`
 - 超时 `TIMEOUT`（默认值）/ `timeout()`（实际生效值，读 `VAULT_TIMEOUT`）
-- 常量 `_BODY_LIMIT`
+- 写/列表类操作的通用辅助 `download_to_file` / `first_list`
+- 凭据值脱敏 `mask_secret`（写日志/提示时用，**不要自己切字符串**）
 
-具体服务的端点、字段校验、判定等实现写在各自 plugins/cloud/<服务>/plugin.py 内
-（服务之间允许重复，刻意为之）；新增服务插件照抄同级子插件即可，
-无需修改本模块。协议级、跨服务完全相同的工具可另建工具模块供子插件复用。
+用法::
 
-本模块完全独立，不导入 backend 包，可脱离主程序单独运行。
+    from backend.plugin_sdk import VerifyResult, guarded, make_client, safe_json
+
+    @guarded
+    def verify(data):
+        with make_client() as client:
+            resp = client.get("https://api.example.com/me",
+                              headers={"Authorization": f"Bearer {data['api_key']}"})
+        ...
+
+**插件只允许 `import backend.plugin_sdk`，不得 import backend 的其它模块** —— 本模块是
+框架与插件之间唯一被承诺稳定的边界，backend 内部实现可以自由重构而不影响插件。
+
+本模块是**叶子模块**：只依赖标准库与 httpx，不 import 任何 backend 模块。因此它
+自包含、可单独拷出去用，也不会与 backend 内部形成循环依赖。
+
+插件需实现的接口（标「可选」的未实现即视为不支持，框架侧在 `backend/plugin_base.py`
+里统一做鸭子类型适配，签名对不上也不会报错）：
+
+============================== =================================================
+`verify(data) -> VerifyResult`  **必选**：验证凭据 → valid / invalid / error
+`validate(data) -> list`        可选：字段错误列表（空 = 通过）
+`get_display_summary(data)`     可选：凭据列表中的简短展示文本
+`actions(data) -> list`         可选：声明可用操作
+`run_action(id, params, data)`  可选：执行操作 → `{"ok", "output", "error"}`
+`capabilities(data) -> dict`    可选：报告当前凭据**真正能用**的操作（fail-open）
+`list_models(data) -> list`     可选：可用模型名列表
+`stream_action(...)`            可选：流式执行操作（回报进度、支持取消）
+`quota_probe(data) -> dict`     可选：余额拿不到时的欠费探测
+============================== =================================================
 """
 from __future__ import annotations
 
@@ -28,7 +60,7 @@ import httpx
 
 @dataclass
 class VerifyResult:
-    """插件验证结果（独立定义，不依赖 backend）"""
+    """插件验证结果（框架与插件共用的权威定义）"""
 
     status: str  # valid / invalid / error
     message: str = ""
@@ -46,12 +78,14 @@ class VerifyResult:
 TIMEOUT = 20.0
 
 
-def timeout() -> float:
-    """实际使用的超时秒数：``VAULT_TIMEOUT``（应用设置写入）> 模块默认 ``TIMEOUT``。
+def timeout(fallback: float = TIMEOUT) -> float:
+    """实际使用的超时秒数：``VAULT_TIMEOUT``（应用设置写入）> ``fallback``。
 
-    后端「批量验证」对话框里的超时设置经环境变量下发（插件是独立模块，不允许
-    import backend），每次发请求时读取——改完即时生效，无需重启。变量缺失或非法时
-    回退到模块默认值。
+    后端「批量验证」对话框里的超时设置经环境变量下发，每次发请求时读取——改完即时
+    生效，无需重启。变量缺失或非法时回退到 ``fallback``（默认 ``TIMEOUT``）。
+
+    ``fallback`` 供类别层用：邮箱类插件的默认超时是 15 秒而非 20 秒，它只需
+    ``def timeout(): return sdk.timeout(15.0)``，不必重复实现整个函数。
     """
     raw = os.environ.get("VAULT_TIMEOUT")
     if raw:
@@ -61,13 +95,14 @@ def timeout() -> float:
             value = 0.0
         if value > 0:
             return value
-    return TIMEOUT
+    return fallback
+
 
 # 响应正文截断长度，用于错误消息
 _BODY_LIMIT = 240
 
 
-_logger = logging.getLogger("plugin.cloud")
+_logger = logging.getLogger("plugin")
 
 
 def log(message: str) -> None:
@@ -80,6 +115,31 @@ def log(message: str) -> None:
     _logger.info("%s", message)
 
 
+def log_debug(message: str) -> None:
+    """DEBUG 级日志：只在日志级别调到 DEBUG 时才落盘。
+
+    用于「对排查有用、但不该展示给用户」的细节（例如权限探测逐项失败的原始码），
+    避免把这些说明塞进前端提示里。
+    """
+    _logger.debug("%s", message)
+
+
+def mask_secret(value: str) -> str:
+    """脱敏展示一个敏感值（保留首尾少量字符，如 ``sk-123…abcd``）。
+
+    **写日志、拼用户可见提示时一律用它，不要自己切字符串** ——
+    手写的 ``api_key[:8]`` 会把密钥片段写进日志文件与凭据的 ``status_detail``，
+    与框架在 ``plugin_manager`` 出口做的净化不是一个通道，净化拦不住。
+
+    空值返回空串；过短的值只保留首 2 位（见 `backend/crypto.py` 的权威实现）。
+    """
+    # 懒加载：本模块承诺「叶子模块」（只依赖标准库 + httpx），
+    # 所以在函数内 import 框架模块，保住这条不变量。
+    from backend.crypto import mask_secret as _impl
+
+    return _impl(value or "")
+
+
 # ── 请求封装 ─────────────────────────────────────────────
 
 def proxy() -> Optional[str]:
@@ -90,7 +150,6 @@ def proxy() -> Optional[str]:
     ``VAULT_PROXY``（应用设置写入）> 标准代理变量。
 
     覆盖值为 ``DIRECT`` 表示该凭据选了「直连」，此时**压过**上面所有环境变量。
-    插件脱离主程序单独运行时 ``vault_proxy_ctx`` 不在 ``sys.modules`` 里，直接走环境变量。
     """
     ctx = sys.modules.get("vault_proxy_ctx")
     if ctx is not None:
@@ -104,11 +163,22 @@ def proxy() -> Optional[str]:
     return None
 
 
-def make_client(follow_redirects: bool = True) -> httpx.Client:
-    return httpx.Client(timeout=timeout(), follow_redirects=follow_redirects, proxy=proxy())
+def make_client(follow_redirects: bool = True,
+                request_timeout: Optional[float] = None) -> httpx.Client:
+    """建一个 httpx 客户端（自动带上代理与超时）。
+
+    ``request_timeout`` 为空时用全局超时 ``timeout()``；显式传入则覆盖之——
+    供「一个验证里要连试多个候选、每个只给短超时」的场景使用。
+    """
+    return httpx.Client(
+        timeout=timeout() if request_timeout is None else request_timeout,
+        follow_redirects=follow_redirects,
+        proxy=proxy(),
+    )
 
 
 def safe_json(response: httpx.Response) -> Optional[dict]:
+    """响应体解析为 dict；不是 JSON 或顶层非 dict 时返回 None。"""
     try:
         data = response.json()
     except Exception:
@@ -117,6 +187,7 @@ def safe_json(response: httpx.Response) -> Optional[dict]:
 
 
 def body_snippet(response: httpx.Response) -> str:
+    """响应正文压成一行并截断，用于把上游的原始报错带进提示里。"""
     try:
         text = response.text or ""
     except Exception:
@@ -148,32 +219,7 @@ def guarded(fn):
     return wrapper
 
 
-# ── 子插件原型接口（子插件应实现；这里只声明契约，运行时不调用本模块的实现）──
-
-def validate(data: dict) -> list:
-    """子插件实现：返回配置错误列表（空列表 = 通过）。"""
-    raise NotImplementedError
-
-
-def verify(data: dict) -> "VerifyResult":
-    """子插件实现：验证凭据，返回 VerifyResult（valid / invalid / error）。"""
-    raise NotImplementedError
-
-
-def get_display_summary(data: dict) -> str:
-    """子插件实现：凭据列表中的简短展示文本。"""
-    return ""
-
-
-def actions(data: dict) -> list:
-    """子插件可选实现：声明可用操作；返回 [] 表示无操作。"""
-    return []
-
-
-def run_action(action_id: str, params: dict, data: dict) -> dict:
-    """子插件可选实现：执行操作。"""
-    return {"ok": False, "error": "未实现"}
-# ── 写操作/列表类操作的通用辅助（新增插件时直接复用，别自己重造） ──
+# ── 写操作 / 列表类操作的通用辅助 ────────────────────────
 
 def download_to_file(response: httpx.Response, path: str) -> tuple[bool, str]:
     """把**已打开的流式响应**写进 ``path``，返回 ``(ok, message)``。

@@ -114,7 +114,7 @@ API-Key-Checker/
 plugins/
 ├── llm/                      # 类别目录
 │   ├── category.json         # 类别显示名 / 图标
-│   ├── llm_common.py         # 类别共享模块（底层通用工具 + 子插件原型接口，不含厂商逻辑）
+│   ├── llm_common.py         # 类别共享模块：仅本类别特有辅助（额度/欠费探测）
 │   ├── llm_protocols.py      # 协议级工具（探针 / 简单对话），供子插件按需复用
 │   ├── openai/               # 服务子插件（独立，可单独删除）
 │   │   ├── manifest.json
@@ -131,17 +131,25 @@ plugins/
 ```
 
 > `api/gateway` 是短信网关 / 接码服务商（一个插件内按 manifest 的 `vendor` 分派校验），它调用的就是普通
-> HTTPS API，与 api/ 其余服务同形，故并入 api/ 而不单开类别——新建类别要连带克隆一份 `*_common.py`，
-> 代价大于收益。
+> HTTPS API，与 api/ 其余服务同形，故并入 api/ 而不单开类别——新建类别**不再**需要连带克隆一份
+> `*_common.py`（通用工具已上收 `backend/plugin_sdk.py`），但单开一类的归类代价仍大于收益。
 
 > 八个类别共 52 个子插件：llm 19 / api 8 / im 8 / cloud 6 / dns 4 / dev 4 / exchange 2 / mail 1。
-> 每个类别目录都带一个 `<类别>_common.py`（**类别共享模块**）；**协议级模块**另立——`cloud/google_sa.py`
-> （把服务账号的邮箱 + 私钥签成 RS256 JWT 换 token，gcp / firebase 共用）与 `llm/llm_protocols.py`。这些都不是子插件。
+> 类别目录**不再强制**带共享模块——通用原语已上收 `backend/plugin_sdk.py`（框架暴露给插件的唯一接口层）；
+> 只有类别确有「类别特有」工具时才建一个（现仅 `llm/llm_common.py`、`mail/mail_common.py` 两例）。
+> **协议级模块**另立：`cloud/google_sa.py`（把服务账号的邮箱 + 私钥签成 RS256 JWT 换 token，
+> gcp / firebase 共用）与 `llm/llm_protocols.py`。这些都不是子插件。
 
-每个类别目录结构一致：`category.json` + 可选 `<类别>_common.py` + 各服务子目录（`manifest.json` + `plugin.py`）。
+每个类别目录至少含 `category.json` + 各服务子目录（`manifest.json` + `plugin.py`），共享模块可选。
 
 - **一个服务 = 一个独立子插件**：各自持有 `manifest.json`（字段 schema、credential_type）与薄 `plugin.py`；删除任一子插件目录不影响其他子插件运行。根目录下直接含 `manifest.json` 的目录视为无类别的平铺插件。
-- **类别共享模块**：`<类别>_common.py` 只放**底层通用工具 + 子插件原型接口**（`VerifyResult` / `make_client` / `safe_json` / `guarded` 等）；**协议级工具**（如 `plugins/llm/llm_protocols.py` 的探针与 `chat_completion`）另建独立工具模块供子插件按需引用。加载子插件时临时将其目录与类别目录注入 `sys.path`（见 plugin_base.load_plugin_module）。**服务专属逻辑在各子插件内自带，新增插件无需改动共享模块。**
+- **类别共享模块（可选）**：只在类别**确实有类别特有工具**时才建。通用工具与 `VerifyResult` 已上收
+  `backend/plugin_sdk.py`，不再逐类别克隆；现有两例均为类别特有——`llm/llm_common.py` 的额度/欠费
+  探测辅助、`mail/mail_common.py` 的 SOCKS 解析与 `TunneledSMTP*` / `TunneledIMAP4*`。
+  **协议级工具**（如 `plugins/llm/llm_protocols.py` 的探针与 `chat_completion`、
+  `cloud/google_sa.py` 的服务账号签名）另建独立模块供子插件按需引用。加载子插件时临时将其目录
+  与类别目录注入 `sys.path`（见 plugin_base.load_plugin_module）。
+  **服务专属逻辑在各子插件内自带，新增插件无需改动共享模块。**
 - **同步流程**：启动时 `sync_plugins()` 扫描两层结构 → upsert plugins 表（含 category / category_name / batch_verify）→ 清理已消失插件的记录与模块缓存。
 - **批量验证开关**：manifest 的 `batch_verify`（默认 true）落库到 plugins.batch_verify；调度器与前端批量时跳过为 false 的类型——**有写副作用或无法自动化**的（如 duckdns / wechat_ilink），以及**判定常为「未验证」、批量会刷掉人工结论**的（telegram_apihash / api/gateway）。前端在批量勾选弹窗中禁用其勾选，但单条手动验证仍可用。
 
@@ -161,7 +169,7 @@ plugins/
         ▼
   run_credential_action(id, action_id, params)
         → plugin_manager.run_plugin_action → 插件的 run_action(action_id, params, data)
-        → 结果经 _redact_deep 递归净化后才回前端
+        → 结果经 redact.redact_deep 递归净化后才回前端
 ```
 
 三个设计要点：
@@ -171,8 +179,11 @@ plugins/
   就分不清该去修密钥还是修网络）。
 - **`kind: "list"`** 让插件用 `columns` + `rows` + `row_actions` 描述一个表格，行内按钮的 `params`
   支持 `$row.<列key>` 模板，目标 action 是 `form` 就预填、是 `list` 就下钻（前端用栈保存上一帧，返回零请求）。
-- **净化边界在 `backend/api.py`**：`_redact_deep` 递归遍历**整个结果**（`output`/`error`/`rows`/任意嵌套）
-  把该凭据 `sensitive` 字段的明文替换掉。早先只扫顶层两个字段，列表类操作一上来就会把密钥从 `rows` 里漏出去。
+- **净化边界在 `backend/redact.py`**：`redact_deep()` 递归遍历**整个结果**
+  （`output`/`error`/`rows`/任意嵌套）把该凭据 `sensitive` 字段的明文替换掉。早先只扫顶层两个字段，
+  列表类操作一上来就会把密钥从 `rows` 里漏出去。该模块被**两处**共用以闭合整类问题：`api.py` 的
+  操作路径，以及 `plugin_manager.verify_credential()` 的验证路径（其结果会被 `scheduler`
+  **落日志 + 落库到 `status_detail`**）。插件自己 `[:N]` 切的片段不在此列 —— 写日志用 `mask_secret`。
 - **下载类操作**（`save_to`）：前端先弹「另存为」拿路径，路径经 `params` 交给插件，**插件自己下载**
   —— 不让插件返回 `{url, headers}` 由后端代下，是因为那会把鉴权头/预签名 URL 送进结果 dict 并穿到 JS 桥。
   对话框只在 `backend/api.py` 里弹：流式路径的插件跑在新建线程上，跨线程弹窗会卡界面。
@@ -233,8 +244,8 @@ plugins/
   两个哨兵 `UNSET`（未指定 → 回退环境变量）与 `DIRECT`（强制直连、压过所有代理变量）
   必须分开——用同一个 `None` 表达会让「跟随全局」在外部设了 `ALL_PROXY` 时无法正确回退。
 - `main.py` 启动时把它以**固定别名**注册进 `sys.modules`：`sys.modules["vault_proxy_ctx"]`。
-  各 `<类别>_common.py` 的 `proxy()` **懒查**这个名字（插件不允许 import backend，
-  且脱离主程序单独跑时自然取不到 → 退回环境变量），因此**插件代码一行都不用改**。
+  插件侧 `backend/plugin_sdk.py` 的 `proxy()` **懒查**这个名字——插件不直接 import backend
+  内部模块，只通过 SDK 取用；脱离主程序单独跑时该模块不在，自然回退到环境变量。因此**插件代码一行都不用改**。
 - 收口在 `plugin_manager` 的四个入口（`verify_credential` / `run_plugin_action` /
   `plugin_models` / `stream_plugin_action`）用 `credential_proxy_scope(data)` 包住，
   于是单条 / 批量 / MCP / 流式四条路径全自动覆盖。**必须 `begin/end(token)` 成对还原**：
@@ -257,6 +268,11 @@ plugins/
 **运行参数（`backend/verify_options.py`）**：批量验证的**并发线程数**（默认 8，1–32）与**请求超时**（默认 20 秒，5–300 秒）在「批量验证」对话框里就地调整，是这两项的**单一事实来源**——持久化到 `settings` 表的 `batch_concurrency` / `verify_timeout`，前端取值范围也由它下发（`limits()`），避免前后端各写一份常量。两条消费路径：
 
 - **并发数**：`scheduler.batch_verify()` 内层 `ThreadPoolExecutor(max_workers=verify_options.concurrency(...))`，取 `min(并发设置, 待验证条数)`；手动批量传本次选择，定时任务不传 → 读已保存的设置。
+- **total 的口径**：`plugin_manager.batchable_types()` 是「可批量验证类型」的**唯一判定处**
+  （manifest `batch_verify` 为真 **且** 插件在当前 `.state.json` 下已启用）。
+  `scheduler.batch_verify()` 用它挑要验的凭据并**返回实际验证条数**，
+  `api.batch_verify()` 直接拿这个返回值当 `total` 回给前端——判定只有一处，
+  避免「返回给前端的 total」与「实际执行数」两个口径对不上。
 - **登记成后台任务**：批量验证会建一条 `kind=batch_verify` 的 `tasks` 任务，把 done/total 喂给任务表
   （「任务」页因此能看到进度并**随时取消**）。取消是协作式的：消费循环每收一个结果前查一次
   `tasks.should_cancel()`，命中就 `pool.shutdown(wait=False, cancel_futures=True)` 收尾
@@ -265,7 +281,9 @@ plugins/
   `vault:batch_verify_started`（带本次要验证的凭据 id 列表**与触发方 `trigger`**——`manual` 才让
   前端整页互斥，`mcp` / `schedule` 是用户没看着时跑起来的，只提示不锁页）、`..._progress`、`..._done`
   （取消时额外带 `canceled` 与 `done`）。
-- **超时**：同样借环境变量下发（插件不允许 `import backend`）——`apply_timeout()` 把值写入 `VAULT_TIMEOUT`，插件侧 `timeout()` 每次发请求时读取，改完立即生效。外部显式设置的同名变量优先。机制与 `VAULT_PROXY` 同构，见 `docs/PLUGIN_GUIDE.md` 第 2.3 节。
+- **超时**：同样借环境变量下发——插件不直接 `import backend`，只经 `backend/plugin_sdk.py` 取用：
+  `apply_timeout()` 把值写入 `VAULT_TIMEOUT`，插件侧 SDK 的 `timeout()` 每次发请求时读取，
+  改完立即生效。外部显式设置的同名变量优先。机制与 `VAULT_PROXY` 同构，见 `docs/PLUGIN_GUIDE.md` 第 2.3 节。
 
 **单条验证的并发保护**：`verify_single_credential()` 外层套了一个**同 id in-flight 集合**
 （`_inflight` + 锁），同一凭据已在验证中时直接返回「该凭据正在验证中，请稍候」而不重复发请求。
@@ -459,8 +477,8 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
 匹配（含 traceback 续行），大小写不敏感，多个空白分隔的关键词需**全部命中**（AND）。
 
 **采集范围**：插件不再用 `print(..., file=sys.stderr)` 输出——打包为 windowed 模式时
-`sys.stdout`/`sys.stderr` 为 `None`，打印会静默丢失。改为各 `<类别>_common.py` 内的
-`_logger = logging.getLogger("plugin.<类别>")`，异常经 `backend/plugin_base.py` 的
+`sys.stdout`/`sys.stderr` 为 `None`，打印会静默丢失。改为 `backend/plugin_sdk.py` 暴露的
+`log()` / `log_debug()`（内部是 `logging.getLogger("plugin")`），异常经 `backend/plugin_base.py` 的
 `call_*` 辅助函数统一 `_log.exception` 落盘（原先这些异常被静默吞掉，是插件报错不进日志的根因）。
 调度器 `scheduler.verify_single_credential` 逐条记录验证结果并在批量结束时汇总一条统计。
 
@@ -583,5 +601,6 @@ AI Agent（Claude Desktop / Cursor）
 
 - **新凭据类型**：在 `plugins/` 下新增子插件目录（manifest.json + plugin.py），重启即自动加载，无需修改主程序
 - **新 MCP 工具**：在 `mcp_server.py` 中注册，自动出现在权限管理页
-- **新验证厂商**：新建 `plugins/llm/<厂商>/`（`manifest.json` + `plugin.py`），照抄同级子插件、自带端点与判定，**无需修改 `llm_common.py`**；重启即加载
+- **新验证厂商**：新建 `plugins/llm/<厂商>/`（`manifest.json` + `plugin.py`），照抄同级子插件、自带端点与判定，
+  **无需修改 `backend/plugin_sdk.py` 或类别模块**；重启即加载
 - **数据库迁移**：`database.py` 中维护 `SCHEMA_VERSION`，启动时自动执行迁移脚本

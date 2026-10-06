@@ -33,15 +33,8 @@ import socket
 import ssl
 from typing import Any, Optional
 
-from mail_common import (
-    TunneledIMAP4,
-    TunneledIMAP4_SSL,
-    TunneledSMTP,
-    TunneledSMTP_SSL,
-    VerifyResult,
-    guarded,
-    timeout,
-)
+from backend.plugin_sdk import VerifyResult, guarded
+from mail_common import TunneledIMAP4, TunneledIMAP4_SSL, TunneledSMTP, TunneledSMTP_SSL, timeout
 
 SERVICE_NAME = "通用 SMTP 邮箱"
 

@@ -12,8 +12,8 @@ AK/SK 当前有效，并顺带给出它属于哪个账号（Domain ID / IAM 用�
 - 签名在鉴权阶段校验、权限在之后检查：所以 403 ``AccessDenied`` 说明**AK/SK 是对的**、
   只是这个子用户没有列举桶的权限，不能当无效。
 
-自带完整实现（AWS Signature Version 4 只在这里维护，不依赖 cloud_common）。
-仅从 cloud_common 复用通用工具。
+自带完整实现（AWS Signature Version 4 只在这里维护，不依赖类别共享模块）。
+仅从框架层 backend.plugin_sdk 复用通用工具。
 
 参考文档：https://support.huaweicloud.com/obs_faq/obs_faq_0274.html
 """
@@ -25,7 +25,14 @@ import hmac
 import re
 import xml.etree.ElementTree as ET
 
-from cloud_common import VerifyResult, body_snippet, guarded, log, make_client
+from backend.plugin_sdk import (
+    VerifyResult,
+    body_snippet,
+    guarded,
+    log,
+    make_client,
+    mask_secret,
+)
 
 NAME = "华为云"
 DEFAULT_REGION = "ap-southeast-3"
@@ -187,7 +194,7 @@ def verify(data) -> VerifyResult:
     access_key = str(data["access_key_id"]).strip()
     secret_key = str(data["secret_access_key"]).strip()
     region = str(data.get("region") or "").strip() or DEFAULT_REGION
-    log(f"校验华为云凭据 {access_key[:4]}…（OBS {region}）")
+    log(f"校验华为云凭据 {mask_secret(access_key)}（OBS {region}）")
     return _verify(access_key, secret_key, region)
 
 

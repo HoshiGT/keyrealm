@@ -29,7 +29,7 @@ from urllib.parse import quote
 import httpx
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from im_common import (
+from backend.plugin_sdk import (
     VerifyResult,
     body_snippet,
     guarded,

@@ -6,13 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dev_common import (
-    VerifyResult,
-    body_snippet,
-    guarded,
-    make_client,
-    safe_json,
-)
+from backend.plugin_sdk import VerifyResult, body_snippet, guarded, make_client, safe_json
 
 NAME = "Weights & Biases"
 TOKEN_KEY = "api_key"

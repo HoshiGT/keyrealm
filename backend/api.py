@@ -21,6 +21,7 @@ from . import plugin_manager
 from . import preset_store
 from . import proxy as proxy_config
 from . import proxy_store
+from . import redact
 from . import scheduler
 from . import tasks
 from . import tray
@@ -375,6 +376,10 @@ def batch_verify(
 
     `concurrency` / `timeout` 来自「批量验证」对话框里的两个输入框：传了就先落库再执行，
     下次打开对话框沿用；不传则用已保存的设置。
+
+    返回的 `total` 取自 `scheduler.batch_verify` 的返回值，即**它真正会去验证的条数**
+    （已排除禁用插件与 batch_verify=false 的插件）。不要在这里另查一遍凭据来数 —— 那会
+    造出第二份筛选口径，与本函数返回给前端的数字、与进度条走的数字互相对不上。
     """
     key = _get_key()
     if key is None:
@@ -384,19 +389,11 @@ def batch_verify(
     _log.info("批量验证参数：并发 %d，超时 %gs",
               options["concurrency"], options["timeout"])
 
-    if credential_ids:
-        ids = set(int(i) for i in credential_ids)
-        creds = [c for c in db.list_credentials() if c.get("id") in ids]
-    else:
-        creds = db.list_credentials(
-            group_id=group_id if scope == "group" else None,
-            credential_type=credential_type if scope == "type" else None,
-        )
-    scheduler.batch_verify(scope=scope, group_id=group_id,
-                           credential_type=credential_type, trigger_type="manual",
-                           credential_ids=credential_ids,
-                           concurrency=options["concurrency"])
-    return {"ok": True, "total": len(creds),
+    total = scheduler.batch_verify(scope=scope, group_id=group_id,
+                                   credential_type=credential_type, trigger_type="manual",
+                                   credential_ids=credential_ids,
+                                   concurrency=options["concurrency"])
+    return {"ok": True, "total": total,
             "concurrency": options["concurrency"], "timeout": options["timeout"]}
 
 
@@ -530,44 +527,13 @@ def list_credential_actions(credential_id: int) -> list:
 
 
 def _credential_secrets(credential_type: str, data: dict) -> list:
-    """返回该凭据所有敏感字段的明文值（用于输出净化）。"""
-    record = db.get_plugin_by_type(credential_type)
-    if not record:
-        return []
-    values = []
-    for field in record.get("fields_schema", []):
-        key = field.get("key")
-        if field.get("sensitive") and data.get(key):
-            values.append(str(data[key]))
-    return values
+    """返回该凭据所有敏感字段的明文值（用于输出净化）。
 
-
-def _redact_secrets(text: Any, secrets: list) -> Any:
-    """把文本里出现的敏感值替换成 ***（长度 ≥ 6 才替换，避免误伤短串）。"""
-    if not isinstance(text, str) or not text:
-        return text
-    out = text
-    for secret in secrets:
-        if secret and len(secret) >= 6:
-            out = out.replace(secret, "***")
-    return out
-
-
-def _redact_deep(value: Any, secrets: list) -> Any:
-    """递归净化整个结果。
-
-    **不能只扫顶层的 ``output`` / ``error``**：列表类操作把数据放在 ``rows`` / ``columns`` 里，
-    只扫顶层等于让列表里回显的密钥原样穿到前端（JS 桥那一侧没有任何净化）。
+    实现住在 ``backend/redact.py``（verify 路径的净化也要用同一套逻辑，见
+    ``plugin_manager.verify_credential``），这里只负责把 manifest 字段声明取出来。
     """
-    if not secrets:
-        return value
-    if isinstance(value, str):
-        return _redact_secrets(value, secrets)
-    if isinstance(value, dict):
-        return {k: _redact_deep(v, secrets) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_redact_deep(v, secrets) for v in value]
-    return value
+    record = db.get_plugin_by_type(credential_type) or {}
+    return redact.secrets_of(record.get("fields_schema"), data, credential_type=credential_type)
 
 
 def _declared_fields(credential_type: str) -> set[str]:
@@ -619,7 +585,7 @@ def run_credential_action(credential_id: int, action_id: str, params: Optional[d
                 result["data_update_error"] = type(e).__name__
     secrets = _credential_secrets(cred["credential_type"], data)
     # 整份结果递归净化：列表类操作的 rows/columns 也在这里面
-    result = _redact_deep(result, secrets)
+    result = redact.redact_deep(result, secrets)
     # 日志同样必须净化：插件回显的密钥不能落盘到日志文件
     ok = bool(isinstance(result, dict) and result.get("ok"))
     _log.info(
@@ -629,7 +595,7 @@ def run_credential_action(credential_id: int, action_id: str, params: Optional[d
     )
     if not ok and isinstance(result, dict) and result.get("error"):
         _log.warning("操作 %s/%s 失败原因: %s", cred["credential_type"], action_id,
-                     _redact_secrets(str(result["error"]), secrets))
+                     redact.redact_text(str(result["error"]), secrets))
     return result
 
 
@@ -698,7 +664,7 @@ def stream_credential_action(credential_id: int, action_id: str, params: Optiona
         def on_delta(text: str) -> None:
             push_event("vault:action_stream", {
                 "stream_id": stream_id,
-                "delta": _redact_secrets(text, secrets),
+                "delta": redact.redact_text(text, secrets),
             })
 
         def on_progress(current, total, text: str = "") -> None:
@@ -717,7 +683,7 @@ def stream_credential_action(credential_id: int, action_id: str, params: Optiona
                 "progress": {
                     "current": cur,
                     "total": tot,
-                    "text": _redact_secrets(str(text or ""), secrets),
+                    "text": redact.redact_text(str(text or ""), secrets),
                 },
             })
 
@@ -725,8 +691,8 @@ def stream_credential_action(credential_id: int, action_id: str, params: Optiona
             credential_type, action_id, params or {}, data, on_delta, on_progress,
             tasks.should_cancel(task_id),
         )
-        safe_output = _redact_secrets(result.get("output", ""), secrets)
-        safe_error = _redact_secrets(result.get("error", ""), secrets)
+        safe_output = redact.redact_text(result.get("output", ""), secrets)
+        safe_error = redact.redact_text(result.get("error", ""), secrets)
         ok = bool(result.get("ok"))
         # 「是不是被取消的」由框架自己判断（它持有取消标志），不靠插件猜错误文案：
         # 只有确实按过取消、且这次没成功，才标成「已取消」——刚好在取消前跑完的仍算成功。

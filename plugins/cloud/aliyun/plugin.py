@@ -1,12 +1,12 @@
 """阿里云 AccessKey 验证插件（plugins/cloud/ 类别下的独立子插件）。
 
-自带全部实现：**两套签名**都在本文件内维护，不依赖 cloud_common：
+自带全部实现：**两套签名**都在本文件内维护，不依赖类别共享模块：
 
 - RPC 签名 v1（HMAC-SHA1）——STS / ECS 等云 API 走这套；
 - OSS 签名 v1（``Authorization: OSS <AK>:<Signature>``）——对象存储走这套，
   规则与云 API 完全不同，故单独实现。
 
-全部调用均为只读，不产生任何资源变更。仅从 cloud_common 复用通用工具。
+全部调用均为只读，不产生任何资源变更。仅从框架层 backend.plugin_sdk 复用通用工具。
 
 本插件提供的操作（``actions``）：
 
@@ -44,7 +44,7 @@ from email.utils import formatdate
 from typing import Any
 from urllib.parse import quote
 
-from cloud_common import (
+from backend.plugin_sdk import (
     VerifyResult,
     body_snippet,
     download_to_file,

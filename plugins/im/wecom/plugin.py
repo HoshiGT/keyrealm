@@ -32,7 +32,7 @@ from typing import Any
 
 import httpx
 
-from im_common import VerifyResult, body_snippet, guarded, log, make_client, safe_json
+from backend.plugin_sdk import VerifyResult, body_snippet, guarded, log, make_client, safe_json
 
 NAME = "企业微信"
 

@@ -100,11 +100,11 @@ release/
 ├── credential-vault-src.zip   # 源码归档（由 scripts/pack_source.py 生成，见下）
 ├── plugins/                   # 插件【唯一事实来源】（不进 exe，可直接编辑，重启生效）；
 │                              #   .state.json 记录启用/禁用状态（不存在 = 全部启用）
-│   ├── llm/                   # LLM 类别目录（category.json + llm_common.py 共享模块）
+│   ├── llm/                   # LLM 类别目录（category.json；llm_common.py 为类别特有辅助）
 │   │   ├── openai/            # 每个服务一个独立子插件（manifest.json + plugin.py）
 │   │   ├── deepseek/
 │   │   └── …                  # 共 19 个 LLM 子插件
-│   ├── api/                   # API 服务类别（category.json + api_common.py）
+│   ├── api/                   # API 服务类别（category.json）
 │   │   ├── firecrawl/
 │   │   ├── tavily/
 │   │   ├── metaso/
@@ -204,17 +204,22 @@ API-Key-Checker/
 │   ├── api.py               # pywebview JS-API 桥接层
 │   ├── crypto.py            # AES-256-GCM 加密/解密
 │   ├── database.py          # SQLite 数据访问层
+│   ├── backup.py            # 备份 / 恢复（导出单个 JSON，可选加密；导入自动识别）
 │   ├── paths.py             # 冻结感知路径解析（打包/开发统一）
 │   ├── plugin_base.py       # 插件接口定义
 │   ├── plugin_manager.py    # 插件目录扫描与自动加载
+│   ├── plugin_sdk.py        # 框架暴露给插件的唯一接口层（VerifyResult / make_client / guarded …）
+│   ├── redact.py            # 输出净化（把插件结果 / 日志里回显的敏感字段值替换成 ***）
 │   ├── preset_store.py      # 类别/插件默认设置（存 + 继承 + 注入）
 │   ├── proxy.py             # 代理工具（规范化/校验/写入 VAULT_PROXY）
 │   ├── proxy_store.py       # 代理注册表与「按凭据解析代理」
 │   ├── proxy_test.py        # 代理连通性诊断（直连/代理对照探测）
 │   ├── single_instance.py   # 单实例闸门（互斥体 + 把已有窗口拉到前台）
 │   ├── scheduler.py         # 定时验证调度器
+│   ├── tasks.py             # 后台任务注册表（长操作的状态 / 进度 / 取消）
+│   ├── verify_options.py    # 批量验证运行参数（并发 / 超时）的唯一事实来源
 │   ├── idle_lock.py         # 空闲自动锁定看门狗（无操作一段时间后清除内存密钥）
-│   ├── vault_proxy_ctx.py   # 按调用生效的代理上下文（框架 ↔ 插件唯一通道）
+│   ├── vault_proxy_ctx.py   # 按调用生效的代理上下文（插件经 SDK 的 proxy() 读取）
 │   ├── logger.py            # 日志配置（轮转文件 + 级别可调 + 关键词搜索）
 │   ├── tray.py              # 系统托盘
 │   └── mcp_server.py        # MCP Server（SSE）
@@ -225,8 +230,9 @@ API-Key-Checker/
 │   ├── make_icon.py         # 生成应用图标（ICO/PNG/favicon）
 │   └── pack_source.py       # 源码归档脚本（生成 release/credential-vault-src.zip）
 ├── plugins/                 # 插件源码（打包时作为外部目录，不进 exe）
-│   ├── llm/                 # LLM 类别：19 个厂商子插件 + llm_common.py 共享模块
-│   ├── api/                 # API 服务类别：firecrawl / tavily / metaso / coze / dify / fofa / google_api_credentials / gateway + api_common.py
+│   ├── llm/                 # LLM 类别：19 个厂商子插件；llm_common.py 为类别特有辅助
+│   ├── api/                 # API 服务类别：firecrawl / tavily / metaso / coze / dify / fofa /
+│   │                        #   google_api_credentials / gateway
 │   └── dns/ dev/ im/ cloud/ exchange/ mail/   # 另 6 个类别共 25 个子插件
 ├── frontend/                # Vue 3 前端
 │   ├── src/

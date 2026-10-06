@@ -40,7 +40,8 @@ from typing import Optional
 
 import httpx
 
-from llm_common import VerifyResult, guarded, log, make_client, plausible_amount, safe_json
+from backend.plugin_sdk import VerifyResult, guarded, log, make_client, safe_json
+from llm_common import plausible_amount
 
 NAME = "腾讯 CodeBuddy"
 

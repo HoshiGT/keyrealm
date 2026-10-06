@@ -17,8 +17,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KEYS_PATH = os.path.join(BASE_DIR, "data", "real_keys.json")
 
-# 子插件通过 `from <category>_common import ...` 复用类别共享模块，
-# 需把所有类别目录加入 sys.path（与 plugin_base 的加载行为一致）
+# 子插件复用两类模块，两条都得能 import：
+#   - 框架层 `backend.plugin_sdk`（通用工具）→ 需项目根在 sys.path；
+#   - 类别模块 `plugins/<类别>/<类别>_common.py`（llm/mail 特有）→ 需类别目录在 sys.path。
+# 与 plugin_base.load_plugin_module 的加载行为保持一致。
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 PLUGINS_DIR = os.path.join(BASE_DIR, "plugins")
 _CATEGORIES = (
     sorted(

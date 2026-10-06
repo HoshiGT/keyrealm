@@ -6,10 +6,11 @@
 
 超时为什么走环境变量
 --------------------
-插件是独立模块，**不允许 import backend**（见 docs/PLUGIN_GUIDE.md §3），后端与插件之间
-没有别的参数通道，只能借环境变量——与 ``VAULT_PROXY`` 完全同一套做法。各
-``<类别>_common.py`` 的 ``timeout()`` 在每次发请求时读 ``VAULT_TIMEOUT``，
-所以改完立即生效、无需重启。外部显式设置的 ``VAULT_TIMEOUT`` 优先于界面设置。
+插件是独立模块，**只允许 import ``backend.plugin_sdk``**（不得 import backend 的其它模块，
+见 docs/PLUGIN_GUIDE.md §3），后端与插件之间没有别的参数通道，只能借环境变量——与
+``VAULT_PROXY`` 完全同一套做法。``backend/plugin_sdk.py`` 的 ``timeout()`` 在每次发请求时读
+``VAULT_TIMEOUT``（类别层要换默认值就传它的 ``fallback`` 形参），所以改完立即生效、无需重启。
+外部显式设置的 ``VAULT_TIMEOUT`` 优先于界面设置。
 
 > 「欠费探测」是**单一凭据层面**的配置（凭据自身的 `probe_chat` / `probe_model` 字段），
 > 不经过本模块——详见 docs/PLUGIN_GUIDE.md 第 2.4 节。

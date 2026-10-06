@@ -6,11 +6,11 @@
 的读接口——回 200 就等价于「这个 app- 令牌当前可用」，回包还自带该应用的编排形态
 （开场白、建议问题、输入表单项、文件上传开关），足以证明它确实挂在某个真实应用上。
 
-自带完整的校验与展示逻辑，只复用 api_common 的通用工具。
+自带完整的校验与展示逻辑，只复用框架层 backend.plugin_sdk 的通用工具。
 
 参考文档：https://docs.dify.ai/en/api-reference/applications/get-app-parameters
 """
-from api_common import VerifyResult, body_snippet, guarded, log, make_client, safe_json
+from backend.plugin_sdk import VerifyResult, body_snippet, guarded, log, make_client, safe_json
 
 NAME = "Dify"
 DEFAULT_BASE_URL = "https://api.dify.ai/v1"

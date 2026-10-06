@@ -20,7 +20,7 @@ from typing import Any, Optional
 
 import httpx
 
-from llm_common import VerifyResult, body_snippet, make_client, safe_json, timeout
+from backend.plugin_sdk import VerifyResult, body_snippet, make_client, safe_json, timeout
 
 # 欠费/余额不足判定关键字（出现在错误正文中）
 _INSUFFICIENT_BALANCE_KEYWORDS = (

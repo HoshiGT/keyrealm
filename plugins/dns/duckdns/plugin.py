@@ -4,7 +4,7 @@
 """
 import time
 
-from dns_common import VerifyResult, guarded, make_client, safe_json
+from backend.plugin_sdk import VerifyResult, guarded, make_client, safe_json
 
 _DUCKDNS_FQDN_SUFFIX = ".duckdns.org"
 _DUCKDNS_TEST_IP = "1.1.1.1"

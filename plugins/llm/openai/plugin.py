@@ -34,7 +34,8 @@ from typing import Optional
 
 import httpx
 
-from llm_common import VerifyResult, guarded, make_client, make_quota_probe, safe_json
+from backend.plugin_sdk import VerifyResult, guarded, make_client, safe_json
+from llm_common import make_quota_probe
 from llm_protocols import probe_openai_models, chat_completion, fetch_models, chat_completion_stream
 
 NAME = "OpenAI"

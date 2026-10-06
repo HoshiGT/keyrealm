@@ -15,7 +15,7 @@ Credential Vault 的插件用于**验证一类凭据的有效性**（如某家 L
 plugins/
 ├── llm/                        # 类别目录（LLM 模型）
 │   ├── category.json           # 类别元数据：{"name": "LLM 模型", "icon": "🤖"}
-│   ├── llm_common.py           # 类别共享模块：底层通用工具 + 子插件原型接口
+│   ├── llm_common.py           # 类别共享模块：仅本类别特有的辅助（额度/欠费探测）
 │   ├── llm_protocols.py        # 协议级工具（探针 / 简单对话等），供子插件按需复用
 │   ├── openai/                 # 一个服务 = 一个独立子插件
 │   │   ├── manifest.json
@@ -26,7 +26,6 @@ plugins/
 │   └── …（共 19 个子插件）
 ├── api/                        # 类别目录（API 服务）
 │   ├── category.json
-│   ├── api_common.py
 │   ├── firecrawl/
 │   ├── tavily/
 │   ├── metaso/
@@ -37,20 +36,18 @@ plugins/
 │   └── gateway/
 ├── dns/                        # 类别目录（域名解析）
 │   ├── category.json
-│   ├── dns_common.py
 │   ├── dnspod/
 │   ├── duckdns/
 │   ├── godaddy/
 │   └── cloudflare/
 ├── dev/                        # 类别目录（开发者平台）
 │   ├── category.json
-│   ├── dev_common.py
 │   ├── github/
 │   ├── huggingface/
+│   ├── npm/
 │   └── wandb/
 ├── im/                         # 类别目录（即时通讯）
 │   ├── category.json
-│   ├── im_common.py
 │   ├── feishu/
 │   ├── dingtalk/               # 应用 / Webhook 双形态
 │   ├── wecom/                  # 企业微信，应用 / Webhook 双形态
@@ -61,7 +58,6 @@ plugins/
 │   └── telegram_apihash/
 ├── cloud/                      # 类别目录（云服务商）
 │   ├── category.json
-│   ├── cloud_common.py
 │   ├── google_sa.py            # 协议级工具：服务账号 JWT 换 token（gcp / firebase 共用）
 │   ├── aliyun/
 │   ├── tencentcloud/
@@ -71,12 +67,11 @@ plugins/
 │   └── firebase/
 ├── exchange/                   # 类别目录（交易所）
 │   ├── category.json
-│   ├── exchange_common.py
 │   ├── okx/
 │   └── binance/
 ├── mail/                       # 类别目录（邮箱）
 │   ├── category.json
-│   ├── mail_common.py
+│   ├── mail_common.py          # 类别共享模块：仅本类别特有的辅助（SOCKS 解析、TunneledSMTP/IMAP）
 │   └── smtp/
 └── my_flat_plugin/             # 也支持根级平铺插件（无类别）
     ├── manifest.json
@@ -90,8 +85,9 @@ plugins/
   - 否则视为类别目录，其下含 `manifest.json` 的子目录为子插件，
     `category.json` 提供类别显示名与图标。
 - **一个服务就是一个插件**。删除某个子插件目录不影响同类别其他子插件运行；
-  共享模块（`llm_common.py` 等）只是被各子插件 `import` 的普通 Python 文件，
-  **只放通用工具**（结果类型、HTTP 客户端、解析/兜底辅助），具体验证逻辑在各子插件内。
+  共享模块（`llm_common.py` 等）只是被各子插件 `import` 的普通 Python 文件。
+  **通用工具已上收框架层的 `backend/plugin_sdk.py`**（结果类型、HTTP 客户端、代理、超时、
+  解析/兜底辅助等），类别模块只保留**本类别特有**的内容；具体验证逻辑在各子插件内。
 - 名称以 `_` 或 `.` 开头的目录会被跳过（可用于临时禁用）。
 
 ### 1.1 启用 / 禁用：`plugins/.state.json`
@@ -230,7 +226,7 @@ plugins/
 ## 2.1 验证代理
 
 「系统设置 → 网络与代理」可配置验证代理（`http` / `https` / `socks5`），持久化到 settings 表。
-应用启动时把它写入环境变量 `VAULT_PROXY`，各插件在发起请求时读取该变量（见 `plugins/<类别>/<类别>_common.py` 的 `make_client()`）。
+应用启动时把它写入环境变量 `VAULT_PROXY`，各插件在发起请求时读取该变量（见 `backend/plugin_sdk.py` 的 `make_client()`）。
 解析优先级：`VAULT_PROXY` > `ALL_PROXY`/`all_proxy` > `HTTPS_PROXY`/`https_proxy`；
 若 `VAULT_PROXY` 由外部环境显式设置，则它优先于界面设置。socks5 需 `httpx[socks]`（`socksio`），已在 `requirements.txt` 声明。
 
@@ -239,7 +235,7 @@ plugins/
 「跟随上层设置」= 本层不指定、继续往上找（改上层预设，已有凭据会跟着变）。
 批量验证是并发的，所以不能靠改环境变量——
 框架用 `backend/vault_proxy_ctx.py` 提供一条**线程隔离**的覆盖通道，启动时以固定别名注册进
-`sys.modules["vault_proxy_ctx"]`。各 `<类别>_common.py` 的 `proxy()` 会**先查它**：
+`sys.modules["vault_proxy_ctx"]`。`backend/plugin_sdk.py` 的 `proxy()` 会**先查它**：
 
 ```python
 def proxy():
@@ -300,7 +296,7 @@ def proxy():
 | 使用率（plan/额度制） | `{"usage_rate": 0.52}` | 使用率 52%（已用 ÷ 总额度，按服务适配） |
 | 其它可读字段 | 如 `organization` / `domain_count` / `account_id` | `组织 Xxx` / `域名数 1` / `账号 ID …` |
 
-- **LLM 类**：附加信息只展示**余额**；无余额概念的 plan 账号展示**使用率**。余额由 `llm_common` 按厂商 `balance_url`/`balance_kind` best-effort 查询——目前 DeepSeek / Moonshot 有余额接口，OpenRouter 用 `/credits` 计算余额与使用率；OpenAI / Anthropic / Gemini / 智谱等多数无公开余额接口，附加信息为空。
+- **LLM 类**：附加信息只展示**余额**；无余额概念的 plan 账号展示**使用率**。余额由**各厂商自己的 `plugin.py`** 按各自的余额端点 best-effort 查询（金额合理性闸见下条）——目前 DeepSeek / Moonshot 有余额接口，OpenRouter 用 `/credits` 计算余额与使用率；OpenAI / Anthropic / Gemini / 智谱等多数无公开余额接口，附加信息为空。
 - **金额合理性闸**：one-api / new-api 类中转站在「不限额」时会把硬限额（`hard_limit_usd`）填成 `99999999.99`、`1e8` 这类哨兵值，拿它去减消耗就会得出 `99999996.47` 这种假余额。所有要展示的金额都必须先过 `llm_common.plausible_amount()`（有限数值且绝对值 < `AMOUNT_LIMIT = 1e7`），不通过就**宁可不显示**。新增带余额的厂商/中转插件时务必一并加这道闸。
 - **中转站**：`openai_compatible`（通用 OpenAI 兼容）与 `newapi`（New API 中转站专用）都走 one-api 兼容的 `/dashboard/billing/subscription` + `/dashboard/billing/usage`。New API 的 `hard_limit_usd` 是**令牌总额度（剩余 + 已用）**，`total_usage` 单位是**美分**，故 `余额 = hard_limit_usd − total_usage / 100`；命中哨兵值则按「不限额度」处理，改为展示 `套餐 不限额度` 而非数字。
 - 无信息量的字段（`object` / `type` / `auth_mode` / 原始时间戳等）不展示，前端 `extraInfo()` 统一处理。
@@ -311,14 +307,17 @@ def proxy():
 
 单个请求的连接/读取超时可调，入口在**「凭据管理 → 批量验证」对话框**（默认 20 秒，
 范围 5–300 秒），持久化到 settings 表的 `verify_timeout`。与代理同一套机制：应用启动与
-保存设置时把它写入环境变量 `VAULT_TIMEOUT`，插件侧读取——**插件不允许 `import backend`**，
-环境变量是唯一的参数通道。
+保存设置时把它写入环境变量 `VAULT_TIMEOUT`，插件侧读取——**插件只允许 `import backend.plugin_sdk`，
+不得 import backend 的其它模块**，环境变量是超时值唯一的参数通道。
 
-各 `<类别>_common.py` 用 `timeout()` 取代裸常量 `TIMEOUT`：
+`backend/plugin_sdk.py` 的 `timeout(fallback=TIMEOUT)` 取代裸常量 `TIMEOUT`。`fallback`
+是给**类别层**用的：邮箱类插件的默认超时是 15 秒而非 20 秒，`plugins/mail/mail_common.py`
+只需 `def timeout(): return _sdk_timeout(TIMEOUT)`（`_sdk_timeout` 是 SDK 的 `timeout`），
+不必重写整套「读环境变量」的逻辑。
 
 ```python
-def timeout() -> float:
-    """实际使用的超时秒数：VAULT_TIMEOUT（应用设置写入）> 模块默认 TIMEOUT。"""
+def timeout(fallback: float = TIMEOUT) -> float:
+    """实际使用的超时秒数：VAULT_TIMEOUT（应用设置写入）> fallback。"""
     raw = os.environ.get("VAULT_TIMEOUT")
     ...
 ```
@@ -367,7 +366,8 @@ def timeout() -> float:
 `openai` / `anthropic` / `gemini`，注意不是模块里的 `PROTOCOL` 常量）：
 
 ```python
-from llm_common import VerifyResult, guarded, make_quota_probe
+from backend.plugin_sdk import VerifyResult, guarded
+from llm_common import make_quota_probe
 ...
 quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai")
 ```
@@ -450,8 +450,8 @@ USES_PROXY = False   # 本插件无出网请求，代理选项没有意义
 `http.client` / `httpx` 那套（`make_client(proxy=…)`）只对 HTTP(S) 生效。**SMTP / IMAP 等裸 TCP 协议**
 用不了它，但可以把连接**隧道**穿出去：SOCKS5（含 `socks5h` 远端解析）或 HTTP CONNECT。
 
-框架侧能力在各类别的 `<类别>_common.py` 里（邮箱是 `mail_common`）：`open_socket()` 建一个
-「已经穿过代理」的 socket，再交给标准库——只覆写建连那一处，其余行为与标准库一致：
+框架侧的这个能力（SOCKS / HTTP CONNECT 隧道建连）在 `plugins/mail/mail_common.py` 里——
+`open_socket()` 建一个「已经穿过代理」的 socket，再交给标准库——只覆写建连那一处，其余行为与标准库一致：
 
 ```python
 class TunneledSMTP(smtplib.SMTP):          # 普通连接
@@ -481,7 +481,8 @@ class TunneledSMTP_SSL(smtplib.SMTP_SSL):  # SMTPS
 必须暴露 `verify(data)`；可选 `validate(data)` 与 `get_display_summary(data)`。
 `data` 是用户按 `fields` 填写的字典。
 
-**每个子插件自带完整实现**，只从 `<类别>_common.py` 引用通用工具；服务之间允许重复代码（刻意为之）。
+**每个子插件自带完整实现**，只从 `backend/plugin_sdk.py` 与类别模块引用工具；服务之间允许重复代码
+（刻意为之）——但**通用工具不再重复**，一律取自 `backend/plugin_sdk.py`。
 
 **模块 docstring 里要带官方参考链接** —— 写清你实现端点与判定阈值时依据的**官方文档页**，
 一行一个：
@@ -508,7 +509,7 @@ class TunneledSMTP_SSL(smtplib.SMTP_SSL):  # SMTPS
 
 参考文档：https://docs.myvendor.com/api-reference
 """
-from llm_common import VerifyResult, guarded, make_client, safe_json
+from backend.plugin_sdk import VerifyResult, guarded, make_client, safe_json
 
 DEFAULT_BASE_URL = "https://api.myvendor.com/v1"
 
@@ -540,15 +541,16 @@ def get_display_summary(data):
 
 要点：
 
-- **`<类别>_common.py` 只放底层通用工具 + 原型接口**：`VerifyResult`、`TIMEOUT`、`log`、`proxy`、
-  `make_client`、`safe_json`、`body_snippet`、`guarded`，以及子插件应实现的
-  `validate`/`verify`/`get_display_summary`/`actions`/`run_action` 原型声明。
+- **通用工具与 `VerifyResult` 已上收 `backend/plugin_sdk.py`**：`TIMEOUT`、`log`、`proxy`、
+  `make_client`、`safe_json`、`body_snippet`、`guarded` 等一律从那里取；插件需实现的接口
+  （`verify` / `validate` / `get_display_summary` / `actions` / `run_action` …）见该模块的 docstring。
+  **类别模块（`llm_common.py` / `mail_common.py`）只保留本类别特有的工具**。
   **协议级、跨服务完全相同的工具**（如 `llm_protocols.py` 的 `probe_*` 探针与
   `chat_completion`）另建**独立工具模块**，由需要的子插件按需引用；
   **厂商/服务专属逻辑**（端点、字段、余额解析、签名等）写在各子插件自己的 `plugin.py` 里，
   服务之间允许重复（刻意为之）。加载子插件时框架会把插件目录与类别目录注入 `sys.path`。
 - **端点、字段、判定、余额、签名等具体逻辑写在各子插件自己的 `plugin.py` 里**，
-  **新增服务插件无需修改任何上层/`common` 文件**——照抄同级子插件即可。
+  **新增服务插件无需修改上层代码、`backend/plugin_sdk.py` 或任何类别模块**——照抄同级子插件即可。
 - `verify` 用 `guarded(...)` 包住，保证不抛异常；异常只暴露类型名（有些服务密钥在
   URL/query 中，透出异常文本会把密钥写进凭据记录）。
 - `verify(data)` 的返回值做鸭子类型处理，接受：
@@ -558,7 +560,8 @@ def get_display_summary(data):
   **欠费（余额不足/负余额/402/限流欠费）不算失效**：仍判 `valid`，把欠费原因写进 `message`、
   负余额写进 `account_info`（前端「附加信息」会展示余额）。
 - `account_info` 为可选 dict，验证通过后回传账户信息（见「附加信息」约定），前端凭据列表会展示。
-- 插件模块**不应导入 backend 包**，保持可脱离主程序独立运行（便于直接脚本调试）。
+- **插件只允许 `import backend.plugin_sdk`（框架暴露的唯一插件接口层），不得 import backend 的
+  其它模块**——这是框架与插件之间唯一被承诺稳定的边界，backend 内部实现可自由重构而不影响插件。
 
 ### 3.1 可选「简易操作」（actions / run_action / capabilities）
 
@@ -637,7 +640,7 @@ def get_display_summary(data):
  "save_to": {"key": "path", "default_name": "$row.name.zip"}}
 ```
 执行顺序由框架保证：**先确认（若 `write`）→ 前端弹系统「另存为」拿到路径 → 路径塞进 `params` → 调 `run_action`**。
-插件侧只负责把内容写进那个路径，用各类别 `*_common.py` 里的原子落盘辅助：
+插件侧只负责把内容写进那个路径，用 `backend/plugin_sdk.py` 的原子落盘辅助：
 
 ```python
 path = (params.get("path") or "").strip()
@@ -667,13 +670,22 @@ def capabilities(data: dict) -> dict:
   **千万不要为了省事返回空列表** —— 那等于一次网络抖动就把用户能用的功能全藏了。
 - 三种状态在前端是可区分的：**没有操作** / **有操作但没权限（显示 note）** / **探测失败（全部展示）**。
 
-#### 3.1.5 可复用的辅助（各类别 `*_common.py` 里都有）
+#### 3.1.5 可复用的辅助（`backend/plugin_sdk.py` 提供）
 
 | 辅助 | 用途 |
 |---|---|
-| `make_client()` / `safe_json()` / `body_snippet()` / `guarded()` / `timeout()` | 原有 |
+| `VerifyResult` / `guarded()` | 结果类型（`status`/`message`/`account_info`）；`guarded` 兜底未预期异常 → error 结果 |
+| `log()` / `log_debug()` | 写应用统一日志（别用 `print`，打包成 GUI 后 stdio 没了、告警会静默丢失） |
+| `proxy()` / `make_client()` | 本次生效的代理；建 httpx 客户端（自动带上代理与超时） |
+| `TIMEOUT` / `timeout()` | 超时的默认值与实际生效值（读 `VAULT_TIMEOUT`，见 §2.3） |
+| `safe_json()` / `body_snippet()` | 响应体解析为 dict；正文压成一行并截断，用于把上游报错带进提示 |
 | `first_list(payload, *keys) -> list` | 从各家五花八门的 JSON 信封里捞第一个列表（`items`/`list`/`data`/`ZoneList`…）。**拿不准就显式传 keys** |
 | `download_to_file(response, path) -> (ok, message)` | 原子落盘（见 §3.1.3） |
+| `mask_secret(value) -> str` | 脱敏展示敏感值（保留首 6 位与末 4 位，如 `sk-123…abcd`）。**写日志、拼用户可见提示一律用它，不要自己切字符串**，理由见下 |
+
+> **`mask_secret` 不许自己切字符串**：手写的 `api_key[:8]` 会把密钥片段写进日志文件与凭据的
+> `status_detail`，而框架在 `plugin_manager` 出口做的净化拦不住这种自己拼的片段。
+> 空值返回空串；过短的值只保留首 2 位。
 
 #### 3.1.6 一个可以照抄的最小骨架
 
@@ -724,9 +736,18 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
 
 #### 3.1.7 输出净化（后端统一兜底）
 
-即使插件未自行脱敏，`backend/api.py` 也会在返回前**递归**把该凭据所有 `sensitive` 字段的明文
-（长度 ≥ 6）替换成 `***` —— 覆盖 `output` / `error` / 流式 `delta`，**以及 `rows` 等任意嵌套结构**。
-插件侧仍应尽量不自造含密钥的错误串。
+净化逻辑住在 `backend/redact.py`，由框架在**两处**收口，插件什么都不用做：
+
+| 路径 | 收口点 | 被净化的字段 |
+|---|---|---|
+| **验证**（单条 / 批量 / MCP / 定时） | `plugin_manager._redact_result()` | `message`、`account_info` —— 这两者会被 `scheduler` **落日志 + 落库**（`status_detail`） |
+| **操作** | `api.run_credential_action` / `stream_credential_action` | `output` / `error` / 流式 `delta`，**以及 `rows` 等任意嵌套结构** |
+
+做法是把该凭据所有 `sensitive: true` 字段的明文替换成 `***`（长度 ≥ 4）。短于阈值的值
+（或 manifest 里一个敏感字段都没声明）会记一条 WARNING，而不是静默不保护。
+
+**注意它只认得完整密钥**：插件自己 `api_key[:8]` 切出来的片段，不在替换范围里 —— 写日志、
+拼提示一律用 `mask_secret`（见 §3.1.5）。
 
 #### 3.1.8 把结果写回凭据（`updated_data`）
 
@@ -805,12 +826,12 @@ def stream_action(action_id, params, data, on_delta, on_progress=None, should_ca
 1. 新建目录 `plugins/llm/my_vendor/`。
 2. 写 `manifest.json`（`credential_type` 取 `llm_my_vendor`，字段照抄上文结构）。
 3. 写 `plugin.py` —— **照抄同类别下任一已有子插件**（如 `plugins/llm/openai_compatible/plugin.py`），
-   端点、判定、余额、`validate`、`get_display_summary` 全部自带，只从 `llm_common`
-   引用通用工具：
+   端点、判定、余额、`validate`、`get_display_summary` 全部自带，只从 `backend/plugin_sdk.py`
+   引用通用工具（类别特有工具则从 `llm_common` 取）：
 
 ```python
 """MyVendor 验证插件（自包含）。"""
-from llm_common import VerifyResult, guarded, make_client
+from backend.plugin_sdk import VerifyResult, guarded, make_client
 
 DEFAULT_BASE_URL = "https://api.myvendor.com/v1"
 
@@ -831,7 +852,7 @@ def get_display_summary(data):
     return "MyVendor"
 ```
 
-4. **无需修改 `llm_common.py` 或任何上层代码**——共享模块只提供通用工具，
+4. **无需修改 `backend/plugin_sdk.py`、类别模块或任何上层代码**——SDK 只提供通用工具，
    厂商专属逻辑都在你自己的 `plugin.py` 里（服务之间允许重复）。
 5. 重启应用即自动加载；在"添加凭据"的服务下拉中即可搜索到。
 
@@ -977,11 +998,13 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
 ## 6. 调试
 
 - 直接修改 `plugins/` 下的文件后**重启应用**即可生效（无热重载）。
-- 可脱离主程序独立加载插件验证，参考 `tests/test_real_vendors.py`：
+- 插件可脱离主程序单独加载验证，**但 `sys.path` 必须含项目根**（插件要 `import backend.plugin_sdk`，
+  只把类别目录加进去不够）。参考 `tests/test_real_vendors.py`：
 
 ```python
 import importlib.util, sys
-sys.path.insert(0, "plugins/llm")  # 使 from llm_common import … 可用
+sys.path.insert(0, ".")            # 项目根：使 from backend.plugin_sdk import … 可用
+sys.path.insert(0, "plugins/llm")  # 类别目录：使 from llm_common import … 可用
 spec = importlib.util.spec_from_file_location("p", "plugins/llm/deepseek/plugin.py")
 mod = importlib.util.module_from_spec(spec)
 sys.modules["p"] = mod

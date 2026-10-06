@@ -1,7 +1,8 @@
 """验证代理配置。
 
 把「系统设置」中的验证代理写入环境变量 ``VAULT_PROXY``，供各插件在 verify 时读取；
-插件保持独立（不 import backend），只从环境变量取代理，解析优先级：
+插件不直接 import backend 内部模块，只允许 ``import backend.plugin_sdk``（其 ``proxy()``
+即从这里读取），因此插件只从环境变量取代理，解析优先级：
 
     VAULT_PROXY  >  ALL_PROXY/all_proxy  >  HTTPS_PROXY/https_proxy
 

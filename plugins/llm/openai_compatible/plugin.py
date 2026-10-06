@@ -14,7 +14,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from llm_common import VerifyResult, guarded, make_client, make_quota_probe, plausible_amount, safe_json
+from backend.plugin_sdk import VerifyResult, guarded, make_client, safe_json
+from llm_common import make_quota_probe, plausible_amount
 from llm_protocols import (
     chat_completion,
     chat_completion_stream,

@@ -41,7 +41,7 @@ account / clientId / productToken / instanceId …），一家一个插件既冗
   404 ``{"error":"Your instance has been Stopped due to non-payment…"}``，假 token、假 instanceId
   也是同一段文案，没有任何可区分的信号 ⇒ 只能报 ``unknown``。
 
-仅从 api_common 复用通用工具。
+仅从框架层 backend.plugin_sdk 复用通用工具。
 
 参考文档（Engagelab）：https://www.engagelab.com/zh_CN/docs/whatsapp/rest-api/template-management-api
 参考文档（Infobip）：https://www.infobip.com/docs/api
@@ -57,14 +57,7 @@ import hashlib
 import time
 from datetime import datetime, timedelta, timezone
 
-from api_common import (
-    VerifyResult,
-    body_snippet,
-    first_list,
-    guarded,
-    log,
-    make_client,
-)
+from backend.plugin_sdk import VerifyResult, body_snippet, first_list, guarded, log, make_client
 
 NAME = "短信服务商"
 VENDOR_FIELD = "vendor"
@@ -140,7 +133,7 @@ ULTRAMSG_BLANKET_MARK = "non-payment"
 def json_any(response):
     """解析 JSON，**不限 dict**。
 
-    api_common 的 ``safe_json`` 只认 dict，而 Engagelab 的模板列表顶层就是个 JSON 数组，
+    backend.plugin_sdk 的 ``safe_json`` 只认 dict，而 Engagelab 的模板列表顶层就是个 JSON 数组，
     所以这里自带一个；解析不出来返回 None。
     """
     try:

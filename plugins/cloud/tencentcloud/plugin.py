@@ -1,11 +1,11 @@
 """腾讯云 SecretId/SecretKey 验证插件（plugins/cloud/ 类别下的独立子插件）。
 
-自带全部实现：**两套签名**都在本文件内维护，不依赖 cloud_common：
+自带全部实现：**两套签名**都在本文件内维护，不依赖类别共享模块：
 
 - TC3-HMAC-SHA256（``Authorization: TC3-HMAC-SHA256 Credential=...``）——STS / CVM 等云 API 走这套；
 - COS 签名（``q-sign-algorithm=sha1``，HMAC-SHA1）——对象存储走这套，规则完全不同，故单独实现。
 
-全部调用均为只读，不产生任何资源变更。仅从 cloud_common 复用通用工具。
+全部调用均为只读，不产生任何资源变更。仅从框架层 backend.plugin_sdk 复用通用工具。
 
 本插件提供的操作（``actions``）：
 
@@ -41,7 +41,7 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
-from cloud_common import (
+from backend.plugin_sdk import (
     VerifyResult,
     body_snippet,
     download_to_file,

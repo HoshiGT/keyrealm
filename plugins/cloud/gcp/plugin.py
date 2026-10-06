@@ -15,14 +15,14 @@
 其中只有邮箱与私钥是必需的，密钥 ID 只进 JWT 头、项目 ID 只用于第 2 步。
 
 签名与换 token 的协议实现复用同目录的 ``google_sa``（与 Firebase 插件共用）。
-仅从 cloud_common 复用通用工具。
+仅从框架层 backend.plugin_sdk 复用通用工具。
 
 参考文档：https://developers.google.com/identity/protocols/oauth2/service-account
 参考文档：https://docs.cloud.google.com/resource-manager/reference/rest/v1/projects/get
 """
 from __future__ import annotations
 
-from cloud_common import VerifyResult, guarded, log
+from backend.plugin_sdk import VerifyResult, guarded, log
 from google_sa import (
     GoogleSAError,
     classify_token_error,

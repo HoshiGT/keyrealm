@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import httpx
 
-from llm_common import VerifyResult, guarded, probe_requested
+from backend.plugin_sdk import VerifyResult, guarded
+from llm_common import probe_requested
 from llm_protocols import (
     probe_openai_chat,
     chat_completion,

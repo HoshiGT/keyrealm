@@ -10,13 +10,7 @@ token 字段也不写入 account_info。
 """
 import httpx
 
-from im_common import (
-    VerifyResult,
-    body_snippet,
-    guarded,
-    make_client,
-    safe_json,
-)
+from backend.plugin_sdk import VerifyResult, body_snippet, guarded, make_client, safe_json
 
 SERVICE = "discord"
 NAME = "Discord Webhook"

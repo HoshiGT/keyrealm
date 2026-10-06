@@ -24,7 +24,7 @@ telethon 是可选依赖（已列入 requirements.txt，与 ``python-socks`` 分
 代理直连**、脱离代理出口，所以此时一律中止联网校验。（别写 ``telethon[socks]``——telethon 的轮子里
 没有这个 extra，那个 extras 装不来 python-socks。）
 
-仅从 im_common 复用通用工具。
+仅从框架层 backend.plugin_sdk 复用通用工具。
 
 参考文档：https://core.telegram.org/api/obtaining_api_id
 """
@@ -39,7 +39,7 @@ import string
 import struct
 from urllib.parse import unquote, urlsplit
 
-from im_common import VerifyResult, guarded, log, proxy, timeout
+from backend.plugin_sdk import VerifyResult, guarded, log, proxy, timeout
 
 NAME = "Telegram API ID / Hash"
 DISPLAY_FIELD = "api_id"

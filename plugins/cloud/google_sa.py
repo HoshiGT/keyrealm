@@ -26,7 +26,7 @@ import time
 
 import httpx
 
-from cloud_common import make_client
+from backend.plugin_sdk import make_client
 
 # 换 token 用云平台全权限 scope：服务账号（含 Firebase adminsdk 默认的 Editor 角色）都能批
 DEFAULT_SCOPE = "https://www.googleapis.com/auth/cloud-platform"

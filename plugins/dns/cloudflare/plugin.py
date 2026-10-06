@@ -2,7 +2,7 @@
 
 自带全部实现：支持 token 与 global 两种认证模式，调用只读的
 /user 或 /user/tokens/verify 接口，不产生任何资源变更。
-仅从 dns_common 复用通用工具。
+仅从框架层 backend.plugin_sdk 复用通用工具。
 
 操作（凭据完整时提供）：
 - ``list_zones``（列表）站点列表，行内可下钻 ``list_dns_records``（DNS 记录）
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from dns_common import VerifyResult, body_snippet, guarded, make_client, safe_json
+from backend.plugin_sdk import VerifyResult, body_snippet, guarded, make_client, safe_json
 
 # Cloudflare API 基地址
 API_BASE = "https://api.cloudflare.com/client/v4"

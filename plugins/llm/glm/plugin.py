@@ -13,7 +13,8 @@ GLM 无公开 /models 接口，改用 chat 探针：可识别 429 中的余额�
 """
 from __future__ import annotations
 
-from llm_common import VerifyResult, guarded, make_quota_probe
+from backend.plugin_sdk import VerifyResult, guarded
+from llm_common import make_quota_probe
 from llm_protocols import (
     chat_completion,
     chat_completion_stream,

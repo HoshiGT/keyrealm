@@ -20,8 +20,8 @@ from backend import vault_proxy_ctx
 from backend.paths import app_dir, is_frozen, resource_dir
 
 # 把「按调用生效的代理上下文」以**固定别名**注册进 sys.modules：插件侧的 proxy() 靠这个名字
-# 懒查它（插件不允许 import backend，见 docs/PLUGIN_GUIDE.md §3）。必须在任何插件调用之前完成，
-# 所以放在模块级而不是 main() 里。
+# 懒查它（插件不直接 import backend 内部模块，只允许 import backend.plugin_sdk，见 PLUGIN_GUIDE §3）。
+# 必须在任何插件调用之前完成，所以放在模块级而不是 main() 里。
 sys.modules.setdefault("vault_proxy_ctx", vault_proxy_ctx)
 
 
