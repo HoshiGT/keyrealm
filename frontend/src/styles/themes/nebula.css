@@ -41,8 +41,7 @@
   /* 毛玻璃 */
   --v-glass-bg: rgba(28, 20, 50, 0.5);
   --v-glass-border: rgba(167, 139, 250, 0.2);
-  --v-glass-blur: 24px;
-  --v-glass-saturate: 1.8;
+  --v-glass-backdrop: blur(24px) saturate(1.8);
 
   --v-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.45);
   --v-shadow-md: 0 6px 20px -6px rgba(88, 28, 135, 0.55);

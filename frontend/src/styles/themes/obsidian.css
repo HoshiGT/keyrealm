@@ -44,11 +44,14 @@
   --v-border: #27272a;
   --v-border-strong: #3f3f46;
 
-  /* 无毛玻璃——保留变量以免基座引用报空，但把模糊压到 0 */
+  /* 无毛玻璃：整个 backdrop-filter 直接 none。
+     早先这里是 `blur(0px) saturate(1)`，看着等价于「不模糊」，但 Chromium 只要
+     backdrop-filter 的计算值不是 none，就会给元素建 backdrop root 并单独提升合成层。
+     默认主题常驻的侧栏、页头，以及每张 .el-card 全在这个名单里，等于白付显存和合成开销。
+     换成 none 后渲染结果一模一样（blur(0) 与 saturate(1) 都是恒等），层却不再创建。 */
   --v-glass-bg: #131316;
   --v-glass-border: #27272a;
-  --v-glass-blur: 0px;
-  --v-glass-saturate: 1;
+  --v-glass-backdrop: none;
 
   --v-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.6);
   --v-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.55);

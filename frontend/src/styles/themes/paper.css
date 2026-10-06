@@ -42,8 +42,7 @@
   /* 「毛玻璃」在素笺里退化为一层极轻的白纱——保持纸的实感 */
   --v-glass-bg: rgba(255, 255, 255, 0.92);
   --v-glass-border: rgba(28, 30, 33, 0.08);
-  --v-glass-blur: 8px;
-  --v-glass-saturate: 1.05;
+  --v-glass-backdrop: blur(8px) saturate(1.05);
 
   /* 阴影：克制，只做「贴纸微翘」的层次，不做发光 */
   --v-shadow-sm: 0 1px 1px rgba(28, 30, 33, 0.05);

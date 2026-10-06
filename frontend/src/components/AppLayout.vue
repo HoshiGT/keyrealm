@@ -338,7 +338,7 @@ async function handleMinimize() {
           <el-tooltip :content="appStore.tray.mcp_running ? 'MCP 服务运行中' : 'MCP 服务已停止'" placement="bottom">
             <span
               class="mcp-indicator"
-              :class="[appStore.tray.mcp_running ? 'is-on v-pulse' : 'is-off']"
+              :class="[appStore.tray.mcp_running ? 'is-on' : 'is-off']"
             >
               <i class="dot" />
               MCP {{ appStore.tray.mcp_running ? '运行中' : '已停止' }}
@@ -405,8 +405,8 @@ async function handleMinimize() {
   display: flex;
   flex-direction: column;
   background: var(--v-glass-bg);
-  -webkit-backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
-  backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
+  -webkit-backdrop-filter: var(--v-glass-backdrop, none);
+  backdrop-filter: var(--v-glass-backdrop, none);
   border-right: 1px solid var(--v-border);
   transition: width 0.24s var(--v-ease);
   overflow: hidden;
@@ -445,6 +445,8 @@ async function handleMinimize() {
   flex-shrink: 0;
 }
 
+/* 静态品牌标记。这里原来挂了一个 5s 无限「呼吸」的 box-shadow 动画，但侧边栏是
+   常驻的，常驻的微弱闪动没有信息量，只剩持续重绘 —— 改成一次画好的静态内描边。 */
 .brand-mark {
   position: relative;
   display: grid;
@@ -454,14 +456,7 @@ async function handleMinimize() {
   flex-shrink: 0;
   border-radius: 9px;
   background: var(--v-grad-brand-soft);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--v-primary) 22%, transparent);
-  animation: brand-breathe 5s var(--v-ease) infinite;
-}
-
-@keyframes brand-breathe {
-  0%, 100% { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--v-primary) 22%, transparent); }
-  50% { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--v-primary) 45%, transparent),
-        0 0 14px -2px color-mix(in srgb, var(--v-primary) 55%, transparent); }
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--v-primary) 30%, transparent);
 }
 
 .brand-text {
@@ -675,8 +670,8 @@ async function handleMinimize() {
   height: 62px;
   border-bottom: 1px solid var(--v-border);
   background: var(--v-glass-bg);
-  -webkit-backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
-  backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
+  -webkit-backdrop-filter: var(--v-glass-backdrop, none);
+  backdrop-filter: var(--v-glass-backdrop, none);
   position: relative;
   z-index: 5;
 }

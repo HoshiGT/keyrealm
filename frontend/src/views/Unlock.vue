@@ -132,12 +132,6 @@ onMounted(() => {
   opacity: var(--v-halo-opacity);
   background: radial-gradient(closest-side, var(--v-halo-1), transparent 72%),
     radial-gradient(closest-side at 68% 38%, var(--v-halo-2), transparent 72%);
-  animation: halo-breathe 9s var(--v-ease) infinite;
-}
-
-@keyframes halo-breathe {
-  0%, 100% { transform: scale(1); opacity: 0.6; }
-  50% { transform: scale(1.08); opacity: 0.85; }
 }
 
 /* 同时挂 .el-card 是为了压过 Element Plus 的 .el-card.is-never-shadow（同为 2 类选择器，
@@ -176,25 +170,21 @@ onMounted(() => {
   font-size: 26px;
 }
 
-/* 绕在徽标外的一圈「雷达波」：与徽标同形状的圆角方框，由内向外扩散淡出。
+/* 绕在徽标外的一圈描边，**静态**。
    最初这里是 conic-gradient + 圆形遮罩做的旋转描边，两处几何都不成立：
    圆形遮罩切在圆角方块的四角上，只能切出一道横穿角部的彩边（实测就是一圈色散花边，
    看着像渲染瑕疵而不是设计元素）；而且元素一旦 rotate，轮廓本身也跟着转，45° 时
-   圆角方块会变成菱形。
-   换成同形状、只缩放不旋转的描边扩散：圆角半径与外框同心，天然对齐，也不依赖
+   圆角方块会变成菱形。后来改成同形状的描边扩散（只缩放不旋转），几何是对的，但
+   挂的是 3.2s 无限动画 —— 一个每次进来都静静扩散的环，信息量为零，只是让这一页
+   永远在重绘。现在只留静态描边：圆角半径与外框同心，天然对齐，也不依赖
    mask-composite / @property，任何内核都稳。 */
 .auth-ring {
   position: absolute;
   inset: -6px;
   border-radius: 24px;
-  border: 2px solid color-mix(in srgb, var(--v-accent) 55%, transparent);
+  border: 2px solid color-mix(in srgb, var(--v-accent) 40%, transparent);
+  opacity: 0.85;
   pointer-events: none;
-  animation: ring-ping 3.2s var(--v-ease) infinite;
-}
-
-@keyframes ring-ping {
-  0% { transform: scale(0.96); opacity: 0.85; }
-  70%, 100% { transform: scale(1.22); opacity: 0; }
 }
 
 .auth-brand h1 {

@@ -213,7 +213,8 @@ h4 {
 }
 
 /* ── 3. 背景极光 ─────────────────────────────────────────────────────
- * 三个大光斑缓慢漂移，给整屏一点「呼吸」。纯装饰、不拦事件。
+ * 三个大光斑，静态铺在整屏之后。纯装饰、不拦事件。
+ * （早期它们会缓慢漂移，已改为静止；原因见下面 .blob 处的注释。）
  * ------------------------------------------------------------------- */
 
 .v-aurora {
@@ -226,13 +227,16 @@ h4 {
   transition: opacity var(--v-slow) var(--v-ease);
 }
 
+/* 光是**静态**的：早期这里给三颗球挂了 38/46/52s 的无限漂移，但这是一层
+   `position: fixed` 的全屏层，球又各自带 72px 模糊 —— 无限 transform 动画会让
+   整层持续重新合成，GPU 内存和 CPU 一直有开销，换来的只是「背景在极慢地飘」，
+   没人会盯着看。现在只保留静态位置与配色，不再动画。
+   同理不再要 `will-change: transform`：不动的元素没必要常驻提升合成层。 */
 .v-aurora .blob {
   position: absolute;
   display: block;
   border-radius: 50%;
   filter: blur(72px);
-  will-change: transform;
-  transform: translateZ(0);
 }
 
 .v-aurora .b1 {
@@ -241,7 +245,6 @@ h4 {
   width: 62vw;
   height: 62vw;
   background-image: var(--v-mesh-1);
-  animation: v-drift-1 38s ease-in-out infinite alternate;
 }
 
 .v-aurora .b2 {
@@ -250,7 +253,6 @@ h4 {
   width: 54vw;
   height: 54vw;
   background-image: var(--v-mesh-2);
-  animation: v-drift-2 46s ease-in-out infinite alternate;
 }
 
 .v-aurora .b3 {
@@ -259,29 +261,17 @@ h4 {
   width: 58vw;
   height: 58vw;
   background-image: var(--v-mesh-3);
-  animation: v-drift-3 52s ease-in-out infinite alternate;
-}
-
-@keyframes v-drift-1 {
-  0% { transform: translate3d(0, 0, 0) scale(1); }
-  50% { transform: translate3d(6vw, 4vh, 0) scale(1.08); }
-  100% { transform: translate3d(-3vw, 7vh, 0) scale(0.96); }
-}
-
-@keyframes v-drift-2 {
-  0% { transform: translate3d(0, 0, 0) scale(1.04); }
-  50% { transform: translate3d(-7vw, 6vh, 0) scale(0.94); }
-  100% { transform: translate3d(2vw, -4vh, 0) scale(1.1); }
-}
-
-@keyframes v-drift-3 {
-  0% { transform: translate3d(0, 0, 0) scale(0.98); }
-  50% { transform: translate3d(5vw, -6vh, 0) scale(1.1); }
-  100% { transform: translate3d(-6vw, -2vh, 0) scale(1); }
 }
 
 /* ── 4. 玻璃面 / 卡片 ───────────────────────────────────────────────
  * 所有面板走同一个「毛玻璃」配方，主题只需调 --v-glass-*。
+ *
+ * 模糊整串（含 saturate）走**一个**令牌 --v-glass-backdrop，而不是拆成
+ * blur/saturate 两个：因为要让主题能把它整体置为 `none`。这不是省事，是省资源——
+ * Chromium 只要 backdrop-filter 的计算值不是 none，就会给元素建 backdrop root 并
+ * 单独提升合成层；侧栏、页头、每张 .el-card 都是常驻元素，默认主题（黑曜）本就不模糊，
+ * 却因此白付着显存与合成开销。置 none 后这些层不再创建。
+ * 缺省回退写成 none：主题若漏配该令牌，结果是「没有毛玻璃」而非半截的无效声明。
  * ------------------------------------------------------------------- */
 
 .v-glass {
@@ -289,8 +279,8 @@ h4 {
   border: 1px solid var(--v-glass-border);
   border-radius: var(--v-radius-lg);
   box-shadow: var(--v-shadow-md);
-  -webkit-backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
-  backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
+  -webkit-backdrop-filter: var(--v-glass-backdrop, none);
+  backdrop-filter: var(--v-glass-backdrop, none);
 }
 
 .el-card {
@@ -302,8 +292,8 @@ h4 {
   border: 1px solid var(--v-glass-border);
   border-radius: var(--v-radius-lg);
   box-shadow: var(--v-shadow-md);
-  -webkit-backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
-  backdrop-filter: blur(var(--v-glass-blur)) saturate(var(--v-glass-saturate));
+  -webkit-backdrop-filter: var(--v-glass-backdrop, none);
+  backdrop-filter: var(--v-glass-backdrop, none);
   overflow: hidden;
   transition: box-shadow var(--v-base) var(--v-ease), transform var(--v-base) var(--v-ease),
     border-color var(--v-base) var(--v-ease);
@@ -939,22 +929,7 @@ html.dark :is(
   to { transform: translateY(-50%) scaleY(1); }
 }
 
-@keyframes v-pulse-ring {
-  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--v-success) 55%, transparent); }
-  70% { box-shadow: 0 0 0 7px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
-}
-
-@keyframes v-sheen {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
 /* ── 13. 工具类 ────────────────────────────────────────────────────── */
-
-.v-pulse {
-  animation: v-pulse-ring 2.4s var(--v-ease) infinite;
-}
 
 /* 渐变文字（标题/品牌名用） */
 .v-grad-text {
@@ -964,25 +939,9 @@ html.dark :is(
   color: transparent;
 }
 
-/* 骨架屏微光 */
-.v-skeleton {
-  background: linear-gradient(
-    90deg,
-    var(--v-bg-sunken) 25%,
-    color-mix(in srgb, var(--v-bg-sunken) 55%, var(--v-bg-overlay)) 37%,
-    var(--v-bg-sunken) 63%
-  );
-  background-size: 200% 100%;
-  animation: v-sheen 1.4s linear infinite;
-  border-radius: var(--v-radius-sm);
-}
-
 /* ── 14. 无障碍：尊重「减少动态效果」 ──────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
-  .v-aurora .blob,
-  .v-pulse,
-  .v-skeleton,
   .layout-main > * {
     animation: none !important;
   }

@@ -42,8 +42,7 @@
   /* 毛玻璃：重头戏，模糊拉满 */
   --v-glass-bg: rgba(22, 27, 43, 0.55);
   --v-glass-border: rgba(148, 163, 184, 0.16);
-  --v-glass-blur: 26px;
-  --v-glass-saturate: 1.9;
+  --v-glass-backdrop: blur(26px) saturate(1.9);
 
   /* 阴影：深色下靠「黑得更深」造层次，外加一点主色辉光 */
   --v-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);

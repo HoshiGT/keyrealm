@@ -158,7 +158,7 @@ async function submit() {
   background: transparent;
 }
 
-/* 与 Unlock.vue 同款双色柔光，尺寸/配色的取舍见那边的注释。 */
+/* 与 Unlock.vue 同款双色柔光，尺寸/配色的取舍见那边的注释。静态，不呼吸。 */
 .auth-halo {
   position: absolute;
   width: 900px;
@@ -168,12 +168,6 @@ async function submit() {
   opacity: var(--v-halo-opacity);
   background: radial-gradient(closest-side, var(--v-halo-1), transparent 72%),
     radial-gradient(closest-side at 68% 38%, var(--v-halo-2), transparent 72%);
-  animation: halo-breathe 9s var(--v-ease) infinite;
-}
-
-@keyframes halo-breathe {
-  0%, 100% { transform: scale(1); opacity: 0.6; }
-  50% { transform: scale(1.08); opacity: 0.85; }
 }
 
 /* 见 Unlock.vue 同处说明：挂 .el-card 提高优先级，内边距改由这里独占控制。 */
@@ -208,19 +202,14 @@ async function submit() {
   font-size: 26px;
 }
 
-/* 与 Unlock.vue 同：不做旋转，改成同形状描边向外扩散（理由见那边的注释）。 */
+/* 与 Unlock.vue 同：不做旋转、也不做扩散，就一圈静态描边（理由见那边的注释）。 */
 .auth-ring {
   position: absolute;
   inset: -6px;
   border-radius: 24px;
-  border: 2px solid color-mix(in srgb, var(--v-accent) 55%, transparent);
+  border: 2px solid color-mix(in srgb, var(--v-accent) 40%, transparent);
+  opacity: 0.85;
   pointer-events: none;
-  animation: ring-ping 3.2s var(--v-ease) infinite;
-}
-
-@keyframes ring-ping {
-  0% { transform: scale(0.96); opacity: 0.85; }
-  70%, 100% { transform: scale(1.22); opacity: 0; }
 }
 
 .auth-brand h1 {
