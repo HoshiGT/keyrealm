@@ -1,0 +1,34 @@
+{
+  "name": "企业微信应用",
+  "version": "1.0.0",
+  "credential_type": "im_wecom",
+  "author": "Credential Vault",
+  "description": "验证企业微信应用 CorpID / CorpSecret 有效性（gettoken，只读）",
+  "icon": "🏢",
+  "fields": [
+    {
+      "key": "corpid",
+      "label": "CorpID（企业 ID）",
+      "type": "text",
+      "required": true,
+      "placeholder": "ww...",
+      "hint": "企业 ID，在企业微信管理后台「我的企业 → 企业信息」里可查，一般以 ww 开头。"
+    },
+    {
+      "key": "corpsecret",
+      "label": "CorpSecret（应用密钥）",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "应用 Secret",
+      "hint": "应用的 Secret，在「应用管理」里点开对应自建应用查看。校验时该值会拼进 gettoken 的查询串，故加密存储、列表内打码、绝不回显。注意应用须为启用状态。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false,
+      "hint": "可选备注"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "name": "FOFA",
+  "version": "1.0.0",
+  "credential_type": "api_fofa",
+  "author": "Credential Vault",
+  "description": "验证 FOFA 邮箱 + API Key 有效性",
+  "icon": "🌐",
+  "fields": [
+    {
+      "key": "email",
+      "label": "邮箱",
+      "type": "text",
+      "required": true,
+      "placeholder": "登录 FOFA 的邮箱",
+      "hint": "FOFA 账号的注册邮箱"
+    },
+    {
+      "key": "api_key",
+      "label": "API Key",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "FOFA API Key",
+      "hint": "FOFA「个人中心 → API 信息」里的 API Key"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

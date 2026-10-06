@@ -1,0 +1,25 @@
+{
+  "name": "Postmark",
+  "version": "1.0.0",
+  "credential_type": "mail_postmark",
+  "author": "Credential Vault",
+  "description": "验证 Postmark Server Token 有效性",
+  "icon": "📮",
+  "fields": [
+    {
+      "key": "server_token",
+      "label": "Server Token",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "xxxxxxxx-xxxx-...",
+      "hint": "Server Token：Postmark 控制台 Servers → 某个 Server → API Tokens 页签。注意不是 Account Token（账户级令牌，用于 account.postmarkapp.com）。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

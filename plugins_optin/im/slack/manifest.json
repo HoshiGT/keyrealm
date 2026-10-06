@@ -1,0 +1,26 @@
+{
+  "name": "Slack",
+  "version": "1.0.0",
+  "credential_type": "im_slack",
+  "author": "Credential Vault",
+  "description": "验证 Slack 令牌有效性（auth.test，只读）",
+  "icon": "💬",
+  "fields": [
+    {
+      "key": "api_token",
+      "label": "API Token",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "xoxb-... 或 xoxp-...",
+      "hint": "Slack 令牌。xoxb- 是 Bot Token（在 Slack 管理后台创建 App 后于 OAuth & Permissions 页签发）；xoxp- 是 User Token（用户授权后签发）。本插件只做只读 auth.test 校验，不会发消息。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false,
+      "hint": "可选备注"
+    }
+  ]
+}

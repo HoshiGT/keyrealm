@@ -1,0 +1,25 @@
+{
+  "name": "SendGrid",
+  "version": "1.0.0",
+  "credential_type": "mail_sendgrid",
+  "author": "Credential Vault",
+  "description": "验证 SendGrid API Key 有效性",
+  "icon": "📨",
+  "fields": [
+    {
+      "key": "api_key",
+      "label": "API Key",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "SG.xxxx",
+      "hint": "在 Twilio SendGrid 控制台 Settings → API Keys 创建（SG. 开头）。只需只读权限即可通过验证。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

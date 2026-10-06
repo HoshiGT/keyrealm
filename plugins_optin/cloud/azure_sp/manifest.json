@@ -1,0 +1,38 @@
+{
+  "name": "Azure 服务主体",
+  "version": "1.0.0",
+  "credential_type": "cloud_azure_sp",
+  "author": "Credential Vault",
+  "description": "验证 Azure 服务主体有效性（OAuth2 client_credentials 换 token）",
+  "icon": "🪟",
+  "fields": [
+    {
+      "key": "tenant_id",
+      "label": "租户 ID（Tenant ID）",
+      "type": "text",
+      "required": true,
+      "hint": "Azure 门户 → Microsoft Entra ID → 概览 里的「租户 ID」（GUID 或域名）"
+    },
+    {
+      "key": "client_id",
+      "label": "客户端 ID（Client ID）",
+      "type": "text",
+      "required": true,
+      "hint": "应用注册（App registrations）→ 该应用 → 概述 里的「应用程序(客户端) ID」"
+    },
+    {
+      "key": "client_secret",
+      "label": "客户端密码（Client Secret）",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "hint": "应用注册 → 该应用 → 证书和密码 → 客户端密码的「值」（不是 Secret ID）"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

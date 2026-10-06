@@ -52,6 +52,11 @@ BASE_DIR = app_dir()
 PLUGINS_DIR = BASE_DIR / "plugins"
 # 内置插件纯净源（随发行包提供一份）：插件管理里「添加」时从这里恢复到 plugins/
 BUILTIN_SOURCE_DIR = BASE_DIR / "plugins_builtin"
+# 默认不启用的插件源：同样只在「插件管理 → 可添加」里露面，装到 plugins/ 之后才生效。
+# 放的是**缺乏实例验证**的新插件——先不上架，等用真凭据验过再从 plugins_optin/ 挪进 plugins/
+# 成为默认启用项。两者都是「可添加」的来源，故一起遍历（见 list_available_plugins）。
+OPTIN_SOURCE_DIR = BASE_DIR / "plugins_optin"
+ADDABLE_SOURCE_DIRS = (BUILTIN_SOURCE_DIR, OPTIN_SOURCE_DIR)
 
 # 内存中的插件模块缓存  credential_type -> module
 _loaded_modules: dict[str, Any] = {}
@@ -269,67 +274,85 @@ def delete_plugin(credential_type: str, delete_credentials: bool = True) -> dict
 
 
 def list_available_plugins() -> list[dict]:
-    """列出内置纯净源里、当前尚未安装（或已被删除）的插件。"""
+    """列出「可添加」的插件：内置源里、当前尚未安装（或已被删除）的那些。
+
+    两个来源一起看：`plugins_builtin/`（全量纯净副本，用于恢复被删掉的插件）与
+    `plugins_optin/`（默认不启用的新插件，缺乏实例验证，先不上架）。同一 credential_type
+    只出一条——`plugins_builtin/` 优先，免得两个源里的同名校本各列一遍。
+    """
     installed = {p["credential_type"] for p in db.list_plugins()}
     available: list[dict] = []
-    if not BUILTIN_SOURCE_DIR.exists():
-        return available
-    for cat_dir in sorted(BUILTIN_SOURCE_DIR.iterdir()):
-        if not cat_dir.is_dir() or cat_dir.name.startswith(("_", ".")):
+    seen: set[str] = set()
+    for source_dir in ADDABLE_SOURCE_DIRS:
+        if not source_dir.exists():
             continue
-        cat_meta: dict = {}
-        cat_file = cat_dir / "category.json"
-        if cat_file.exists():
-            try:
-                data = json.loads(cat_file.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    cat_meta = data
-            except Exception:
-                pass
-        for sub in sorted(cat_dir.iterdir()):
-            if not sub.is_dir() or sub.name.startswith(("_", ".")):
+        for cat_dir in sorted(source_dir.iterdir()):
+            if not cat_dir.is_dir() or cat_dir.name.startswith(("_", ".")):
                 continue
-            manifest_file = sub / "manifest.json"
-            if not manifest_file.exists():
-                continue
-            try:
-                manifest = load_manifest(manifest_file)
-            except Exception:
-                continue
-            if manifest.credential_type in installed:
-                continue
-            available.append({
-                "category": cat_dir.name,
-                "category_name": _category_display(cat_dir.name, cat_meta),
-                # 与「已安装」列表保持一致的展示字段：缺这两个的话，可添加卡片的类别标题
-                # 只能退到子插件 emoji、单条也没有 logo，两张卡片看起来像两套设计
-                "category_icon": cat_meta.get("icon", ""),
-                "icon_image": get_icon_image({
-                    "icon": manifest.icon,
-                    "plugin_path": str(sub),
+            cat_meta: dict = {}
+            cat_file = cat_dir / "category.json"
+            if cat_file.exists():
+                try:
+                    data = json.loads(cat_file.read_text(encoding="utf-8"))
+                    if isinstance(data, dict):
+                        cat_meta = data
+                except Exception:
+                    pass
+            for sub in sorted(cat_dir.iterdir()):
+                if not sub.is_dir() or sub.name.startswith(("_", ".")):
+                    continue
+                manifest_file = sub / "manifest.json"
+                if not manifest_file.exists():
+                    continue
+                try:
+                    manifest = load_manifest(manifest_file)
+                except Exception:
+                    continue
+                if manifest.credential_type in installed or manifest.credential_type in seen:
+                    continue
+                seen.add(manifest.credential_type)
+                available.append({
+                    "category": cat_dir.name,
+                    "category_name": _category_display(cat_dir.name, cat_meta),
+                    # 与「已安装」列表保持一致的展示字段：缺这两个的话，可添加卡片的类别标题
+                    # 只能退到子插件 emoji、单条也没有 logo，两张卡片看起来像两套设计
+                    "category_icon": cat_meta.get("icon", ""),
+                    "icon_image": get_icon_image({
+                        "icon": manifest.icon,
+                        "plugin_path": str(sub),
+                        "credential_type": manifest.credential_type,
+                    }),
+                    "service": sub.name,
                     "credential_type": manifest.credential_type,
-                }),
-                "service": sub.name,
-                "credential_type": manifest.credential_type,
-                "name": manifest.name,
-                "icon": manifest.icon,
-                "description": manifest.description,
-            })
+                    "name": manifest.name,
+                    "icon": manifest.icon,
+                    "description": manifest.description,
+                })
     return available
 
 
+def _find_addable_source(category: str, service: str) -> Optional[Path]:
+    """在「可添加」的各来源里按 `<来源>/<类别>/<服务>` 找插件目录，找不到返回 None。"""
+    for source_dir in ADDABLE_SOURCE_DIRS:
+        candidate = source_dir / category / service
+        if (candidate / "manifest.json").exists():
+            return candidate
+    return None
+
+
 def install_plugin(category: str, service: str) -> dict:
-    """从内置纯净源把某个插件复制回 plugins/ 并同步加载。"""
-    src = BUILTIN_SOURCE_DIR / category / service
-    if not (src / "manifest.json").exists():
+    """从「可添加」的来源把某个插件复制回 plugins/ 并同步加载。"""
+    src = _find_addable_source(category, service)
+    if src is None:
         return {"ok": False, "message": "内置源中未找到该插件"}
     dest = PLUGINS_DIR / category / service
     if dest.exists():
         return {"ok": False, "message": "该插件已存在"}
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
-        # 连同类别元数据一并补齐（若目标类别目录尚无 category.json）
-        cat_src = BUILTIN_SOURCE_DIR / category / "category.json"
+        # 连同类别元数据一并补齐（若目标类别目录尚无 category.json）——
+        # 从插件所在的那个来源取，而不是写死内置源：opt-in 插件的类别元数据在 opt-in 源里
+        cat_src = src.parent / "category.json"
         cat_dest = PLUGINS_DIR / category / "category.json"
         if cat_src.exists() and not cat_dest.exists():
             shutil.copy2(cat_src, cat_dest)

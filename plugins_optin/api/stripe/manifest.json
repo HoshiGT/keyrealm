@@ -1,0 +1,25 @@
+{
+  "name": "Stripe",
+  "version": "1.0.0",
+  "credential_type": "api_stripe",
+  "author": "Credential Vault",
+  "description": "验证 Stripe Secret Key 有效性",
+  "icon": "💳",
+  "fields": [
+    {
+      "key": "secret_key",
+      "label": "Secret Key",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "sk_live_... / sk_test_...",
+      "hint": "Stripe 后台「Developers → API keys」中的 Secret Key（sk_live_ 或 sk_test_ 开头）"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

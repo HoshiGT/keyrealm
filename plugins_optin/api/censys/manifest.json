@@ -1,0 +1,33 @@
+{
+  "name": "Censys",
+  "version": "1.0.0",
+  "credential_type": "api_censys",
+  "author": "Credential Vault",
+  "description": "验证 Censys API ID / Secret 有效性",
+  "icon": "🔬",
+  "fields": [
+    {
+      "key": "api_id",
+      "label": "API ID",
+      "type": "text",
+      "required": true,
+      "placeholder": "Censys API ID",
+      "hint": "Censys 控制台生成的 API ID（旧版 Search API 凭据）"
+    },
+    {
+      "key": "api_secret",
+      "label": "API Secret",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "Censys API Secret",
+      "hint": "与 API ID 配套的 Secret。注意：Censys 已迁移到 Platform API（改用 PAT），此凭据形态仅面向仍持有旧版 ID/Secret 的账号"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

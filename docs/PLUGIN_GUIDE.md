@@ -2,7 +2,7 @@
 
 Credential Vault 的插件用于**验证一类凭据的有效性**（如某家 LLM 厂商的 API Key）。
 每个服务是一个独立插件，放入 `plugins/` 目录即自动加载，删除即卸载——没有安装器、
-没有启停开关、没有"插件管理"界面。
+没有启停开关（「插件管理」只负责**删除插件**与**从内置源恢复/添加**，本身不带启停开关）。
 
 ---
 
@@ -27,7 +27,10 @@ plugins/
 │   ├── firecrawl/
 │   ├── tavily/
 │   ├── metaso/
-│   └── coze/
+│   ├── coze/
+│   ├── dify/
+│   ├── app_secret/
+│   └── gateway/
 ├── dns/                        # 类别目录（域名解析）
 │   ├── category.json
 │   ├── dns_common.py
@@ -49,12 +52,19 @@ plugins/
 │   ├── telegram/
 │   ├── discord/
 │   ├── qq_bot/
-│   └── wechat_ilink/
+│   ├── wechat_ilink/
+│   ├── telegram_apihash/
+│   └── webhook/
 ├── cloud/                      # 类别目录（云服务商）
 │   ├── category.json
 │   ├── cloud_common.py
+│   ├── google_sa.py            # 协议级工具：服务账号 JWT 换 token（gcp / firebase 共用）
 │   ├── aliyun/
-│   └── tencentcloud/
+│   ├── tencentcloud/
+│   ├── aws/
+│   ├── gcp/
+│   ├── huaweicloud/
+│   └── firebase/
 ├── exchange/                   # 类别目录（交易所）
 │   ├── category.json
 │   ├── exchange_common.py
@@ -79,6 +89,54 @@ plugins/
   共享模块（`llm_common.py` 等）只是被各子插件 `import` 的普通 Python 文件，
   **只放通用工具**（结果类型、HTTP 客户端、解析/兜底辅助），具体验证逻辑在各子插件内。
 - 名称以 `_` 或 `.` 开头的目录会被跳过（可用于临时禁用）。
+
+### 1.1 `plugins_optin/` —— 默认不启用的插件源
+
+与 `plugins/` **完全同构**（`<类别>/<服务>/{manifest.json,plugin.py}`，`category.json` 也有副本），
+但 `sync_plugins()` **不扫它**，所以放着也不生效。它只让插件在「插件管理 → 可添加」里露一面，
+用户点「添加」才被复制进 `plugins/` —— 与从 `plugins_builtin/` 恢复被删插件**同一条路径**
+（见 `backend/plugin_manager.py` 的 `ADDABLE_SOURCE_DIRS`）。
+
+**用途**：放**缺乏实例验证**的新插件。它们照现有类型与服务仿写，但端点是照官方文档写的、
+判定阈值是照同类插件推的，只跑过阴性对照、**没拿真凭据跑过阳性验证**，因此不随包上架。
+等用真凭据验过（**乱写的凭据必须判 `invalid`**）再由人工把目录**挪进** `plugins/`，
+那时才成为「默认启用项」——`plugins/` 始终是插件的唯一事实来源。
+
+**当前共 34 个**（8 个类别，2026-10-06 一次性启发式新增）：
+
+| 类别 | 子插件 |
+|------|--------|
+| `api`（7） | airtable、censys、fofa、notion、shodan、stripe、virustotal |
+| `cloud`（3） | azure_sp（Entra 服务主体）、backblaze_b2、digitalocean |
+| `dev`（3） | gitee、npm、vercel |
+| `dns`（2） | namecheap、porkbun |
+| `exchange`（4） | bitget、bybit、gate、kucoin |
+| `im`（3） | line、slack、wecom（企业微信） |
+| `llm`（7） | azure_openai、cerebras、groq、hunyuan、mistral、stepfun、xai |
+| `mail`（5） | brevo、mailgun、postmark、resend、sendgrid |
+
+> 这批**只做过离线契约冒烟**（`tmp/smoke_optin_contract.py`：就地加载 + 有 verify/validate +
+> 参考链接不外泄）与**阴性对照**（`tmp/smoke_optin_negative.py`：乱写凭据必须判 `invalid`／
+> 不报错）——**没有拿真凭据跑过阳性验证**，所以仍留在 `plugins_optin/`。
+> 缺的正是「真凭据能判 valid」这一半。
+>
+> 阴性对照 2026-10-06 用代理跑过（34 个逐一出网）：**31 个**判 `invalid`，**无一被误判为
+> `valid`**；余下 **3 个**落在 `error` —— `dns/namecheap`（假 ClientIp 被拒：Namecheap 要求
+> 调用 IP 加白名单，没走到密钥校验）、`exchange/bybit`（HTTP 403 地域限制）、
+> `llm/azure_openai`（本就无默认端点，必须自填）。这 3 个的「乱写必须判 invalid」
+> **未被真正行使**，等有实例时补跑。
+
+约定：
+
+- **只放已存在类别下的服务目录**，不要在这里新开类别（新类别要连带克隆一份 `<类别>_common.py`）。
+- **这里不放 `<类别>_common.py`**：类别共享模块仍由 `plugins/<类别>/` 提供。插件被「添加」进
+  `plugins/` 之后，同层的 `from api_common import …` 才解析得到；**直接就地加载会 ImportError，
+  这是预期的**——它本就不该就地跑。
+- 发行包会把本目录整体复制到 `release/plugins_optin/`（见 `scripts/build.py`）；`CredentialVault.spec`
+  的标准库 hiddenimports 扫描**同时覆盖这里**——插件是运行时才复制进 `plugins/` 的，漏扫会导致
+  用户装完一点就 `ModuleNotFoundError`。
+
+详见 `plugins_optin/README.md`。
 
 ---
 
@@ -131,6 +189,30 @@ plugins/
 | `fields[].sensitive` | `true` 的字段加密存储（AES-256-GCM），列表页只显示掩码（`crypto.mask_secret`，形如 `sk-123…cdef`），也参与重复凭据检测 |
 | `icon` | 服务显示图标。填 emoji（如 `🐋`）直接使用；也可填插件目录内的图片文件名（如 `"logo.png"`，支持 png/jpg/svg/webp/ico/gif），后端读取为 data URL 返回（`icon_image` 字段），前端优先展示图片，缺省回退 emoji `🔑` |
 | `batch_verify` | 是否参与批量验证，默认 `true`。**有写副作用**的插件应设为 `false`（如 `duckdns`——它的校验本身就是一次写解析）：前端在选中该类型时禁用「批量验证」按钮，只能逐条手动验证；后端批量时也会跳过这些类型并在结果里统计「跳过 N」 |
+
+### 字段输入约定（新增插件必守）
+
+**凭据输入一律尽量单行**：一个字段一个值，不要求用户「粘贴整份配置」。
+
+- **能拆就拆**：邮箱 / 私钥 / 项目 ID 各占一格，别用一个大 `textarea` 收一坨。
+  硬约束来自前端渲染优先级——`CredentialForm.vue` 按 `text||url` → `password||sensitive` → `textarea`
+  顺序判定，**`sensitive` 压过 `textarea`**：声明成 `textarea` 的敏感字段实际渲染的是**单行密码框**，
+  「多行」与「加密存储」不可兼得。所以声明要与渲染一致：
+
+  ```json
+  { "key": "session_string", "type": "text", "sensitive": true }    // 对：单行 + 加密
+  { "key": "session_string", "type": "textarea", "sensitive": true } // 错：声明与渲染不一致
+  ```
+
+- **不接收整段 JSON**：服务账号、各类 SDK 的 `*.json` 一律**取关键字段扁平化**，每个值单独一栏，
+  由插件拼回协议要的形状。范例：`cloud/google_sa.py` 只收 `client_email` + `private_key`，
+  自己还原成 PEM 再签 JWT。整段 JSON 塞一栏的代价：常量与展示字段跟着落库、与相邻字段重复
+  且可能对不上、报错时说不清是哪个子字段错了。
+- **单行框吃换行**：多行内容粘进单行框会被压成一行（PEM 私钥尤其明显），插件侧要**自己还原**，
+  并在 `hint` 里写明。范例 `google_sa.normalize_pem`：先抹掉全部空白再按 64 列折行，于是
+  「原样多行 / 压成一行 / 带字面 `\n` / CRLF」四种粘贴形态收敛到同一个结果；同时校验
+  「私钥之外不该再有内容」，避免把整段 JSON 顺手存进来。
+- **例外**：`notes`（备注）这类自由文本仍用 `textarea`——它不是凭据，没有加密与换行的约束。
 
 ---
 
@@ -387,8 +469,31 @@ class TunneledSMTP_SSL(smtplib.SMTP_SSL):  # SMTPS
 
 **每个子插件自带完整实现**，只从 `<类别>_common.py` 引用通用工具；服务之间允许重复代码（刻意为之）。
 
+**模块 docstring 里要带官方参考链接** —— 写清你实现端点与判定阈值时依据的**官方文档页**，
+一行一个：
+
+    参考文档：https://docs.example.com/api-reference
+
+- **可以没有，不能乱写**：确认不了官方文档地址的，这一行**就不写**，别凭印象编 URL；
+  也**只写官方**页面，不写 CSDN / 掘金 / 博客 / 第三方 SDK 仓库这类转述页。
+- 官方**文档页**优先于官网首页。
+- **位置不限，在模块 docstring 里即可**：惯用「紧跟首段摘要之后」或「放在 docstring 末尾」，
+  两种现网都有，不必强求统一；但别把它混进正文注释里（那样就不成其为「模块说明」了）。
+- 依据了多个官方页（如「鉴权」与「错误码」各一页）就写多行 `参考文档：`，但别为凑数堆链接。
+- **写进去之前要实际打开确认过**（能访问、内容确实是该服务的文档）；被挡或 404 的一律不写。
+- **只给开发者看，不上界面**：这行只留在 `plugin.py` 的 docstring（代码注释）里。
+  不许写进 `manifest.json` 的 `description` 或任何字段的 label/hint/placeholder，不许出现在
+  `verify()` / `get_display_summary()` 返回的 message 里，也不许写进 `actions` 文案 ——
+  凡是前端会渲染出来的地方都不能有它。
+  > 校验脚本 `tmp/smoke_optin_contract.py` 按「**只在 docstring 出现、正文里找不到**的 URL」
+  > 判定参考链接；正文里也出现的那些是端点/默认值常量（如 ``DEFAULT_HOMESERVER``），
+  > 它们在 manifest 里当 `default` / `placeholder` 渲染是功能性的，不算外泄。
+
 ```python
-"""MyVendor 验证插件（plugins/llm/my_vendor/，自包含实现）。"""
+"""MyVendor 验证插件（plugins/llm/my_vendor/，自包含实现）。
+
+参考文档：https://docs.myvendor.com/api-reference
+"""
 from llm_common import VerifyResult, guarded, make_client, safe_json
 
 DEFAULT_BASE_URL = "https://api.myvendor.com/v1"
@@ -744,24 +849,42 @@ sensenova（商汤日日新，OpenAI 兼容）、codebuddy（腾讯 CodeBuddy �
 > ——**1.0 之前不考虑向下兼容（含旧版本数据库）**，旧的 `llm_glm_anthropic` /
 > `llm_anthropic_compatible` 类型不再有对应插件，那类凭据直接在界面上删掉、按新插件重建即可。
 
-**api/ 类别（4 个）**：firecrawl（网页抓取）、tavily（搜索）、metaso（秘塔 AI 搜索）、coze（字节扣子）。
+**api/ 类别（7 个）**：firecrawl（网页抓取）、tavily（搜索）、metaso（秘塔 AI 搜索）、coze（字节扣子）、
+dify（Dify 应用 / 工作流）、app_secret（通用应用密钥，一对 key/secret）、gateway（短信网关 / 接码服务商，
+字段按各厂商叫法通用化——`app_key` / `app_secret` 装不下的一律塞 `extra_params`；实测有可用只读校验接口的
+8 家：Engagelab、Infobip、CM、laaffic、nxcloud、buka、Ultramsg——Infobip 印度 200 有效、香港那把在该
+入口 403「无权限」故判 `error`；Ultramsg 域名对任意实例/口令都返回同一段文案，只能报「未验证」；其余 8 家
+没有只读接口，一律如实报「未验证」）。
 
 **dns/ 类别（4 个）**：dnspod、duckdns、godaddy、cloudflare（从 cloud/ 移入：它就是域名解析类）。
 
 **dev/ 类别（3 个）**：github（令牌）、huggingface、wandb（Weights & Biases）。
 
-**im/ 类别（6 个）**：feishu（飞书）、dingtalk（钉钉）、telegram、discord（Webhook）、
-qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）。
+**im/ 类别（8 个）**：feishu（飞书）、dingtalk（钉钉）、telegram（Bot）、discord（Webhook）、
+qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）、telegram_apihash（Telegram API ID / Hash）、
+webhook（通用群机器人 Webhook）。
 
-**cloud/ 类别（2 个）**：aliyun（阿里云 AK/SK）、tencentcloud（腾讯云 SecretId/Key）。
+**cloud/ 类别（6 个）**：aliyun（阿里云 AK/SK）、tencentcloud（腾讯云 SecretId/Key）、aws（AWS Access Key）、
+gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Firebase 管理密钥）。
+服务账号这类凭据按「一行一项」收 **邮箱 + 私钥**，另两个字段选填（密钥 ID 只当 JWT 头的 `kid`、
+项目 ID 只喂额外探测），**不接收整段 JSON**——见 §2「字段输入约定」。
+`google_sa.py` 是协议级共享模块：gcp 与 firebase 都要把邮箱 + 私钥签成 RS256 JWT 换 access_token，
+这步两家完全一致，故单独成模块（判定「什么状态码算有效」仍在各自 plugin.py 内）。
+2026-10-06 用交付目录里的 adminsdk 密钥实测：私钥在单行框里被压掉换行后照样换得到 token；
+`private_key_id` 缺失不影响；只填 `client_email` + `private_key` 也能通过。
 （Cloudflare 已移到 `dns/` —— 它本质是域名解析类。）
 
 **exchange/ 类别（2 个）**：okx、binance。
 
 **mail/ 类别（1 个）**：smtp（通用 SMTP，覆盖 Gmail / QQ / 163 / 126 等）。
 
-> 说明：`duckdns` 的校验本身是写操作（先写入 `1.1.1.1` 确认生效再还原原值），标记
-> `batch_verify: false`，只能手动单个验证。
+> 说明：标记 `batch_verify: false`（只能手动单个验证）的有三个：`duckdns` 的校验本身是写操作
+> （先写入 `1.1.1.1` 确认生效再还原原值）；`telegram_apihash` 与 `api/gateway` 则是判定常为
+> 「未验证」（前者要登录态、后者多数厂商没有只读接口），批量跑会把人工判定的状态刷成「未验证」。
+
+> 本节的 50 个是 `plugins/` 下**默认启用**的全部。另有 `plugins_optin/` 里 34 个
+> **默认不启用、尚无实例验证**的插件（含 airtable / censys / shodan / stripe / mistral 等主流
+> 服务），清单见 §1.1 —— 它们装了不生效，须在「插件管理 → 可添加」里手动添加。
 
 ### 内置「简易操作」一览
 
@@ -805,6 +928,10 @@ qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）。
 - **api**：coze（工作区列表）· tavily（执行搜索）· firecrawl（抓取网页）·
   metaso（搜索（`list`，行内「阅读」下钻）· 网页解析）
 - **mail**：smtp —— 收件箱（`list`，可填拉取封数/文件夹/IMAP 主机与端口）→ 行内「看正文」下钻
+
+> 以上按**声明了操作（`actions()`）**的插件列举。新加入的 `api/app_secret`、`api/dify`、`cloud/aws`、
+> `cloud/gcp`、`cloud/huaweicloud`、`cloud/firebase`、`im/telegram_apihash`、`im/webhook`、`api/gateway`
+> 目前只做凭据验证，未声明任何「操作」。
 
 > **按权限显隐**：aliyun / tencentcloud / feishu / github 实现了 `capabilities()`，没权限的操作不会出现在菜单里；
 > 一个都没有时给出说明。**探测失败一律 fail-open**（全都展示）——只有上游**明确**说「密钥无效」才判定为无可用操作。

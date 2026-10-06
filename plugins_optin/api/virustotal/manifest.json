@@ -1,0 +1,25 @@
+{
+  "name": "VirusTotal",
+  "version": "1.0.0",
+  "credential_type": "api_virustotal",
+  "author": "Credential Vault",
+  "description": "验证 VirusTotal API Key 有效性",
+  "icon": "🦠",
+  "fields": [
+    {
+      "key": "api_key",
+      "label": "API Key",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "64 位十六进制 API Key",
+      "hint": "VirusTotal 账号页 → API key"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "npm",
+  "version": "1.0.0",
+  "credential_type": "dev_npm",
+  "author": "Credential Vault",
+  "description": "验证 npm 访问令牌有效性",
+  "icon": "📦",
+  "fields": [
+    {
+      "key": "token",
+      "label": "Token",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "npm_…",
+      "hint": "npm 访问令牌（Access Token）"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false,
+      "hint": "可选备注"
+    }
+  ]
+}

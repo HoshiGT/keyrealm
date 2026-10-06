@@ -1,0 +1,25 @@
+{
+  "name": "Notion",
+  "version": "1.0.0",
+  "credential_type": "api_notion",
+  "author": "Credential Vault",
+  "description": "验证 Notion 集成密钥有效性",
+  "icon": "📝",
+  "fields": [
+    {
+      "key": "api_token",
+      "label": "API Token",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "secret_... / ntn_...",
+      "hint": "Notion「My integrations / Settings → Internal Integration Token」中的密钥（secret_ 或 ntn_ 开头）"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "name": "Airtable",
+  "version": "1.0.0",
+  "credential_type": "api_airtable",
+  "author": "Credential Vault",
+  "description": "验证 Airtable Personal Access Token 有效性",
+  "icon": "🗂️",
+  "fields": [
+    {
+      "key": "api_key",
+      "label": "API Key",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "pat...",
+      "hint": "Airtable「Developer Hub → Personal access tokens」生成的 PAT（pat 开头）"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

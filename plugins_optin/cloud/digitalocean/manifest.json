@@ -1,0 +1,25 @@
+{
+  "name": "DigitalOcean",
+  "version": "1.0.0",
+  "credential_type": "cloud_digitalocean",
+  "author": "Credential Vault",
+  "description": "验证 DigitalOcean 个人访问令牌有效性",
+  "icon": "🌊",
+  "fields": [
+    {
+      "key": "token",
+      "label": "API Token",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "dop_v1_…",
+      "hint": "DigitalOcean 控制台 → API → Tokens 生成的个人访问令牌"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

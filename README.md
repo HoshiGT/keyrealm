@@ -6,7 +6,7 @@
 
 - **AES-256-GCM 加密存储**：主密码派生密钥，敏感字段全程加密
 - **插件化架构**：一个服务一个插件，目录放入 `plugins/` 即自动加载，删除即卸载，无需手动管理
-- **插件管理**：可视化管理内置插件（Cloudflare 已归入「域名解析」类，因为它本质就是域名解析；华泰证券插件已移除）——删除插件（连同其凭据）或从内置源 `plugins_builtin/` 恢复；按**类别折叠**（搜索时自动展开命中类别）让长列表不再难扫；支持按名称 / 标识 / 描述**实时搜索**（空格分隔多词需全部命中）；凭据目录里右键节点即可删除插件或配置该类别/插件的默认设置
+- **插件管理**：可视化管理内置插件（Cloudflare 已归入「域名解析」类，因为它本质就是域名解析；华泰证券插件已移除）——删除插件（连同其凭据）或从内置源 `plugins_builtin/` 恢复、从 `plugins_optin/` 添加**默认不启用**的新插件；按**类别折叠**（搜索时自动展开命中类别）让长列表不再难扫；支持按名称 / 标识 / 描述**实时搜索**（空格分隔多词需全部命中）；凭据目录里右键节点即可删除插件或配置该类别/插件的默认设置
 - **MCP 服务**：内置 MCP Server，**监听地址可配**（IP + 端口，默认 `127.0.0.1:8765`；端口被占直接报错、不悄悄换端口），AI Agent 可直接管理与验证凭据，支持按工具粒度控制权限；**备份导出/导入也可由 MCP 调用**（`vault_export_backup` / `vault_import_backup`，默认关闭）——没有文件对话框，改为「文档直接返回」或「显式给路径」两种方式
 - **多模式验证**：保存时自动验证 / 手动验证 / 定时批量验证；批量验证可**手动勾选**（支持一键全选）并**并发**执行，**并发线程数与请求超时在批量验证对话框里就地调整**（并发 1–32、超时 5–300 秒），保存后对定时批量验证同样生效；有写副作用或无法自动化的类型可声明 `batch_verify: false`，仅允许手动单个验证；对**拿不到余额**的凭据（厂商无余额接口，或中转站令牌为「不限额度」），可**在该凭据上单独开启**「欠费探测」——额外发一次最小对话请求，把「Key 有效」升级为「实测可用 / 实测欠费」，默认关闭
 - **可读的附加信息**：凭据列表「附加信息」列以「标签 值」展示——LLM 显示余额（plan 类显示使用率），云厂商显示账号信息，无效字段自动隐藏；金额先过**合理性闸**，中转站「不限额」哨兵值（`1e8`）不会渲染成 `99999996.47` 这种假余额
@@ -107,9 +107,14 @@ release/
 │   │   ├── firecrawl/
 │   │   ├── tavily/
 │   │   ├── metaso/
-│   │   └── coze/
+│   │   ├── coze/
+│   │   ├── dify/
+│   │   ├── app_secret/
+│   │   └── gateway/
 │   └── dns/ dev/ im/ cloud/ exchange/ mail/   # 域名解析 / 开发者平台 / 即时通讯 / 云服务商 / 交易所 / 邮箱
 ├── plugins_builtin/           # 内置插件纯净源（只读）：插件管理里「添加」时从这里恢复
+├── plugins_optin/             # 默认不启用的插件源：缺乏实例验证的新插件，装着不生效，
+│                              #   只在「可添加」里露面；验过之后再挪进 plugins/
 └── data/                      # 首次运行时自动创建（数据库、主密码校验、日志；升级时保留）
     ├── credentials.db         # 加密凭据库（-wal / -shm 运行时生成）
     ├── logs/                  # 轮转日志（1MB × 5）
@@ -130,7 +135,7 @@ release/
 `release/` 是自包含、可便携分发的目录，且**不被 git 追踪**（`CredentialVault.spec` 与
 `scripts/*.py` 作为构建配置保留在版本库中）。
 
-> **升级时 `data/` 原样保留**：`scripts/build.py` 只替换 exe、`plugins/`、`plugins_builtin/`，
+> **升级时 `data/` 原样保留**：`scripts/build.py` 只替换 exe、`plugins/`、`plugins_builtin/`、`plugins_optin/`，
 > 在 `data/` 下仅清理旧版遗留的 `data/installed_plugins/`（zip 安装时代的运行期缓存）。
 > 其余内容一律不碰——`data/webview/` 是界面偏好、`data/logs/` 是日志，升级前后都不用手工维护。
 
@@ -154,6 +159,8 @@ release/
 > `plugins/**/*.py` 的顶层 import，把其中的标准库名补进 `hiddenimports`，新增插件自动生效。
 > **第三方库同理要显式收**：邮箱走代理靠 `PySocks`（`import socks`），spec 里单独
 > `collect_all("socks")` 并缺包时警告——不然 exe 里给邮箱设代理会报「缺少 PySocks」。
+> Telegram 校验靠 `telethon`（`telethon[socks]` 带进来的 `python-socks` 也要一起收，
+> 缺它 Telethon 会**静默忽略代理直连**），spec 里同样 `collect_all` + 缺包警告。
 >
 > Windows 运行前提：需已安装 WebView2 Runtime（Windows 10/11 通常已内置）。
 
@@ -193,6 +200,7 @@ API-Key-Checker/
 │   ├── proxy_test.py        # 代理连通性诊断（直连/代理对照探测）
 │   ├── single_instance.py   # 单实例闸门（互斥体 + 把已有窗口拉到前台）
 │   ├── scheduler.py         # 定时验证调度器
+│   ├── idle_lock.py         # 空闲自动锁定看门狗（无操作一段时间后清除内存密钥）
 │   ├── vault_proxy_ctx.py   # 按调用生效的代理上下文（框架 ↔ 插件唯一通道）
 │   ├── logger.py            # 日志配置（轮转文件 + 级别可调 + 关键词搜索）
 │   ├── tray.py              # 系统托盘
@@ -205,8 +213,8 @@ API-Key-Checker/
 │   └── pack_source.py       # 源码归档脚本（生成 release/credential-vault-src.zip）
 ├── plugins/                 # 插件源码（打包时作为外部目录，不进 exe）
 │   ├── llm/                 # LLM 类别：19 个厂商子插件 + llm_common.py 共享模块
-│   ├── api/                 # API 服务类别：firecrawl / tavily / metaso / coze + api_common.py
-│   └── dns/ dev/ im/ cloud/ exchange/ mail/   # 另 6 个类别共 18 个子插件
+│   ├── api/                 # API 服务类别：firecrawl / tavily / metaso / coze / dify / app_secret / gateway + api_common.py
+│   └── dns/ dev/ im/ cloud/ exchange/ mail/   # 另 6 个类别共 24 个子插件
 ├── frontend/                # Vue 3 前端
 │   ├── src/
 │   │   ├── views/
