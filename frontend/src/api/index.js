@@ -234,6 +234,11 @@ export const api = {
   setAutoLock: (minutes) => call('set_auto_lock', minutes),
   touchActivity: () => call('touch_activity'),
 
+  // ── 轻量模式 ────────────────────────────────────────────
+  // 开启后最小化到托盘会释放（销毁）界面文档以省内存；再次打开窗口时后端重新加载前端。
+  getLightMode: () => call('get_light_mode'),
+  setLightMode: (enabled) => call('set_light_mode', enabled),
+
   // ── 验证代理（注册表，其它模块一律按 id 引用） ──────────
   listProxies: () => call('list_proxies'),
   createProxy: (name, url) => call('create_proxy', name, url),

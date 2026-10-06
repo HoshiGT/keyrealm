@@ -587,17 +587,58 @@ async function applyAutoLock(value) {
   }
 }
 
-onMounted(async () => {
-  await Promise.all([
-    loadSchedules(),
-    loadCloseAction(),
-    loadAutoLock(),
-    proxyStore.fetch().catch(() => {}),
-    vaultStore.fetchGroups().catch(() => {}),
-    vaultStore.fetchPlugins().catch(() => {}),
-    appStore.refreshTray().catch(() => {}),
-  ])
-})
+/* ── 轻量模式 ───────────────────────────────────────── */
+// 开关只影响后端「隐藏到托盘」时的行为，前端不需要跟着变什么。
+const lightMode = ref(false)
+const lightModeSaving = ref(false)
+
+async function loadLightMode() {
+  try {
+    const config = await api.getLightMode()
+    lightMode.value = Boolean(config.enabled)
+  } catch (err) {
+    ElMessage.error(err.message || '加载轻量模式设置失败')
+  }
+}
+
+async function applyLightMode(value) {
+  lightModeSaving.value = true
+  try {
+    await api.setLightMode(value)
+    ElMessage.success(
+      value ? '已开启轻量模式：最小化到托盘时释放界面' : '已关闭轻量模式',
+    )
+  } catch (err) {
+    ElMessage.error(err.message || '设置轻量模式失败')
+    await loadLightMode()
+  } finally {
+    lightModeSaving.value = false
+  }
+}
+
+const refreshing = ref(false)
+
+/**
+ * 重新拉取本页各项设置：首屏加载与顶部「刷新」共用同一份清单，
+ * 免得以后新增设置项时只改了其中一处。
+ * @param {boolean} showSpinner 首屏不必转菊花 —— 页面本来就是空的
+ */
+async function refreshAll(showSpinner = true) {
+  if (showSpinner) refreshing.value = true
+  try {
+    await Promise.all([
+      loadCloseAction(),
+      loadAutoLock(),
+      loadLightMode(),
+      proxyStore.fetch().catch(() => {}),
+      appStore.refreshTray().catch(() => {}),
+    ])
+  } finally {
+    if (showSpinner) refreshing.value = false
+  }
+}
+
+onMounted(() => refreshAll(false))
 </script>
 
 <template>
@@ -605,7 +646,7 @@ onMounted(async () => {
     <div class="page-toolbar">
       <h2 class="section-title">系统设置</h2>
       <div class="spacer" />
-      <el-button :icon="Refresh" :loading="schedulesLoading" @click="loadSchedules">刷新</el-button>
+      <el-button :icon="Refresh" :loading="refreshing" @click="refreshAll">刷新</el-button>
     </div>
 
     <el-card shadow="never">
@@ -690,74 +731,20 @@ onMounted(async () => {
           />
         </el-select>
       </div>
-    </el-card>
 
-    <el-card shadow="never">
-      <template #header>
-        <div class="card-header">
-          <span>定时验证计划</span>
-          <el-button type="primary" size="small" :icon="Plus" @click="openCreate">新建计划</el-button>
+      <el-divider />
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">轻量模式</div>
+          <div class="setting-desc">
+            最小化到托盘时释放界面（销毁当前网页）以省内存，从托盘打开窗口时重新加载。
+            代价：重新打开需要等待界面重建，且释放时未保存的编辑内容会丢失；
+            后台的 MCP 服务与定时任务不受影响。
+          </div>
         </div>
-      </template>
-
-      <el-table v-loading="schedulesLoading" :data="schedules" empty-text="暂无定时计划" style="width: 100%">
-        <el-table-column label="名称" min-width="160">
-          <template #default="{ row }">
-            <span class="plan-name">{{ row.name }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="触发规则" width="180">
-          <template #default="{ row }">
-            <el-tag size="small" effect="plain" :icon="Timer">{{ describeTrigger(row) }}</el-tag>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="验证范围" min-width="150">
-          <template #default="{ row }">
-            <span class="text-muted">{{ describeTarget(row) }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="启用" width="90">
-          <template #default="{ row }">
-            <el-switch
-              :model-value="row.enabled"
-              size="small"
-              :loading="togglingId === row.id"
-              @change="(value) => toggleSchedule(row, value)"
-            />
-          </template>
-        </el-table-column>
-
-        <el-table-column label="上次运行" width="130">
-          <template #default="{ row }">
-            <span class="text-muted">{{ formatRelative(row.last_run_at, '从未运行') }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="下次运行" width="170">
-          <template #default="{ row }">
-            <span v-if="row.next_run_at" class="text-muted">{{ formatDateTime(row.next_run_at) }}</span>
-            <span v-else class="text-muted">—</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="操作" width="220" fixed="right">
-          <template #default="{ row }">
-            <el-button
-              size="small"
-              :icon="VideoPlay"
-              :loading="runningId === row.id"
-              @click="runScheduleNow(row)"
-            >
-              立即运行
-            </el-button>
-            <el-button size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
-            <el-button size="small" type="danger" plain :icon="Delete" @click="removeSchedule(row)" />
-          </template>
-        </el-table-column>
-      </el-table>
+        <el-switch v-model="lightMode" :loading="lightModeSaving" @change="applyLightMode" />
+      </div>
     </el-card>
 
     <el-card shadow="never">

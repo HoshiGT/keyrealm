@@ -524,6 +524,48 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
 
 ---
 
+### 2.11 窗口生命周期与轻量模式（main.py）
+
+`main.py` 持有唯一的窗口引用 `_window`，窗口的隐藏 / 显示都收口在这里（`tray.start_tray` 的三个
+回调、`api.set_close_callbacks` 注入的 `hide_cb`、`_on_closing` 都指向它们）：
+
+| 函数 | 触发 | 行为 |
+|---|---|---|
+| `_hide_to_tray()` | 托盘「最小化」/「后台运行」/ `close_action=background` | `hide()`；成功且轻量模式开启时再释放界面 |
+| `_show_window()` | 托盘「显示主窗口」/ 关闭后再次打开 | `show()` → `restore()` → 恢复界面 |
+| `_quit_app()` | 托盘「退出」/ 关闭框选「直接退出」 | `_shutdown_services()` → `window.destroy()` |
+
+**菜单项与「关闭按钮」共用同一套函数**，所以「关闭窗口时后台运行」和「点托盘最小化」走的是同一条
+路径——轻量模式的释放也因此对两者同时生效。
+
+**轻量模式（`settings.light_mode`）**。开启后，隐藏窗口时额外调用 `_release_page()`：
+`Window.load_html(<占位页>)` 把当前文档换成一张几十行的静态 HTML，**释放整个 SPA 的 DOM / JS 堆 /
+组件实例**；再次显示时 `_restore_page()` 用 `Window.load_url(_app_url)` 重新加载前端。
+
+三条关键约束：
+
+1. **只换文档，不销毁窗口**。销毁最后一个 pywebview 窗口会直接结束 GUI 主循环（winforms 后端的
+   `Application.Exit()`），托盘常驻就无从谈起——所以用 `load_html`（`NavigateToString`）而非 `destroy`。
+2. **`_app_url` 必须是 `file://` 形式**，绝不能把裸路径递给 `load_url`。pywebview 的
+   `is_local_url()`（`webview/util.py`）把「非 http(s)/file 的字符串」一律当作需要内置 HTTP 服务
+   的目标，会现起一个 `http://127.0.0.1:<随机端口>` 来托管它——origin 就从 `file://` 变成 `http://`，
+   与首次加载不是同一个源，**localStorage 当场清零**（主题、列顺序、目录树展开状态全丢）。转成
+   `file://` 后 `is_local_url` 返回 `False`，`load_url` 原样导航过去，origin 不变。
+   转换由 `_to_url()` 负责，`main()` 里同时保留裸路径（给 `create_window`，行为不变）与
+   `_app_url`（URL 形式，给恢复用）。
+3. **释放期间 `push_event` 直接丢弃**（`api.mark_page_released(True)`）。占位页上没有
+   `window.pywebview`，任何 `evaluate_js` 必然抛错；不拦的话每推一次事件就写一条 warning，把日志刷满。
+
+**恢复失败不清标志**：`_restore_page()` 里 `load_url` 抛异常时保持 `_page_released = True`，占位页上
+已写明「从托盘菜单选择打开窗口」，用户再点一次即重试。
+
+**已知边角**：`single_instance.focus_existing()` 用裸 Win32 `FindWindowW` + `ShowWindow(SW_RESTORE)`
+在**第二个进程**里把窗口拉起来，绕过了 `_show_window`，因此被释放的窗口可能直接显示占位页而不恢复。
+pywebview 没有「再次显示」事件可挂（`Form.Shown` 只触发一次，`Activated` 不映射任何事件），所以
+兜底是**占位页自己写明怎么恢复**。（理论上可另起 Win32 `IsWindowVisible` 轮询，未做。）
+
+---
+
 ## 3. 数据流
 
 ### 3.1 添加凭据（自动验证）

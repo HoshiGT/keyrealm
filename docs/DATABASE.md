@@ -45,6 +45,7 @@ CREATE TABLE settings (
 | `verify_timeout` | 验证请求超时秒数（5–300，空 = 默认 20） | `"20"` |
 | `close_action` | 关闭主窗口行为（ask / quit / background） | `"ask"` |
 | `auto_lock_minutes` | 空闲自动锁定的分钟数（0 = 关闭；仅允许 0/1/5/10/15/30/60，其余按 0 处理） | `"0"` |
+| `light_mode` | 轻量模式（"1" = 最小化到托盘时释放界面文档；其余值一律按关闭处理） | `"0"` |
 
 ---
 

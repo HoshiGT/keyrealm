@@ -204,6 +204,13 @@ class VaultApi:
     def touch_activity(self):
         return api.touch_activity()
 
+    # ── 轻量模式 ──────────────────────────────────────────
+    def get_light_mode(self):
+        return api.get_light_mode()
+
+    def set_light_mode(self, enabled: bool):
+        return api.set_light_mode(enabled)
+
     # ── 验证代理 ──────────────────────────────────────────
     # ── 验证代理（注册表） ─────────────────────────────────
     def list_proxies(self):
@@ -263,6 +270,15 @@ class VaultApi:
 _window: webview.Window | None = None
 _quitting = False
 
+# 轻量模式：界面文档已被释放（换成了占位页）时置 True。见 _release_page / _restore_page。
+_page_released = False
+_page_released_lock = threading.Lock()
+
+# 启动时实际交给 pywebview 的前端 URL。轻量模式恢复时**原样**重载它：
+# 恢复必须回到与首次加载完全相同的 URL，否则 origin 一变，localStorage 里的
+# 主题、列顺序、目录树展开状态就全丢了。
+_app_url = ""
+
 
 def _get_frontend_path() -> str:
     """返回前端 dist/index.html 路径。
@@ -277,6 +293,21 @@ def _get_frontend_path() -> str:
     return str(root / "frontend" / "index.html")
 
 
+def _to_url(path_or_url: str) -> str:
+    """把窗口入口转成可以安全交给 Window.load_url 的 URL。
+
+    ⚠ 绝不能把本地路径裸传给 load_url。pywebview 把"非 http(s)/file 的字符串"
+    都当作需要内置 HTTP 服务的目标（webview/util.py:is_local_url），会现起一个
+    http://127.0.0.1:<随机端口> 来托管它——origin 就从 file:// 变成了 http://，
+    与首次加载不是同一个源，localStorage 当场清零（主题、列顺序全没）。
+    转成 file:// 后 is_local_url 返回 False，load_url 会原样导航过去，origin 不变。
+    """
+    path = Path(path_or_url)
+    if path.exists():
+        return path.as_uri()
+    return path_or_url  # 已是 http(s):// 的地址原样使用
+
+
 def _shutdown_services():
     """停止后台服务并标记为正在退出（供"直接退出"路径共用的清理）。"""
     global _quitting
@@ -289,9 +320,98 @@ def _shutdown_services():
 
 
 def _hide_to_tray():
-    """隐藏窗口到系统托盘（后台运行）。**不弹任何提示**——缩到托盘是常规操作，弹一次反而吵。"""
-    if _window:
+    """隐藏窗口到系统托盘（后台运行）。**不弹任何提示**——缩到托盘是常规操作，弹一次反而吵。
+
+    轻量模式开启时顺带释放界面文档（见 _release_page）：托盘常驻期间前端不再占内存。
+    """
+    if _window is None:
+        return
+    try:
         _window.hide()
+    except Exception as e:
+        # 隐藏失败还去释放页面的话，用户会看到占位页却不知道为什么——这里直接放弃释放。
+        logger.get_logger("main").warning("隐藏窗口失败，跳过界面释放：%s", e)
+        return
+    if api.read_light_mode():
+        _release_page()
+
+
+# 轻量模式释放后显示的那一页。正常流程下用户看不到它（窗口是隐藏的），
+# 只有在"界面已被释放、窗口却被外部直接拉起"（例如重复启动 exe 触发
+# single_instance.focus_existing 的 ShowWindow）时才会露面，所以必须写明怎么恢复。
+_LIGHT_PLACEHOLDER = """<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Credential Vault</title>
+<style>
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    background: #09090b; color: #a1a1aa;
+    font: 14px/1.8 "Microsoft YaHei", system-ui, sans-serif;
+  }
+  main { text-align: center; padding: 0 24px; }
+  h1 { margin: 0 0 10px; font-size: 15px; font-weight: 600; color: #e4e4e7; }
+  p { margin: 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>轻量模式：界面已释放</h1>
+  <p>窗口最小化期间前端不占用内存。</p>
+  <p>从托盘菜单选择「打开窗口」即可恢复界面。</p>
+</main>
+</body>
+</html>
+"""
+
+
+def _release_page():
+    """轻量模式：把界面换成占位页，释放前端文档（DOM / JS 堆 / 各组件实例）。
+
+    调用前窗口必须已经隐藏（_hide_to_tray 负责），否则用户会看到换页过程。
+    只换文档、不销毁窗口：销毁最后一个 pywebview 窗口会直接结束 GUI 主循环，
+    整个程序就退出了（winforms 后端的 Application.Exit），托盘常驻无从谈起。
+    """
+    global _page_released
+    with _page_released_lock:
+        if _page_released or _window is None:
+            return
+        if not _app_url.startswith(("file://", "http://", "https://")):
+            # 拿不准怎么退回来就别释放：宁可不省这点内存，也不能把用户关在一个
+            # 恢复不回来的占位页上。见 _to_url。
+            logger.get_logger("main").warning(
+                "轻量模式：前端入口 %r 不是 file:// 或 http(s)://，本次不释放界面", _app_url
+            )
+            return
+        try:
+            _window.load_html(_LIGHT_PLACEHOLDER)
+        except Exception:
+            logger.get_logger("main").exception("轻量模式释放界面失败，保持原页面")
+            return
+        _page_released = True
+        api.mark_page_released(True)
+
+
+def _restore_page():
+    """轻量模式：重新加载前端入口。必须在窗口已显示之后再调用（load_url 需要窗口可见）。
+
+    用 _app_url（file:// 形式）而不是裸路径，原因见 _to_url 的注释。
+    """
+    global _page_released
+    with _page_released_lock:
+        if not _page_released or _window is None:
+            return
+        try:
+            _window.load_url(_app_url)
+        except Exception:
+            # 失败就保持 _page_released=True：占位页上已写明"从托盘打开窗口"作为兜底，
+            # 下次再从托盘点一次会重试。
+            logger.get_logger("main").exception("轻量模式恢复界面失败")
+            return
+        _page_released = False
+        api.mark_page_released(False)
 
 
 def _on_closing():
@@ -319,9 +439,14 @@ def _on_closing():
 
 
 def _show_window():
-    if _window:
-        _window.show()
-        _window.restore()
+    """把窗口从托盘调出来（托盘菜单 / 关闭后再次打开）。"""
+    if _window is None:
+        return
+    # 顺序：先显示、后恢复页面。load_url 要求窗口已显示；万一重载失败，
+    # 用户至少能看到窗口与占位页上的提示，而不是一个"看起来没反应"的程序。
+    _window.show()
+    _window.restore()
+    _restore_page()
 
 
 def _lock_vault():
@@ -335,7 +460,7 @@ def _quit_app():
 
 
 def main():
-    global _window
+    global _window, _app_url
 
     # 单实例闸门：已经有实例在跑时，把它的窗口拉到前台然后自己退出，而不是再起一套。
     # 放在最前面（日志都还没配），因为重复启动不该产生任何副作用（连日志都不写）。
@@ -379,10 +504,12 @@ def main():
     # MCP 不随应用自动启动（避免每次启动都监听 8765 端口），
     # 由用户在「MCP 设置」页手动开启；开启后最小化到托盘仍持续运行。
 
-    # 创建窗口
+    # 创建窗口。窗口入口的 file:// 形式另存一份：轻量模式恢复界面时用它重载（见 _restore_page）。
+    _frontend = _get_frontend_path()
+    _app_url = _to_url(_frontend)
     _window = webview.create_window(
         title="Credential Vault",
-        url=_get_frontend_path(),
+        url=_frontend,
         js_api=VaultApi(),
         width=1200,
         height=800,

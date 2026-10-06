@@ -57,6 +57,18 @@ def set_window(window):
     _window = window
 
 
+# 轻量模式：界面文档已被释放（由 main.py 换成占位页）期间置 True。
+# 那时 evaluate_js 必然落在占位页上、必然报错，事件直接丢掉，
+# 免得「释放期间每推一次事件就写一条 warning」把日志刷满。
+_page_released = False
+
+
+def mark_page_released(released: bool):
+    """由 main.py 在释放 / 恢复界面文档时调用（见 main._release_page）。"""
+    global _page_released
+    _page_released = bool(released)
+
+
 # 关闭窗口行为回调（由 main.py 注入）：分别执行"直接退出"与"隐藏到托盘"
 _close_quit_cb = None
 _close_hide_cb = None
@@ -82,7 +94,7 @@ def _set_key(key: Optional[bytes]):
 
 def push_event(event_name: str, detail: Any = None):
     """向前端推送自定义事件"""
-    if _window is None:
+    if _window is None or _page_released:
         return
     try:
         payload = json.dumps(detail or {}, ensure_ascii=False, default=str)
@@ -963,7 +975,17 @@ def delete_schedule(schedule_id: int) -> dict:
 # ── Tray ──────────────────────────────────────────────────
 
 def minimize_to_tray() -> dict:
-    """最小化到托盘。**不弹系统通知**（缩到托盘是常规操作，每次提示只是噪音）。"""
+    """最小化到托盘。**不弹系统通知**（缩到托盘是常规操作，每次提示只是噪音）。
+
+    有注入的隐藏回调时优先走回调（main._hide_to_tray），而不是在这里直接 hide：
+    "隐藏"在轻量模式下还附带释放界面文档，那段逻辑只应该在主程序一侧有一份。
+    """
+    if _close_hide_cb is not None:
+        try:
+            _close_hide_cb()
+        except Exception as e:
+            _log.warning("隐藏窗口失败: %s", e)
+        return {"ok": True}
     if _window:
         try:
             _window.hide()
@@ -1027,6 +1049,34 @@ def confirm_close_action(action: str, remember: bool = False) -> dict:
         if _close_hide_cb:
             _close_hide_cb()
     return {"ok": True, "action": action}
+
+
+# ── 轻量模式 ──────────────────────────────────────────────
+# "最小化到托盘时释放界面文档"以省内存。开关存 settings 表键 light_mode，默认关闭。
+# 释放/恢复的实际动作在 main.py（那边才有 window 引用）；这里只负责读写设置。
+
+LIGHT_MODE_KEY = "light_mode"
+
+
+def read_light_mode() -> bool:
+    """读轻量模式开关（供 main.py 在隐藏窗口前判断）。值异常时按"关闭"处理。"""
+    return (db.get_setting(LIGHT_MODE_KEY, "0") or "").strip() == "1"
+
+
+def get_light_mode() -> dict:
+    """返回轻量模式开关（供"系统设置"展示）。"""
+    return {"enabled": read_light_mode()}
+
+
+def set_light_mode(enabled) -> dict:
+    """持久化轻量模式开关。
+
+    只改设置，不动当前已释放/未释放的页面——下次最小化到托盘时生效。
+    """
+    value = bool(enabled)
+    db.set_setting(LIGHT_MODE_KEY, "1" if value else "0")
+    _log.info("轻量模式已%s", "开启" if value else "关闭")
+    return {"ok": True, "enabled": value}
 
 
 # ── 空闲自动锁定 ──────────────────────────────────────────

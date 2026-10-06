@@ -220,6 +220,7 @@ function createState() {
     logLevel: 'INFO',
     closeAction: 'ask',
     autoLockMinutes: 0,
+    lightMode: false,
     logs: [
       { level: 'INFO', text: logLine('INFO', 'main', '应用启动（frozen=False，日志级别=INFO，数据目录=…）', minutesDate(32)) },
       { level: 'DEBUG', text: logLine('DEBUG', 'backend.scheduler', '调度器已启动，加载 2 个计划', minutesDate(32)) },
@@ -739,6 +740,18 @@ export function createMockApi() {
 
     async touch_activity() {
       return { ok: true }
+    },
+
+    // ── 轻量模式 ──────────────────────────────────────────
+    async get_light_mode() {
+      await delay(40)
+      return { enabled: state.lightMode }
+    },
+
+    async set_light_mode(enabled) {
+      await delay(40)
+      state.lightMode = Boolean(enabled)
+      return { ok: true, enabled: state.lightMode }
     },
 
     // ── 简易操作（插件可选能力）────────────────────────────
