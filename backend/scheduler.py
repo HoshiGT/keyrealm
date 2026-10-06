@@ -253,6 +253,18 @@ def batch_verify(
 
 def _run_schedule(schedule: dict):
     """执行定时任务"""
+    # 数据库锁定 → 整轮跳过（早退，连线程池都不进）。
+    # 不拦的话每条凭据都会各自进 _verify_single_credential，在 `_get_key() is None` 那一步
+    # 返回「保险库已锁定，无法验证」，最后汇总成一行「异常 N」—— 日志里分不清是「锁着」
+    # 还是「这 N 条真出错了」，而且白占并发。锁定是全局前置条件，在整轮入口判一次即可。
+    # （回调未注入时 _get_key() 也为 None，但那种情况只出现在调度器脱离 api 单独启动时，
+    #  拿不准就别拦，让逐条验证各自报错。界面提示见 Tasks.vue「数据库锁定期间…」。）
+    if _get_key_callback is not None and _get_key() is None:
+        _log.info("定时计划 #%s「%s」跳过：数据库已锁定，本轮不执行验证",
+                  schedule.get("id"), schedule.get("name", ""))
+        _mark_ran(schedule)
+        return
+
     scope = schedule.get("target_scope", "all")
     target_id = schedule.get("target_id")
     if scope == "credentials":
@@ -274,7 +286,15 @@ def _run_schedule(schedule: dict):
             credential_type=target_id if scope == "type" else None,
             trigger_type="schedule",
         )
-    # 跳过也算「运行过」：否则界面上会一直停在「从未运行」，而 next_run_at 却在正常往前走。
+    _mark_ran(schedule)
+
+
+def _mark_ran(schedule: dict):
+    """记一次「本计划到点跑过了」。
+
+    跳过也算「运行过」：否则界面上会一直停在「从未运行」，而 next_run_at 却在正常往前走。
+    字段叫 last_run_at 不是 last_verified_at —— 触发器确实响了，只是这一轮没验证。
+    """
     db.update_schedule(schedule["id"], last_run_at=datetime.now(timezone.utc).isoformat())
 
 
