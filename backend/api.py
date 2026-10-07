@@ -369,6 +369,17 @@ def delete_credential(credential_id: int) -> dict:
     return {"ok": True}
 
 
+def delete_credentials(credential_ids: list) -> dict:
+    """批量删除（单事务），事件只推一次。
+
+    与单条删除一致**不查 key**：UI 侧本就在解锁态之后才可能点到，且逐条删除同样不查。
+    返回 `deleted` 是**实际**删除条数（可能小于请求数——期间有条目已被别处删掉）。
+    """
+    deleted = db.delete_credentials(credential_ids)
+    push_event("vault:credentials_changed")
+    return {"ok": True, "deleted": deleted}
+
+
 def verify_credential(credential_id: int) -> dict:
     key = _get_key()
     if key is None:

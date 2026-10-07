@@ -162,6 +162,8 @@ export const api = {
       payload.data ?? null,
     ),
   deleteCredential: (id) => call('delete_credential', id),
+  // 批量删除：一次 IPC 删一批（后端单事务）。pywebview 位置参数，ids 传数组。
+  deleteCredentials: (ids) => call('delete_credentials', ids),
   verifyCredential: (id) => call('verify_credential', id),
   listCredentialActions: (id) => call('list_credential_actions', id),
   // 该凭据「真正能用」的操作（插件可选能力）；{available, note, error}

@@ -425,6 +425,20 @@ export function createMockApi() {
       return { ok: true }
     },
 
+    // 与真实后端签名保持一致：delete_credentials(ids) → { ok, deleted }
+    async delete_credentials(ids) {
+      await delay(140)
+      requireUnlocked()
+      const wanted = new Set((Array.isArray(ids) ? ids : []).map(Number))
+      if (!wanted.size) return { ok: true, deleted: 0 }
+      const before = state.credentials.length
+      state.credentials = state.credentials.filter((item) => !wanted.has(item.id))
+      const deleted = before - state.credentials.length
+      recomputeCounts()
+      emit('vault:credentials_changed', {})
+      return { ok: true, deleted }
+    },
+
     async verify_credential(id) {
       await delay(500)
       requireUnlocked()

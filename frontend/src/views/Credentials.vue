@@ -129,6 +129,68 @@ async function startPickedBatch() {
   }
 }
 
+// ── 批量删除：与「批量验证」同一套勾选对话框，但默认**全不选**。
+// 破坏性操作不该替用户预勾选——省下的一次点击，代价可能是误删一整批。
+const deletePickVisible = ref(false)
+const deletePickIds = ref([])
+const deleteStarting = ref(false)
+
+// 勾选范围是 vaultStore.credentials（当前树 / 筛选过滤后的整批，与批量验证同源，天然跨分页）
+const deleteAllChecked = computed(
+  () =>
+    vaultStore.credentials.length > 0 &&
+    deletePickIds.value.length === vaultStore.credentials.length,
+)
+const deleteIndeterminate = computed(
+  () =>
+    deletePickIds.value.length > 0 &&
+    deletePickIds.value.length < vaultStore.credentials.length,
+)
+
+function openBatchDelete() {
+  // 手动批量验证进行中整页互斥（按钮也已置灰，这里防的是快捷键 / 程序化入口）
+  if (batchRunning.value) return
+  deletePickIds.value = []
+  deletePickVisible.value = true
+}
+
+function onDeletePickAll(checked) {
+  deletePickIds.value = checked ? vaultStore.credentials.map((c) => c.id) : []
+}
+
+async function startBatchDelete() {
+  const ids = [...deletePickIds.value]
+  if (!ids.length) return
+  // 二次确认：对话框里已有一条 warning，这里再问一次（与单条删除同一句式的确认）。
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${ids.length} 条凭据吗？该操作不可撤销。`,
+      '批量删除凭据',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+  deleteStarting.value = true
+  try {
+    const res = await vaultStore.deleteCredentials(ids)
+    // 后端返回的是**实际**删除条数（期间有条目被别处删掉时会小于所选数），以它为准不谎报
+    const deleted = res && res.deleted != null ? res.deleted : ids.length
+    ElMessage.success(`已删除 ${deleted} 条凭据`)
+    deletePickVisible.value = false
+    deletePickIds.value = []
+  } catch (err) {
+    ElMessage.error(err.message || '批量删除失败')
+  } finally {
+    deleteStarting.value = false
+  }
+}
+
 // ── 简易操作（插件可选能力：简单对话 / 表单 / 列表）──
 /**
  * 对话框的初始状态只在这里定义一份。
@@ -1663,6 +1725,7 @@ onMounted(async () => {
         @click="load"
       >刷新</el-button>
       <el-button :icon="Refresh" :loading="batchStarting" :disabled="batchRunning" @click="openBatchPick">批量验证</el-button>
+      <el-button type="danger" plain :icon="Delete" :disabled="batchLocked" @click="openBatchDelete">批量删除</el-button>
       <el-button type="primary" :icon="Plus" :disabled="batchLocked" @click="openCreate">添加凭据</el-button>
     </div>
 
@@ -1989,6 +2052,60 @@ onMounted(async () => {
         <el-button @click="batchPickVisible = false">取消</el-button>
         <el-button type="primary" :disabled="!batchPickIds.length || batchRunning" @click="startPickedBatch">
           验证 {{ batchPickIds.length }} 条
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="deletePickVisible"
+      title="批量删除"
+      width="560px"
+      :close-on-click-modal="false"
+    >
+      <div class="pick-toolbar">
+        <el-checkbox
+          :model-value="deleteAllChecked"
+          :indeterminate="deleteIndeterminate"
+          :disabled="deleteStarting"
+          @change="onDeletePickAll"
+        >全选</el-checkbox>
+        <span class="pick-count text-muted">
+          已选 {{ deletePickIds.length }} / {{ vaultStore.credentials.length }}
+        </span>
+      </div>
+      <el-alert
+        class="del-warn"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="删除后不可撤销，请确认后再操作"
+      />
+      <div class="pick-list">
+        <el-checkbox-group v-model="deletePickIds">
+          <!-- 与批量验证不同：这里**不置灰任何行**。删除是纯本地数据操作，
+               插件禁用与否都不影响能否删掉这条凭据。 -->
+          <div v-for="row in vaultStore.credentials" :key="row.id" class="pick-row">
+            <el-checkbox :value="row.id" :disabled="deleteStarting">
+              <span class="pick-name">{{ row.name }}</span>
+              <span class="pick-type text-muted">{{ typeLabel(row.credential_type) }}</span>
+            </el-checkbox>
+          </div>
+        </el-checkbox-group>
+        <el-empty
+          v-if="!vaultStore.credentials.length"
+          description="暂无可删除的凭据"
+          :image-size="60"
+        />
+      </div>
+      <template #footer>
+        <el-button @click="deletePickVisible = false">取消</el-button>
+        <el-button
+          type="danger"
+          :loading="deleteStarting"
+          :disabled="!deletePickIds.length"
+          @click="startBatchDelete"
+        >
+          删除 {{ deletePickIds.length }} 条
         </el-button>
       </template>
     </el-dialog>
@@ -2529,6 +2646,10 @@ onMounted(async () => {
 
 .pick-count {
   font-size: 12px;
+}
+
+.del-warn {
+  margin-bottom: 8px;
 }
 
 .pick-options {

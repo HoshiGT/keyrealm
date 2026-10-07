@@ -69,6 +69,9 @@ class VaultApi:
     def delete_credential(self, credential_id: int):
         return api.delete_credential(credential_id)
 
+    def delete_credentials(self, credential_ids):
+        return api.delete_credentials(credential_ids)
+
     def verify_credential(self, credential_id: int):
         return api.verify_credential(credential_id)
 

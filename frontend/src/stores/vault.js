@@ -157,6 +157,15 @@ export const useVaultStore = defineStore('vault', {
       return result
     },
 
+    async deleteCredentials(ids) {
+      const list = (ids || []).map(Number)
+      const result = await api.deleteCredentials(list)
+      const remove = new Set(list)
+      this.credentials = this.credentials.filter((item) => !remove.has(item.id))
+      await Promise.all([this.fetchGroups(), this.fetchPlugins()])
+      return result
+    },
+
     async verifyCredential(id) {
       const result = await api.verifyCredential(id)
       const target = this.credentials.find((item) => item.id === id)
