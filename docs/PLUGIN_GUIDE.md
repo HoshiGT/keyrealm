@@ -320,10 +320,18 @@ def proxy():
 | 使用率（plan/额度制） | `{"usage_rate": 0.52}` | 使用率 52%（已用 ÷ 总额度，按服务适配） |
 | 其它可读字段 | 如 `organization` / `domain_count` / `account_id` | `组织 Xxx` / `域名数 1` / `账号 ID …` |
 
-- **LLM 类**：附加信息只展示**余额**；无余额概念的 plan 账号展示**使用率**。余额由**各厂商自己的 `plugin.py`** 按各自的余额端点 best-effort 查询（金额合理性闸见下条）——目前 DeepSeek / Moonshot 有余额接口，OpenRouter 用 `/credits` 计算余额与使用率；OpenAI / Anthropic / Gemini / 智谱等多数无公开余额接口，附加信息为空。
+- **LLM 类**：附加信息只展示**余额**；无余额概念的 plan 账号展示**使用率**。余额由**各厂商自己的 `plugin.py`** 按各自的余额端点 best-effort 查询（金额合理性闸见下条）——目前 DeepSeek / Moonshot 有余额接口，OpenRouter 用 `/credits` 计算余额与使用率；OpenAI 的 ChatGPT 登录态模式经实验性端点 `GET /backend-api/wham/usage` 读 5 小时窗的 `used_percent` 作为 `usage_rate`（付费套餐才查，取不到就不显示）；Anthropic / Gemini / 智谱等多数无公开余额接口，附加信息为空。
 - **金额合理性闸**：one-api / new-api 类中转站在「不限额」时会把硬限额（`hard_limit_usd`）填成 `99999999.99`、`1e8` 这类哨兵值，拿它去减消耗就会得出 `99999996.47` 这种假余额。所有要展示的金额都必须先过 `llm_common.plausible_amount()`（有限数值且绝对值 < `AMOUNT_LIMIT = 1e7`），不通过就**宁可不显示**。新增带余额的厂商/中转插件时务必一并加这道闸。
 - **中转站**：`openai_compatible`（通用 OpenAI 兼容）与 `newapi`（New API 中转站专用）都走 one-api 兼容的 `/dashboard/billing/subscription` + `/dashboard/billing/usage`。New API 的 `hard_limit_usd` 是**令牌总额度（剩余 + 已用）**，`total_usage` 单位是**美分**，故 `余额 = hard_limit_usd − total_usage / 100`；命中哨兵值则按「不限额度」处理，改为展示 `套餐 不限额度` 而非数字。
-- 无信息量的字段（`object` / `type` / `auth_mode` / 原始时间戳等）不展示，前端 `extraInfo()` 统一处理。
+- **多条 = 多行**：前端把 `account_info` 摊成**每个字段一行**（不再「最多 2 条、用 ` · ` 拼一行」）。
+  所以**每多回一个键，列表里就多一行**——只想要一行的信息，就只回一个键。
+- **值是对象/数组的键前端会跳过**（渲染不出来）。想把数组里的东西展示出来，请在插件里**先摊平成标量**
+  （如 Google 的授权域只回 `domain_count`，而不是把 `authorized_domains` 塞进去）。
+- **没有中文标签的键会显示原始英文键**（如 `project_id proj-1`）。新增可读字段时，
+  顺便往 `frontend/src/views/Credentials.vue` 的 `ACCOUNT_INFO_LABELS` 补一条中文标签。
+- 无信息量的字段（`object` / `type` / `auth_mode` / 原始时间戳等）不展示，前端统一处理。
+- **两个"只留账号"的现成范例**：`cloud/aws` / `cloud/aliyun` / `cloud/tencentcloud` / `cloud/huaweicloud`
+  的 `verify` 都只回 `{"account_id": …}` 一项——ARN / UserId / domain_id 这类挪进 `whoami` 操作里展示。
 
 ---
 
@@ -606,7 +614,7 @@ def get_display_summary(data):
 | `id` / `name` | 全部 | 标识与显示名（`run_action` 按 id 分发） |
 | `kind` | 全部 | **前端渲染方式：`chat`（对话气泡）/ `form`（动态表单）/ `list`（表格 + 行内按钮）** |
 | `group` / `order` / `description` | 全部 | 可选。多个操作时弹选择菜单，按 `group` 分组、`order` 排序（小的在前） |
-| `fields` | `form` / `list` | 输入项：`[{key,label,type(text/password/select/textarea/number),default,placeholder,options,required}]`。**`list` 也能带 fields**：点「拉取/刷新」时把表单值作为 `params` 传进 `run_action` |
+| `fields` | `form` / `list` | 输入项：`[{key,label,type(text/password/select/textarea/number),default,placeholder,options,required}]`。**`list` 也能带 fields**：点「拉取/刷新」时把表单值作为 `params` 传进 `run_action`。**`required: true` 会在操作表单里渲染红色星号并在提交前校验**（空着点提交会被拦下，`form` 与 `list` 两处同规则） |
 | `submit` | `form` / `list` | 提交/刷新按钮文案（默认「运行」） |
 | `write` | 全部 | 可选布尔，声明为**会改动远端数据**。前端在**提交前**弹二次确认（只列非敏感字段值） |
 | `model` | `chat` | 默认模型名（用户可改） |
@@ -957,15 +965,20 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
 ——按钮时有时无会让同一列里每行的按钮位置都对不齐。下表只列**真有操作**的插件。
 
 - **llm**：18 个厂商 —— 简单对话（`chat`，流式）；其中 **openai** 另有「认证方式」下拉，
-  选「ChatGPT 登录态（Codex）」时改为「登录态详情」（`token_info`，只读解析本地 JWT，**不回显任何令牌**）；
-  `codebuddy` 是纯登录态类凭据，同样只有 `token_info`。
-  > 登录态**按字段分开填**（`access_token` 必需；`account_id` / `id_token` / `refresh_token` 可选），
+  选「ChatGPT 登录态（Codex）」时除「简单对话」外还提供「登录态详情」（`token_info`，只读解析本地
+  JWT，**不回显任何令牌**）；`codebuddy` 是纯登录态类凭据，同样只有 `token_info`。
+  > 登录态**按字段分开填**（`access_token` 必需；`id_token` / `refresh_token` 可选），
   > 不要求粘贴整份 `~/.codex/auth.json`——既不便于维护，也会把不必要的字段一起存下来。
+  > 联网头 `chatgpt-account-id` 不单列字段，一律从 access_token 的 JWT claim 兜底。
   > 字段按模式显隐（`show_if`）：选 API Key 时只看到 API Key 那组，选 ChatGPT 登录态时只看到登录态那组。
-  > **只读校验绝不换令牌**（只有 `GET /v1/models` 与 `GET /backend-api/me` 两个只读请求）。
+  > **只读校验绝不换令牌**（`GET /v1/models`、`GET /backend-api/me` 与 best-effort 的
+  > `GET /backend-api/wham/usage` 都是只读；后者读付费套餐的额度窗，取不到就不显示「使用率」一行）。
   > 填了 `refresh_token` 时会多出「刷新 access_token」这个**手动**操作：它 `write: true`、
   > 带自定义确认文案，成功后新值经 `updated_data` **自动写回本凭据**——因为上游换令牌会**轮换**
   > refresh_token，不写回就会让本机 CLI 与库里的登录态永久错位。
+  > codex 模式的「简单对话」走 chatgpt.com 的**非公开实验端点** `POST /backend-api/codex/responses`
+  > （SSE 流式；`input` 必须是数组、`instructions` 非空、`stream` 恒 true）。该端点与 `/me` 同源，
+  > 403 多为人机挑战，**不判凭据失效**；模型名会变，故用内置静态列表 + 允许手输覆盖。
   >
   > `codebuddy`（纯登录态类）同样是分字段填写：**必需** `access_token`、`uid`（探针请求头
   > `X-User-Id`）；**可选** `refresh_token`（只存不用）、`enterprise_id`、`domain`
@@ -977,12 +990,23 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
   - duckdns —— 当前解析（`list`：A / TXT 两行）→ 行内「修改」下钻到「更新解析」（`write`），
     另有「清除 TXT」（`write`）。DuckDNS 没有域名列表接口（一个 token 对应自有子域名），
     查询经 Cloudflare DoH；更新/清除走其 `update` 接口
-- **cloud**：aliyun / tencentcloud 同构 ——
-  `whoami`（身份 + **探测到的权限**）· `list_regions`（**地域列表**，含中文名）→ 行内「实例」下钻
-  `list_instances`（云主机，`region` 可预填可手填）· `list_buckets`（**对象存储**桶列表）→
-  行内「预览」下钻 `list_objects`（**区分文件夹前缀与文件**，可继续进入前缀）；
-  文件行「下载」（`save_to` 单对象）、文件夹行「打包下载」（`download_prefix`，本地打成 zip 后 `save_to`，
-  对象数/总字节有上限，超出会如实报错而非静默截断）
+- **cloud**：aliyun / tencentcloud / aws / huaweicloud **四家同构** ——
+  `whoami`（身份 + **探测到的权限**）· `list_regions`（**地域列表**，含中文名；华为用**内置静态表**，
+  因为它的区域列表接口要 token）→ 行内「实例」下钻 `list_instances`（云主机，`region` 可预填可手填）·
+  `list_buckets`（**对象存储**桶列表）→ 行内「预览」下钻 `list_objects`（**区分文件夹前缀与文件**，
+  可继续进入前缀）；文件行「下载」（`save_to` 单对象）、文件夹行「打包下载」（`download_prefix`，
+  本地打成 zip 后 `save_to`，对象数/总字节有上限，超出会如实报错而非静默截断）。
+  四家的「附加信息」都只回 `{"account_id": …}`（ARN / UserId / domain_id 这类挪进 `whoami`）。
+  **`region` 留空 = 并发枚举全部地域**，结果行**带「区域」列**——把「这批资产分布在哪些地域」一次看全。
+  枚举在**插件内部**并发完成（`list` 类操作**没有**进度条通道，见 `docs/FRONTEND.md`），前端只转圈；
+  单个地域失败（限流 / 无权限）**不毁整张表**，汇总进 `empty_text` 或末尾一行备注。
+  > **每家的端点规则不同，别互相照抄**：阿里云有相当一部分地域**不认**全局端点
+  > `ecs.aliyuncs.com`，必须用它自己 `DescribeRegions` 返回的 `RegionEndpoint`
+  > （实测 33 个地域里 14 个会报 `The specified endpoint cant operate this region`）；
+  > AWS 是 `ec2.{region}.amazonaws.com`；华为 ECS 要先有 `project_id`（凭据里填了就用，
+  > 没填则**只读**查 `GET /v3/auth/projects` 推断，无副作用）；腾讯云按区域拼即可。
+  > **华为 OBS 的 `ListBuckets` 与地域无关**（任何地域的 endpoint 都返回全部区域的桶，
+  > 返回字段里也**没有** `ExtranetEndpoint`），所以桶的地域直接取 `Location`、端点在插件里自拼。
 - **dev**：github —— 账号信息（含 `X-OAuth-Scopes` 权限）· **仓库列表 → 行内「打包下载」（`save_to`，弹另存为）**
   与行内「详情」下钻；huggingface / wandb —— 查看账号信息
 - **im**：feishu —— 应用信息与权限 · 机器人信息 · 用户详情（按 `open_id` 或邮箱）· 群组 · 知识库 · 云文档；
@@ -991,16 +1015,28 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
   CDN 密文本地 AES 解密后经 `save_to` 写盘）
 - **exchange**：okx（账户余额）· binance（账户信息、交易所时间）
 - **api**：coze（工作区列表）· tavily（执行搜索）· firecrawl（抓取网页）·
-  metaso（搜索（`list`，行内「阅读」下钻）· 网页解析）
+  metaso（搜索（`list`，行内「阅读」下钻）· 网页解析）·
+  dify（应用信息 · 应用参数 · 对话（`chat`，流式）· 运行工作流（`write`）——key 是**应用级**的，
+  能看到什么由该应用的 `mode` 决定：`capabilities()` 按 `/info` 的 mode 显隐，
+  workflow 应用不出现「对话」、普通对话应用不出现「运行工作流」）
 - **mail**：smtp —— 收件箱（`list`，可填拉取封数/文件夹/IMAP 主机与端口）→ 行内「看正文」下钻
+  > **网易 163 / 126 要求客户端在登录后、`EXAMINE`/`SELECT` 之前先按 RFC 2971 发 `ID` 声明身份**，
+  > 否则 `select` 会回 `Unsafe Login. Please contact kefu@188.com`。实现见 `_send_imap_id()`：
+  > 用 `conn.xatom("ID", ...)`（CPython 的 `imaplib.Commands` 里**没有** `ID`，直接
+  > `_simple_command` 在 AUTH 态会抛 `command ID illegal in state AUTH`），
+  > 且**尽力而为、失败放过**（服务器 CAPABILITY 里没有 `ID` 就跳过，发送异常一律吞掉——不引入新失败点）。
+  > 2026-10-07 用真实 163 与 126 邮箱 A/B 验过：改动前必现该错，改动后正常打开 INBOX。
 
 > 以上按**声明了操作（`actions()`）**的插件列举。`api/google_api_credentials`（原 `api/app_secret`）、
-> `api/dify`、`cloud/aws`、`cloud/gcp`、`cloud/huaweicloud`、`cloud/firebase`、`im/telegram_apihash`、
-> `im/wecom`、`im/dingtalk`（后两者拆分自原 `im/webhook`）、`api/gateway`
-> 目前只做凭据验证，未声明任何「操作」。
+> `cloud/gcp`、`im/telegram_apihash`、`im/wecom`、`im/dingtalk`（后两者拆分自原 `im/webhook`）、
+> `api/gateway` 目前只做凭据验证，未声明任何「操作」。
+> （`cloud/aws`、`cloud/huaweicloud`、`cloud/firebase`、`api/dify` 与本轮已补上操作，见上文。）
 
-> **按权限显隐**：aliyun / tencentcloud / feishu / github 实现了 `capabilities()`，没权限的操作不会出现在菜单里；
+> **按权限显隐**：aliyun / tencentcloud / aws / huaweicloud / firebase / dify / feishu / github 实现了
+> `capabilities()`，没权限的操作不会出现在菜单里；
 > 一个都没有时给出说明。**探测失败一律 fail-open**（全都展示）——只有上游**明确**说「密钥无效」才判定为无可用操作。
+> （实测例：一把**只有 S3 权限**的 AWS key，云主机与区域列表两项被隐藏，`note` 写明
+> 「已隐藏无权限的操作：区域列表（UnauthorizedOperation）、云主机实例列表（UnauthorizedOperation）」。）
 
 #### 附：阿里云 OSS 与腾讯云 COS 的签名（自建在各自 plugin.py 内）
 
