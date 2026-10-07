@@ -115,12 +115,12 @@ def verify(data):
     result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
 
     if success is True:
+        # token 模式下只回 token 的 id：Token 是否有效已经由列表的「状态」列表达，
+        # 附加信息里再重复一遍 status 属于冗余，故不再输出 token_status。
         info: dict[str, Any] = {}
         if mode == "token":
             if result.get("id"):
                 info["token_id"] = result["id"]
-            if result.get("status"):
-                info["token_status"] = result["status"]
         else:
             if result.get("email"):
                 info["email"] = result["email"]

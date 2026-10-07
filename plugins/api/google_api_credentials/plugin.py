@@ -72,18 +72,20 @@ def _verify_api_key(api_key: str) -> VerifyResult:
 
     payload = safe_json(resp) or {}
     if resp.status_code == 200:
-        info: dict = {"kind": KIND_API_KEY}
         project = str(payload.get("projectId") or "").strip()
-        if project:
-            info["project_id"] = project
         domains = payload.get("authorizedDomains")
-        if isinstance(domains, list) and domains:
-            info["authorized_domains"] = [str(d) for d in domains][:10]
+        domain_count = len(domains) if isinstance(domains, list) else 0
+        # 附加信息只放前端能渲染的「有中文标签的标量」：
+        #   - kind 是插件自己的枚举值，凭据类型本就能看出来，展示出来只是原始英文键；
+        #   - project_id 无中文标签，前端会原样显示英文键；
+        #   - authorizedDomains 是数组，前端对对象/数组值直接跳过、根本显示不出来，
+        #     所以改为只回它的长度（域名数）。
+        info: dict = {"domain_count": domain_count}
         message = "API Key 有效"
         if project:
             message += f"：Firebase 项目 {project}"
-        if isinstance(domains, list) and domains:
-            message += f"（授权域 {len(domains)} 个）"
+        if domain_count:
+            message += f"（授权域 {domain_count} 个）"
         return VerifyResult(status="valid", message=message, account_info=info)
 
     envelope = payload.get("error") if isinstance(payload.get("error"), dict) else {}
@@ -99,8 +101,9 @@ def _verify_api_key(api_key: str) -> VerifyResult:
         return VerifyResult(status="invalid", message=f"API Key 无效：{detail}")
 
     if resp.status_code in (401, 403):
-        # 403 说明键已被识别，只是被项目/接口限制挡住 —— 键本身有效
-        info = {"kind": KIND_API_KEY}
+        # 403 说明键已被识别，只是被项目/接口限制挡住 —— 键本身有效。
+        # 同理不再回 kind（插件枚举值，展示出来只是英文键），只回能渲染的项目号。
+        info: dict = {}
         found = _PROJECT_RE.search(detail)
         if found:
             info["project_number"] = found.group(1)
@@ -113,14 +116,13 @@ def _verify_api_key(api_key: str) -> VerifyResult:
         return VerifyResult(
             status="valid",
             message=f"API Key 有效（{note}）：{detail}",
-            account_info=info,
+            account_info=info or None,
         )
 
     if resp.status_code == 429:
         return VerifyResult(
             status="valid",
             message="API Key 有效（触发配额限制 HTTP 429）",
-            account_info={"kind": KIND_API_KEY},
         )
 
     return VerifyResult(
@@ -140,6 +142,12 @@ def _verify_oauth_secret(client_secret: str, client_id: str) -> VerifyResult:
         )
 
     log(f"校验 Google OAuth 客户端密钥 {mask_secret(client_secret)}")
+    # Client ID 的数字前缀就是它所属 GCP 项目的 project number
+    # （形如 123456789012-xxxxxxxx.apps.googleusercontent.com）。
+    # 附加信息只放这个数字前缀：client_id / client_secret 都是敏感字段，
+    # 绝不能把它们的原文（哪怕只是整体字符串）写进 account_info。
+    match = re.match(r"(\d{6,})-", str(client_id or ""))
+    info = {"project_number": match.group(1)} if match else {}
     with make_client() as client:
         resp = client.post(
             TOKEN_URL,
@@ -161,6 +169,7 @@ def _verify_oauth_secret(client_secret: str, client_id: str) -> VerifyResult:
         return VerifyResult(
             status="valid",
             message=f"OAuth 客户端密钥有效（凭据对已被接受，仅授权码无效）：{detail}",
+            account_info=info or None,
         )
     if error == "invalid_client":
         if "not found" in description.lower():

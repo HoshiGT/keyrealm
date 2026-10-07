@@ -3,16 +3,16 @@
   "version": "1.0.0",
   "credential_type": "api_fofa",
   "author": "Credential Vault",
-  "description": "验证 FOFA 邮箱 + API Key 有效性",
+  "description": "验证 FOFA API Key 有效性（邮箱可留空）",
   "icon": "logo.png",
   "fields": [
     {
       "key": "email",
       "label": "邮箱",
       "type": "text",
-      "required": true,
-      "placeholder": "登录 FOFA 的邮箱",
-      "hint": "FOFA 账号的注册邮箱"
+      "required": false,
+      "placeholder": "登录 FOFA 的邮箱（可留空）",
+      "hint": "FOFA 账号的注册邮箱，可留空——上游只认 API Key"
     },
     {
       "key": "api_key",

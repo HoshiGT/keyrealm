@@ -1,7 +1,8 @@
 """FOFA 密钥验证插件。
 
-- 端点: GET https://fofa.info/api/v1/info/my?email=<email>&key=<api_key>
-- 鉴权: 查询参数 email + key
+- 端点: GET https://fofa.info/api/v1/info/my?key=<api_key>（email 可选）
+- 鉴权: 查询参数 key；email 为可选项，实测上游不校验它（带上/不带、甚至给错的 email
+  都返回同样结果），因此仅在用户填写时才一并带上，以免无谓地外发邮箱。
 - 判定依据: 200 且 body.error == False 视为有效(取 fcoin / vip_level);
   200 且 body.error == True 视为无效(取 errmsg, 并净化其中可能回显的 email/key); 其余状态视为不确定。
 参考文档：https://fofa.info/api
@@ -43,8 +44,7 @@ def validate(data):
     if not data:
         return ["配置数据为空"]
     errors = []
-    if not (data.get("email") or "").strip():
-        errors.append("邮箱 不能为空")
+    # email 不再是必填：它只是本地留档，上游并不校验（实测带不带上结果一致）
     if not (data.get("api_key") or "").strip():
         errors.append("API Key 不能为空")
     return errors
@@ -53,8 +53,12 @@ def validate(data):
 def _verify(data):
     email = (data.get("email") or "").strip()
     key = (data.get("api_key") or "").strip()
+    params = {"key": key}
+    if email:
+        # 只在用户确实填了邮箱时才带上，避免无谓外发
+        params["email"] = email
     with make_client() as client:
-        resp = client.get(INFO_URL, params={"email": email, "key": key})
+        resp = client.get(INFO_URL, params=params)
     status = resp.status_code
     if status == 200:
         payload = safe_json(resp) or {}
@@ -75,8 +79,9 @@ def _verify(data):
 @guarded
 def verify(data):
     data = data or {}
-    if not (data.get("email") or "").strip() or not (data.get("api_key") or "").strip():
-        return VerifyResult(status="invalid", message="邮箱 或 API Key 为空")
+    # 只要求 API Key：email 上游不校验，缺了不影响判定
+    if not (data.get("api_key") or "").strip():
+        return VerifyResult(status="invalid", message="API Key 为空")
     return _verify(data)
 
 
