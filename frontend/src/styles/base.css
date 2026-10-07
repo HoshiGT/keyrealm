@@ -568,6 +568,45 @@ h4 {
   line-height: 1.5;
 }
 
+/* ── 7.1 固定列（fixed="left"/"right"）的不透明底 ──────────────────────
+   「操作」列是 sticky 覆盖层：当所有列宽之和超过容器（或用户横向滚动）时，它会压在
+   相邻列**上面**。EP 对这类列的设定是 `background: inherit` —— 让它继承所在行的底色，
+   也就是假定行的底色是实色。本主题为了让表格血融进玻璃面板，把
+   `--el-table-bg-color` / `--el-table-tr-bg-color` 都设成了 transparent，覆盖层于是变成
+   "半透膜"：被压住那列的文字会从按钮后面透出来（「地域列表」里「实例」按钮叠在
+   接入点 `…aliyuncs.com` 上就是一例；鼠标悬停时更明显，因为 EP 悬停时给 td 的也是半透明色）。
+   修法：按表格所在的**那层表面**把覆盖列底色压平成不透明。
+   - 弹窗内的表格 → 弹窗底色 `--v-bg-overlay`（各主题都是实色，可直接用）
+   - 卡片内的表格 → 玻璃卡片色 `--v-glass-bg`（多数主题带 alpha）叠在应用底色 `--v-bg` 上 */
+.el-table .el-table__header-wrapper tr > th.el-table__cell.el-table-fixed-column--left,
+.el-table .el-table__header-wrapper tr > th.el-table__cell.el-table-fixed-column--right,
+.el-table .el-table__body-wrapper tr > td.el-table__cell.el-table-fixed-column--left,
+.el-table .el-table__body-wrapper tr > td.el-table__cell.el-table-fixed-column--right {
+  background-color: var(--table-mask-base, var(--v-bg-overlay));
+  background-image: linear-gradient(var(--table-mask-tint, transparent), var(--table-mask-tint, transparent));
+}
+
+.el-dialog .el-table {
+  --table-mask-base: var(--v-bg-overlay);
+}
+
+.el-card .el-table {
+  --table-mask-base: var(--v-bg);
+  --table-mask-tint: var(--v-glass-bg);
+}
+
+/* 悬停：EP 用 `tr:hover > td` 把 td 换成半透明 hover 色（特异性 0-4-3），
+   覆盖列必须把同一层色重新压平，否则鼠标移到行上"半透膜"又回来了。
+   叠放顺序：hover 色 → 表面色 → 不透明底。 */
+.el-table--enable-row-hover .el-table__body tr:hover > td.el-table__cell.el-table-fixed-column--left,
+.el-table--enable-row-hover .el-table__body tr:hover > td.el-table__cell.el-table-fixed-column--right,
+.el-table__body tr.hover-row > td.el-table__cell.el-table-fixed-column--left,
+.el-table__body tr.hover-row > td.el-table__cell.el-table-fixed-column--right {
+  background-color: var(--table-mask-base, var(--v-bg-overlay));
+  background-image: linear-gradient(var(--v-bg-hover), var(--v-bg-hover)),
+    linear-gradient(var(--table-mask-tint, transparent), var(--table-mask-tint, transparent));
+}
+
 /* ── 8. 标签 / 提示 / 空态 / 分隔线 / 进度 ──────────────────────────── */
 
 .el-tag {
