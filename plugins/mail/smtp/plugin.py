@@ -21,6 +21,8 @@
   - ``read_mail`` (list) 「查看收件箱」的行内下钻，读取单封正文与基本头部
 IMAP 主机默认由 ``smtp.*`` 推导为 ``imap.*``，端口默认 993；非 993 端口先试
 STARTTLS 再回落 SSL。全程用 EXAMINE / ``BODY.PEEK``，不置「已读」标记、不改动邮箱。
+网易 163/126 额外要求登录后先按 RFC 2971 发 ``ID`` 声明客户端身份，否则 EXAMINE 会
+直接回 ``Unsafe Login. Please contact kefu@188.com``（见 ``_send_imap_id``）。
 
 参考文档：https://datatracker.ietf.org/doc/html/rfc5321（RFC 5321，SMTP）
 """
@@ -341,12 +343,42 @@ def _imap_target(params: dict, data: dict):
     return host, port, None
 
 
+def _send_imap_id(conn: imaplib.IMAP4) -> None:
+    """向服务器声明客户端身份（RFC 2971）。
+
+    网易 163/126 要求客户端在**登录之后、EXAMINE/SELECT 之前**先发一条 ``ID``，
+    否则 ``select`` 会失败并回 ``Unsafe Login. Please contact kefu@188.com``。
+
+    用 ``conn.xatom("ID", ...)`` 而非 ``_simple_command``：CPython 的
+    ``imaplib.Commands`` 里没有 ``ID``，直接发会在 AUTH 态抛
+    ``command ID illegal in state AUTH``；``xatom`` 会先把 ``ID`` 登记为
+    *当前状态*合法，再发出去并消费 ``* ID (...)`` 未标记响应。
+    （网上常见的 ``imaplib.Commands["ID"] = ("NONAUTH",)`` 是给登录前用的，
+    这里的调用点已是 AUTH 态，那样写反而会报错。）
+
+    **尽力而为、失败放过**：服务器 CAPABILITY 里没有 ``ID``（Gmail、QQ 等不要求）
+    就直接跳过；发送异常也一律吞掉——不该让声明身份这一步成为新的失败点。
+    真出问题时，紧随其后的 ``select`` 会给出与改动前一致的原始原因，不会掩盖。
+    """
+    try:
+        caps = getattr(conn, "capabilities", ()) or ()
+        if "ID" not in caps:  # imaplib 的 capabilities 是大写字符串元组
+            return
+        conn.xatom("ID", '("name" "CredentialVault" "version" "1.0.0")')
+    except Exception:  # noqa: BLE001 - 见上：放过，交由 select 报真正的原因
+        pass
+
+
 def _select_folder(conn: imaplib.IMAP4, folder: str, password: str):
     """选中文件夹（只读）并检查返回值，返回 ``(ok, error)``。
 
     非 ASCII 名先做 modified UTF-7 编码；``select`` 返回非 ``OK``（名字不对、
     权限不足等）时立刻带出服务器给出的原因，避免延后成莫名的「搜索失败或无权限」。
     """
+    # 两个调用方（_run_inbox / _run_read_mail）都是先 login 再进本函数，
+    # 所以这里正好是「登录后、EXAMINE 前」，是网易要求的 ID 声明时机；
+    # _connect_imap 的两条建连路径最终都汇聚到这里，故只需发这一处。
+    _send_imap_id(conn)
     try:
         encoded = _imap_utf7(folder)
     except Exception:  # noqa: BLE001 - 编码异常时退回原名，让服务器报错更直白
