@@ -39,6 +39,11 @@ _INSUFFICIENT_BALANCE_KEYWORDS = (
     "out_of_service",     # isv.OUT_OF_SERVICE：余额不足导致服务被暂停
     "freetieronly",       # AllocationQuota.FreeTierOnly：免费额度用尽，需认证并充值
     "budgetlimitexceeded",  # 预算管理额度用尽且开启「达预算即停」
+    # ── 月之暗面 Moonshot：欠费/停用/额度不足**统一是 HTTP 429**，必须靠 error.type 区分 ──
+    # `exceeded_current_quota_error`（账户欠费或已停用 / token 额度不足）
+    # 同状态码的干扰项：`rate_limit_reached_error`（并发限流）、`engine_overloaded_error`
+    # （节点过载，充值也不解决）——这两个**不含**下面这个词，所以不会误判。
+    "exceeded_current_quota_error",
 )
 
 # **限流类关键字：必须先排除，再看欠费。**
@@ -148,6 +153,10 @@ def chat_completion(base_url: str, api_key: str, model: str, messages: list,
                     if text.strip():
                         return {"ok": True, "output": text.strip()}
         elif protocol == "anthropic":
+            # **必须遍历全部 block 拼 `text`，不能写死 `content[0].text`**：官方在 thinking
+            # （扩展思考）模型下会把 `{"type":"thinking", …}`（**无 `text` 字段**）放在
+            # `content[0]`，正文块排在其后；取 `[0]` 会得到空串、在严格语言里还会抛 KeyError。
+            # 遍历 + `.get("text","")` 同时兼容两种排布（官方 SDK 自己也是这么容错取的）。
             blocks = payload.get("content")
             if isinstance(blocks, list):
                 text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict))
@@ -356,13 +365,12 @@ def chat_completion_stream(base_url: str, api_key: str, model: str, messages: li
 
 
 # ── 模型列表（供「简单对话」选择模型）────────────────────
-def fetch_models(protocol: str, base_url: str, api_key: str) -> list:
-    """获取该厂商可用模型列表（best-effort，失败/无权限返回 []）。
+def _model_items(protocol: str, base_url: str, api_key: str) -> list:
+    """请求模型列表并返回**原始条目**（dict 列表；失败/无权限返回 []）。
 
-    protocol:
-      - "openai" / "openrouter" → GET {base}/models（Bearer）→ data[].id
-      - "anthropic"             → GET {base}/models（x-api-key）→ data[].id
-      - "gemini"                → GET {base}/models?key=… → models[].name（去掉 "models/" 前缀）
+    与 `fetch_models` 的差别只是**保留全部字段**：只取 id 会把扩展字段丢掉，而欠费探测
+    要用 OpenRouter 的 `architecture.output_modalities`（官方字段）排除非文本输出的模型
+    —— 否则靠名字猜会挑到 `google/gemini-nano-banana-2.1` 这种图像生成模型。
     """
     if not api_key:
         return []
@@ -372,8 +380,10 @@ def fetch_models(protocol: str, base_url: str, api_key: str) -> list:
             if protocol == "gemini":
                 resp = client.get(f"{root}/models", params={"key": api_key})
             elif protocol == "anthropic":
+                # 与 `probe_anthropic_models` 同一套归一化：裸域名也要打到 `/v1/models`，
+                # 别在「验证」与「列模型」两处用不同的拼法（会一个通一个不通）。
                 resp = client.get(
-                    root + "/models",
+                    _anthropic_root(base_url) + "/v1/models",
                     params={"limit": 100},
                     headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
                 )
@@ -386,22 +396,28 @@ def fetch_models(protocol: str, base_url: str, api_key: str) -> list:
         return []
     if not isinstance(payload, dict):
         return []
+    raw = payload.get("models") if protocol == "gemini" else payload.get("data")
+    return [i for i in (raw or []) if isinstance(i, dict)]
 
-    names: set = set()
-    if protocol == "gemini":
-        for item in payload.get("models") or []:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("name", ""))
-            if name.startswith("models/"):
-                name = name[len("models/"):]
-            if name:
-                names.add(name)
-    else:
-        for item in payload.get("data") or []:
-            if isinstance(item, dict) and item.get("id"):
-                names.add(str(item["id"]))
-    return sorted(names)
+
+def _name_of(protocol: str, item: dict) -> str:
+    """从一条模型条目里取模型名（gemini 的 `models/` 前缀要去掉）。"""
+    raw = str(item.get("name") if protocol == "gemini" else item.get("id") or "")
+    if protocol == "gemini" and raw.startswith("models/"):
+        raw = raw[len("models/"):]
+    return raw
+
+
+def fetch_models(protocol: str, base_url: str, api_key: str) -> list:
+    """获取该厂商可用模型列表（best-effort，失败/无权限返回 []）。
+
+    protocol:
+      - "openai" / "openrouter" → GET {base}/models（Bearer）→ data[].id
+      - "anthropic"             → GET {base}/v1/models（x-api-key）→ data[].id
+      - "gemini"                → GET {base}/models?key=… → models[].name（去掉 "models/" 前缀）
+    """
+    names = {_name_of(protocol, item) for item in _model_items(protocol, base_url, api_key)}
+    return sorted(n for n in names if n)
 
 
 # ── 欠费探测（可选项，由应用设置开关控制）───────────────
@@ -431,12 +447,28 @@ _STREAM_ONLY_HINT = "only support stream"
 
 
 def _probe_model_candidates(base_url: str, api_key: str, protocol: str) -> list:
-    """挑探测用的候选模型：先选名字像「便宜款」的，再兜底其它可对话模型。"""
-    models = fetch_models(protocol, base_url, api_key)
-    usable = [m for m in models if not any(x in m.lower() for x in _PROBE_MODEL_EXCLUDE)]
+    """挑探测用的候选模型。
+
+    先按厂商声明的输出模态排除**非文本输出**的模型（OpenRouter 的
+    `architecture.output_modalities` 是官方字段；对纯图像/纯音频输出的模型有效）。
+
+    > **但别指望它解决 OpenRouter 那种问题**：2026-10-07 实测它那 465 个模型**全部**含
+    > `text` 输出——包括 `google/gemini-nano-banana-2.1`（`text+image->text+image`，是图像
+    > 生成却也能出文本）。真正把那个挡掉的是 `_PROBE_MODEL_EXCLUDE` 里的 `banana`。
+    > 也就是说「名字像便宜聊天模型、其实是生成模型」只能靠名字黑名单，modality 分不出来。
+
+    字段不存在时（多数厂商只回 `data[].id`）退回老办法：按名字选「便宜款」，再兜底其它模型。
+    """
+    items = _model_items(protocol, base_url, api_key)
+    if items and any(isinstance(i.get("architecture"), dict) for i in items):
+        pool = [i for i in items
+                if "text" in ((i.get("architecture") or {}).get("output_modalities") or [])]
+    else:
+        pool = items
+    models = [_name_of(protocol, i) for i in pool]
+    usable = [m for m in models if m and not any(x in m.lower() for x in _PROBE_MODEL_EXCLUDE)]
     hinted = [m for m in usable if any(h in m.lower() for h in _PROBE_MODEL_HINTS)]
-    ordered = hinted + [m for m in usable if m not in hinted]
-    return ordered
+    return hinted + [m for m in usable if m not in hinted]
 
 
 def quota_chat_probe(base_url: str, api_key: str, protocol: str = "openai",
@@ -539,8 +571,17 @@ def probe_openai_models(base_url: str, api_key: str) -> VerifyResult:
 
 
 def probe_anthropic_models(base_url: str, api_key: str, verify_path: str = "/models") -> VerifyResult:
-    """Anthropic 协议：GET {base}{verify_path}，x-api-key 认证。"""
-    url = base_url.rstrip("/") + verify_path
+    """Anthropic 协议：GET {base}/v1{verify_path}，x-api-key 认证。
+
+    ``base_url`` 先经 `_anthropic_root()` 归一化、再补 ``/v1``——与 chat 的 ``/v1/messages``
+    同一套规则。**归一化只用在这两处、必须一起用**：否则用户填裸域名（``https://x``，大量
+    Claude 中转站的接入文档给的就是裸域名）时，chat 会打到 ``/v1/messages``（对）、
+    而本探针会打到 ``/models``（错，应为 ``/v1/models``）→ 出现「验证失败但简单对话却能用」的矛盾。
+
+    ``verify_path`` **不要**自带 ``/v1`` 前缀（默认 ``/models``）；对 Anthropic 官方
+    （默认 base 以 ``/v1`` 结尾）归一化后结果与旧实现完全一致，无回归。
+    """
+    url = _anthropic_root(base_url) + "/v1" + verify_path
     with make_client() as client:
         resp = _request_with_retry(
             client, "GET", url,
@@ -550,14 +591,19 @@ def probe_anthropic_models(base_url: str, api_key: str, verify_path: str = "/mod
 
 
 def probe_openai_chat(base_url: str, api_key: str, model: str,
-                      timeout: Optional[float] = None) -> VerifyResult:
+                      timeout: Optional[float] = None,
+                      token_param: str = "max_tokens") -> VerifyResult:
     """OpenAI 协议：POST {base}/chat/completions（消耗极小额度，可识别欠费）。
 
     ``timeout`` 为空时用全局超时；显式传入则单次请求用它（用于「连试多个候选
     模型、每个只给短超时」的验证策略）。
+
+    ``token_param`` 语义同 `chat_completion`：默认 ``max_tokens``；对官方已弃用旧名、
+    且与 o 系列**不兼容**的厂商（如 OpenAI 本家）由调用方传 ``max_completion_tokens``，
+    否则这唯一一条探测路径仍会带旧名、被 o 系列直接 400。
     """
     url = base_url.rstrip("/") + "/chat/completions"
-    body = {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}
+    body = {"model": model, "messages": [{"role": "user", "content": "hi"}], token_param: 1}
     with make_client(request_timeout=timeout) as client:
         resp = _request_with_retry(
             client, "POST", url,
@@ -576,6 +622,12 @@ def _interpret_simple(resp: httpx.Response) -> VerifyResult:
     if status == 200:
         return VerifyResult(status="valid", message="凭证有效", account_info=_extract_account_info(payload))
     if status in (401, 403):
+        # **403 不一定是密钥的错**——一律判「凭证无效」是**假红**，比漏报更坑人。已核实的两个：
+        #   豆包   ：403 `AccountOverdueError` / `OperationDenied.ServiceOverdue`（账户欠费）
+        #   百炼   ：403 `AllocationQuota.FreeTierOnly`（免费额度用尽，需认证并充值）
+        # 先读响应体，认得出欠费就报「有效 + 账户欠费」，认不出才当无效。
+        if is_insufficient_balance(body_snippet(resp)):
+            return VerifyResult(status="valid", message="凭证有效，但账户欠费或无可用额度")
         return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
     if status == 429:
         return VerifyResult(status="valid", message="凭证有效，但触发速率限制 (HTTP 429)")
@@ -615,6 +667,12 @@ def _interpret_chat(resp: httpx.Response) -> VerifyResult:
     if status == 400 and code in _REQUEST_LEVEL_CODES:
         return VerifyResult(status="valid", message=f"凭证有效，但请求被拒（{code}）：{snippet}")
     if status in (401, 403):
+        # **403 不一定是密钥的错**——一律判「凭证无效」是**假红**，比漏报更坑人。已核实的两个：
+        #   豆包   ：403 `AccountOverdueError` / `OperationDenied.ServiceOverdue`（账户欠费）
+        #   百炼   ：403 `AllocationQuota.FreeTierOnly`（免费额度用尽，需认证并充值）
+        # 先读响应体，认得出欠费就报「有效 + 账户欠费」，认不出才当无效。
+        if is_insufficient_balance(body_snippet(resp)):
+            return VerifyResult(status="valid", message="凭证有效，但账户欠费或无可用额度")
         return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
     if status == 429:
         if is_insufficient_balance(snippet):

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -85,18 +86,106 @@ _PRIMARY_WINDOW_SECONDS = 18000
 # 读使用率的短超时：它只是给「附加信息」锦上添花，不能拖慢 verify
 _USAGE_TIMEOUT = 6.0
 
-# codex 对话的静态模型名——该端点没有 /models 列表接口，只能内置一份；名字会变，
-# 界面上「模型」下拉允许手输（allow-create）覆盖这里。
+# ── codex 对话的模型名 ────────────────────────────────────────────────────
+# **优先走官方目录端点**（见 `_codex_models_from_api`），下面这份只是它拿不到时的兜底。
+# 名单取**官方文档明确推荐**的登录态模型（`learn.chatgpt.com/docs/models`）：
+# 「复杂编码 / agentic 用 GPT-6.1 Sol，轻量重复任务用 GPT-6 Luna」，GPT-6 Sol 是推荐替代。
+# 旧值（`gpt-5.1-codex-mini` 等）是凭印象编的——官方二进制里 **0 命中**，实测直接 400：
+#     The 'gpt-5.1-codex-mini' model is not supported when using Codex with a ChatGPT account.
+# 而 `gpt-5.2-codex` / `gpt-5.3-codex` 官方已标**在登录态下 deprecated**，所以不放进来。
+# 该端点没有公开的模型清单文档，界面上的「模型」下拉允许手输（allow-create）覆盖这里。
 CODEX_MODELS = [
-    "gpt-5.1-codex-mini",
-    "gpt-5.1-codex",
-    "gpt-5-codex-mini",
-    "gpt-5-codex",
-    "codex-mini-latest",
+    "gpt-6.1-sol",
+    "gpt-6-sol",
+    "gpt-6-luna",
 ]
-CODEX_CHAT_MODEL = "gpt-5.1-codex-mini"
+CODEX_CHAT_MODEL = "gpt-6.1-sol"
+
+# 官方**目录端点**（Codex CLI 自己走的就是这条）。它不属于公开 API，但与既有的
+# `/backend-api/me` 同源、**只读**。路径与查询参数取自官方仓库 `openai/codex` 的
+# `codex-rs/codex-api/src/endpoint/models.rs`（`path() == "models"`，并追加
+# `?client_version=<ver>`），响应形如 `{"models":[{"slug":…,"visibility":…}, …]}`。
+CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models"
+# 供 `?client_version=` 用；官方 CLI 会报自己的版本，这里取一个已知可用的值即可
+CODEX_CLIENT_VERSION = "0.157.1"
 # /codex/responses 的 instructions 必填且不能为空（缺了会被 400）
 CODEX_INSTRUCTIONS = "You are Codex, a coding assistant. Answer concisely."
+
+# Codex CLI 自己把「本账号可用模型」缓存在这里（它的 models-manager 从远端拉完后落盘）
+_CODEX_CLI_CACHE = os.path.expanduser("~/.codex/models_cache.json")
+
+
+def _codex_models_from_cli_cache() -> list:
+    """从 **Codex CLI 自己的缓存**读该账号可用的模型清单（best-effort、**只读**）。
+
+    Codex CLI 会把「这个账号能用哪些模型」写进 `~/.codex/models_cache.json`
+    （结构 `{"fetched_at":…,"client_version":…,"identity":…,"models":[…]}`，由它的
+    `models-manager` 从远端拉取）。那是**该账号真实**的清单，比内置的名字准，所以优先用它；
+    缓存不在、读不动、格式不认识、或列表为空，都退回内置那份。
+
+    元素形状各版本可能不同（字符串 / 含 `slug`|`id`|`name` 的对象都见过），两种都认。
+    """
+    try:
+        with open(_CODEX_CLI_CACHE, encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception:  # noqa: BLE001 - 只是锦上添花，读不到就用内置的
+        return []
+    models = payload.get("models") if isinstance(payload, dict) else payload
+    if not isinstance(models, list):
+        return []
+    out: list = []
+    for item in models:
+        if isinstance(item, str):
+            name = item
+        elif isinstance(item, dict):
+            name = item.get("slug") or item.get("id") or item.get("name") or ""
+        else:
+            continue
+        name = str(name).strip()
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def _codex_models_from_api(access_token: str, account_id: str = "") -> list:
+    """向**官方目录端点**要该账号可用的模型（Codex CLI 自己走的就是这条）。
+
+    端点与查询参数见 `CODEX_MODELS_URL` 的注释（取自官方仓库）。响应形如
+    ``{"models": [{"slug": …, "visibility": "list", "supported_in_api": true, …}]}``。
+
+    这是**该账号真实**的清单，比任何内置名单都准，所以放在最前面。
+    尽力而为：任何失败都返回 ``[]``，由调用方回落到 CLI 缓存、再回落到内置清单。
+    ``visibility`` 只有**存在且不是 "list"** 时才排除——那是官方 CLI 的字段，不是公开契约，
+    拿不准时宁可多列（多列无害，少列会让用户以为模型没了）。
+    """
+    if not access_token:
+        return []
+    try:
+        with make_client() as client:
+            resp = client.get(
+                CODEX_MODELS_URL,
+                params={"client_version": CODEX_CLIENT_VERSION},
+                headers=_chatgpt_headers(access_token, account_id),
+            )
+        if resp.status_code != 200:
+            return []
+        payload = safe_json(resp)
+    except Exception:  # noqa: BLE001 - 只是列表，失败就用兜底
+        return []
+    items = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return []
+    out: list = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        visibility = item.get("visibility")
+        if visibility is not None and str(visibility) != "list":
+            continue
+        slug = str(item.get("slug") or "").strip()
+        if slug and slug not in out:
+            out.append(slug)
+    return out
 
 # OAuth 换令牌端点与 Codex CLI 的**公开客户端 id**（不是密钥：它以明文出现在用户令牌的
 # `aud` 里，官方 CLI 二进制里也是硬编码的）。只有在用户**显式**点「刷新 access_token」时
@@ -127,7 +216,13 @@ PLAN_LABELS = {
 
 # 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费。
 # 仅 API Key 模式适用——ChatGPT 登录态走的是订阅额度，不经 api.openai.com 计费。
-_api_key_quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai")
+# 官方 SDK 明确：`max_tokens` 已 **deprecated**，改用 `max_completion_tokens`
+# （原文还特别写了它 "is not compatible with o-series models" —— o 系列**必须**用新名）。
+# 注意这只影响 **api_key 模式**的 Chat Completions；codex 登录态走的是 `/codex/responses`，
+# 用的是 `max_output_tokens`，与这里无关。
+TOKEN_PARAM = "max_completion_tokens"
+
+_api_key_quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai", TOKEN_PARAM)
 
 
 def _is_chatgpt(data) -> bool:
@@ -549,12 +644,19 @@ def _verify_chatgpt(auth: dict) -> VerifyResult:
 def list_models(data: dict) -> list:
     """获取该厂商可用模型列表（供「简单对话」选择模型）。
 
-    api_key 模式打 ``/v1/models``；chatgpt 模式没有等价的列表接口，返回内置的 codex 模型名
-    （该端点是非公开实验接口，名字会变，界面上允许手输覆盖）。
+    api_key 模式打 ``/v1/models``；chatgpt 模式该端点**没有列表接口**，优先读 Codex CLI
+    自己的缓存（那是本账号真实的清单，见 `_codex_models_from_cli_cache`），读不到才用内置那份
+    （该端点名字会变，界面上「模型」下拉也允许手输覆盖）。
     """
     data = data or {}
     if _is_chatgpt(data):
-        return list(CODEX_MODELS)
+        # 三级回退：官方目录端点（该账号真实清单）→ Codex CLI 的本地缓存 → 内置推荐名单
+        auth = _read_auth(data)
+        return (
+            _codex_models_from_api(auth.get("access_token", ""), _chatgpt_account_id(data))
+            or _codex_models_from_cli_cache()
+            or list(CODEX_MODELS)
+        )
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
     return fetch_models("openai", base_url, (data.get("api_key") or "").strip())
 
@@ -906,6 +1008,7 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
         params.get("model") or CHAT_MODEL,
         params.get("messages") or [],
         protocol="openai",
+        token_param=TOKEN_PARAM,
     )
 
 
@@ -938,6 +1041,7 @@ def stream_action(action_id: str, params: dict, data: dict, on_delta) -> dict:
         params.get("model") or CHAT_MODEL,
         params.get("messages") or [],
         protocol="openai",
+        token_param=TOKEN_PARAM,
         on_delta=on_delta,
     )
 

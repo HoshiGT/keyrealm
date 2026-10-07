@@ -8,7 +8,19 @@
 与 404 Not found for account），所以**不能赌单个模型名**——候选短名单逐个短超时试，
 命中即止（历史上的硬编码 model 就曾因「网关接受后永不响应」把真 key 必卡成超时）。
 
+> **哪些是实测、哪些有官方背书**（2026-10-07 逐页核对官方文档后的结论）：
+> 上面三点——「`/v1/models` 不鉴权」「清单是过期超集、下线模型返 410/404」「欠费 → 402/429」
+> ——**官方文档均未背书**。官方 API 参考只声明 `200/202/422/500` 与通用 `InvokeError` 错误体，
+> `401/402/403/410/429` **一字未提**；模型清单「过期超集」与「410 Gone」只见于开发者论坛，
+> 官方参考页的 `404` 指的是**本地容器启动/端口**问题，与模型下线无关。
+> 所以这些判断**别拿官方文档去"纠正"**，它们来自本机实测。
+>
+> 另：`reasoning_content` **不在**各模型 OpenAPI 的 `Message` schema 里（`additionalProperties:false`），
+> 但**同一页的官方示例代码又去读它**（`getattr(chunk.choices[0].delta, "reasoning_content", None)`）
+> ——官方自己就用容错取值。所以我们按「字段可能不存在」处理是对的，别改成硬读。
+
 参考文档：https://docs.api.nvidia.com/nim/reference/
+参考文档：https://docs.nvidia.com/nim/large-language-models/latest/get-started/advanced/get-started-inkling.html
 """
 from __future__ import annotations
 

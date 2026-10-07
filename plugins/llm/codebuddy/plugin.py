@@ -1,7 +1,5 @@
 """腾讯 CodeBuddy 客户端登录态验证插件（plugins/llm/codebuddy/，自包含实现）。
 
-参考文档：https://www.codebuddy.cn/docs/
-
 CodeBuddy 是腾讯的 AI 编程助手（中国站 www.codebuddy.cn / 国际站 www.codebuddy.ai）。
 这里的「凭据」不是 API Key，而是**客户端登录态**——两个 Keycloak 风格的 JWT
 （``iss`` = ``…/auth/realms/copilot``）。
@@ -29,6 +27,19 @@ CodeBuddy 是腾讯的 AI 编程助手（中国站 www.codebuddy.cn / 国际站 
 
 **绝不回显 accessToken / refreshToken**：message、account_info、actions 的行数据里
 都只出现非敏感信息（手机号打码、uid 只取前 8 位）。
+
+**关于「官方有没有只读校验接口」（2026-10-07 逐页核对官方文档后的结论）：**
+官方**唯一**公开的 HTTP API 是 **本地 CLI 网关**（``codebuddy --serve`` 起在 127.0.0.1，
+``/api/v1/*``，见 https://www.codebuddy.cn/docs/cli/http-api），它用的是**本地生成的口令**
+（Bearer / ``X-Access-Token`` / ``gateway_session`` cookie、强制头 ``X-CodeBuddy-Request: 1``），
+**不是**本插件手里的 Keycloak access_token，且端点全集里**没有任何** account / quota / billing
+端点——所以它既校验不了本凭据、也不提供账号/额度信息。IDE 侧「账号」文档（积分 / 套餐 / 用量）
+**全是界面说明、无 REST 接口**。本插件用的 ``/v2/billing/meter/get-user-resource`` 是**私有接口、
+官方无文档**（出处为第三方协议转换器 ``IceeAn/codebuddy2api``）。**别再去找「官方只读校验接口」。**
+
+参考文档：https://www.codebuddy.cn/docs/
+参考文档：https://www.codebuddy.cn/docs/cli/http-api
+参考文档：https://www.codebuddy.cn/docs/ide/Account/credits
 """
 from __future__ import annotations
 
@@ -64,9 +75,10 @@ QUOTA_PATH = "/v2/billing/meter/get-user-resource"
 QUOTA_PRODUCT_CODE = "p_tcaca"
 QUOTA_RANGE_END = "2127-01-01 00:00:00"
 
-# 伪装成官方 IDE / CLI 的版本号（上游可能据此放行；取自 codebuddy2api 的
-# CODEBUDDY_CLI_VERSION 与 _CODEBUDDY_IDE_VERSION）。
-CLI_VERSION = "2.107.0"
+# 伪装成官方 IDE / CLI 的版本号（上游可能据此放行）。CLI 版本对齐 npm 官方包
+# `@tencent-ai/codebuddy-code` 的最新稳定版（2026-10-07 时为 2.161.4；旧值 2.107.0 已明显落后，
+# 版本头不匹配时腾讯侧一旦做版本门禁，表现会是难以定位的 403/400）。
+CLI_VERSION = "2.161.4"
 IDE_VERSION = "4.9.13"
 USER_AGENT = f"CLI/{CLI_VERSION} CodeBuddy/{CLI_VERSION}"
 

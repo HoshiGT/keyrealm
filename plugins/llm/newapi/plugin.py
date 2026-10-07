@@ -10,8 +10,20 @@ New API 把硬限额 ``hard_limit_usd`` 定义成**令牌总额度（剩余 + �
 
     余额 = hard_limit_usd − total_usage / 100
 
-**令牌为「不限额度」时服务端把硬限额填成 1e8 哨兵值**，相减会得出
-99999996.47 这类假余额——这类哨兵值一律按「不限额度」处理，不显示数字。
+（依据官方仓库 ``controller/billing.go`` 的 ``GetSubscription``：``quota = remainQuota + usedQuota``，
+三个 ``*_USD`` 字段赋同一个值；``controller/channel-billing.go`` 的 ``total_usage`` 注释即 ``unit: 0.01 dollar``。）
+
+**三个字段名有欺骗性的地方，都是官方源码确认的：**
+
+1. ``*_USD`` 里的数字**不一定是美元**。官方按站点的 ``QuotaDisplayType`` 三分支填值：
+   ``USD`` 直接除 ``QuotaPerUnit``、``CNY`` 再乘汇率、**``TOKENS`` 则原样填 token 数**。
+   TOKENS 模式下 ``total_usage/100`` 无意义 → 见 `_fetch_billing` 里的一致性软校验，拿不准就不显示。
+2. ``total_usage`` 是**终身累计**已用，**不是本月**。官方 ``GetUsage`` 取的是累计字段，
+   且**忽略** ``start_date``/``end_date``（那是 OpenAI 原生接口的行为，new-api 没实现）。
+3. 「不限额度」的官方哨兵值是 **``100000000``（1e8）**，且**只在令牌维度**出现
+   （``token.UnlimitedQuota`` 且站点开了 ``DisplayTokenStatEnabled``）；用户级无限额走
+   ``GetUserQuota``，可能是真实大数——官方**没有**「无限 = 固定值」的一般约定。哨兵值一律按
+   「不限额度」处理、不显示数字（相减会得出 99999900 这类假余额）。
 
 Base URL 无默认值，必须由用户填写站点地址。
 
@@ -89,7 +101,9 @@ def _fetch_billing(base_url: str, api_key: str) -> Optional[dict]:
         total = _first_amount(sub)
         if total is None or total <= 0:
             return None
-        # 哨兵值 = 不限额度令牌，余额无意义，且相减必得假值
+        # 哨兵值 = 不限额度令牌，余额无意义，且相减必得假值。
+        # 官方实际填的是 `100000000`（1e8，`token.UnlimitedQuota` 分支），任何 ≥ `AMOUNT_LIMIT`
+        # 的数值都按此处理。
         if not plausible_amount(total):
             return {"unlimited": True}
 
@@ -99,13 +113,23 @@ def _fetch_billing(base_url: str, api_key: str) -> Optional[dict]:
         used = 0.0
         if isinstance(usage, dict):
             try:
-                used = float(usage.get("total_usage", 0)) / 100.0  # 美分 → 美元
+                used = float(usage.get("total_usage", 0)) / 100.0  # 美分 → 站点展示单位
             except (TypeError, ValueError):
                 used = 0.0
+
+        # 一致性软校验：`used ≤ total` 才说明两个字段同一单位（USD / CNY 两种展示都满足）。
+        # `used > total` 只可能两种成因，且分不开 → **拿不准就不显示**（与「宁可不显示也不显示
+        # 荒谬值」的取向一致）：(a) 站点把额度重置过、而 `total_usage` 是终身累计；
+        # (b) TOKENS 展示模式下两字段的换算与 USD 不同。此时若照旧相减会得负数，
+        # 被误当成「账户欠费」——而在这条端点上那几乎总是假象。
+        if used > total:
+            return None
 
         balance = round(total - used, 6)
         if not plausible_amount(balance):
             return None
+        # 单位按站点 `QuotaDisplayType` 而定（USD / CNY / TOKENS）——官方字段名 `*_USD` 不可信，
+        # 但我们没有能读出展示类型的接口，只能沿用 USD 这个最常见默认并在此备注。
         result: dict = {"balance": balance, "currency": "USD"}
         result["usage_rate"] = max(0.0, min(1.0, used / total))
         return result

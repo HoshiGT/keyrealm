@@ -1,6 +1,13 @@
 """硅基流动 SiliconFlow API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
 
 参考文档：https://docs.siliconflow.cn/
+
+**余额：没有可用的接口（2026-10-07 实测）。** 官方文档仍挂着 `GET /v1/user/info`
+（`docs.siliconflow.com/.../userinfo/get-user-info`），但**该端点已下线**——实测回
+`HTTP 200 {"code":20092,"message":"This endpoint is deprecated and is no longer available."}`
+（第三方也转发过官方的下线通知）。所以插件**不查余额**，「附加信息」只有欠费探测的结论；
+真欠费时调接口会直接回 **402**，那条由 `llm_protocols` 统一认。
+**别照那份过时的官方页再加一遍余额查询。**
 """
 from __future__ import annotations
 

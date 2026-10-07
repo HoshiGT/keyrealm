@@ -52,6 +52,12 @@ def _probe_auth_key(base_url: str, api_key: str) -> VerifyResult:
             if isinstance(remaining, (int, float)):
                 info["balance"] = remaining
                 info["currency"] = "USD"
+            elif d.get("limit") is None:
+                # 官方文档：`limit` 为 **null 表示这把 key 无限额**（"null if unlimited"）。
+                # 这不是"拿不到数据"，而是一个**明确的事实**，所以要说出来——不然「附加信息」
+                # 那一列对最常见的普通 inference key（未设 per-key limit）永远是空的。
+                # 用 `plan` 键：前端 `ACCOUNT_INFO_LABELS` 里它的标签就是「套餐」。
+                info["plan"] = "不限额度"
             if isinstance(limit, (int, float)) and isinstance(usage, (int, float)) and limit > 0:
                 info["usage_rate"] = max(0.0, min(1.0, usage / limit))
         return VerifyResult(status="valid", message="凭证有效", account_info=info or None)

@@ -16,8 +16,13 @@ NAME = "月之暗面 Moonshot"
 DEFAULT_BASE_URL = "https://api.moonshot.cn/v1"
 PROTOCOL = "openai_models"
 
+# 官方把 `max_tokens` 标为 **deprecated**、要求改用 `max_completion_tokens`（platform.kimi.com 文档），
+# 所以这里显式传新参数名；`chat_completion` / `chat_completion_stream` / `make_quota_probe`
+# 都支持 `token_param`，默认仍是 `max_tokens`（其它厂商照旧）。
+TOKEN_PARAM = "max_completion_tokens"
+
 # 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费
-quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai")
+quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai", TOKEN_PARAM)
 # 余额端点（best-effort，仅认证通过后查询）
 BALANCE_URL = "https://api.moonshot.cn/v1/users/me/balance"
 
@@ -86,10 +91,14 @@ def _verify(data: dict) -> VerifyResult:
             if balance.get("usage_rate") is not None:
                 info["usage_rate"] = balance["usage_rate"]
             result.account_info = info
-            if balance["balance"] < 0:
+            # 官方口径：`available_balance` **≤ 0 就无法调用推理接口**（`<=` 而不是 `<`）——
+            # 它是「可用余额」= 现金 + 代金券，所以即便 `cash_balance` 为负、只要券还够也仍可用。
+            # 官方 Warning 原文：`available_balance ≤ 0` 时调用推理 API 返回
+            # `exceeded_current_quota_error`。
+            if balance["balance"] <= 0:
                 # 欠费不算失效：凭据本身有效，仅账户余额不足
                 result.message = (
-                    f"凭证有效，但账户欠费（余额 {balance['balance']} {balance['currency']}）"
+                    f"凭证有效，但账户余额不足（余额 {balance['balance']} {balance['currency']}）"
                 )
 
     return result
@@ -109,7 +118,9 @@ def list_models(data: dict) -> list:
 
 
 # ── 可选操作：简单对话 ──────────────────────────────────
-CHAT_MODEL = "moonshot-v1-8k"
+# 默认对话模型。旧值 `moonshot-v1-8k` 所属的 **`moonshot-v1` 系列已于 2026-08-31 下线**，
+# 一定会 404；官方现在在售的是 kimi-k3 / kimi-k2.7-code(-highspeed) / kimi-k2.6。
+CHAT_MODEL = "kimi-k2.6"
 
 
 def actions(data: dict) -> list[dict]:
@@ -134,6 +145,7 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
         params.get("model") or CHAT_MODEL,
         params.get("messages") or [],
         protocol="openai",
+        token_param=TOKEN_PARAM,
     )
 
 
@@ -153,6 +165,7 @@ def stream_action(action_id: str, params: dict, data: dict, on_delta) -> dict:
         params.get("model") or CHAT_MODEL,
         params.get("messages") or [],
         protocol="openai",
+        token_param=TOKEN_PARAM,
         on_delta=on_delta,
     )
 

@@ -55,7 +55,13 @@ def _parse_balance(payload: dict) -> Optional[dict]:
     # 金额异常（如中转实现返回的哨兵值）宁可不显示
     if not plausible_amount(balance):
         return None
-    return {"balance": balance, "currency": chosen.get("currency", "")}
+    info = {"balance": balance, "currency": chosen.get("currency", "")}
+    # 顶层 `is_available`：官方定义是「余额是否**够用**」（Whether the user's balance is
+    # sufficient for API calls）——**不是**账号状态。它比余额数字更直接地回答「还能不能调」，
+    # 由调用方据此判欠费（见 _verify）。取不到就不带这个键。
+    if isinstance(payload.get("is_available"), bool):
+        info["is_available"] = payload["is_available"]
+    return info
 
 
 def _fetch_balance(api_key: str) -> Optional[dict]:
@@ -94,7 +100,13 @@ def _verify(data: dict) -> VerifyResult:
             if balance.get("usage_rate") is not None:
                 info["usage_rate"] = balance["usage_rate"]
             result.account_info = info
-            if balance["balance"] < 0:
+            # 官方 `is_available=false` = 「余额不足以继续调用」，比余额数字更权威，
+            # 优先据此判欠费；没有这个字段时才退回看余额是否为负。
+            if balance.get("is_available") is False:
+                result.message = (
+                    f"凭证有效，但账户余额不足（余额 {balance['balance']} {balance['currency']}）"
+                )
+            elif balance["balance"] < 0:
                 # 欠费不算失效：凭据本身有效，仅账户余额不足
                 result.message = (
                     f"凭证有效，但账户欠费（余额 {balance['balance']} {balance['currency']}）"
@@ -117,7 +129,10 @@ def list_models(data: dict) -> list:
 
 
 # ── 可选操作：简单对话 ──────────────────────────────────
-CHAT_MODEL = "deepseek-chat"
+# 默认对话模型。官方 list-models 页现在只列 `deepseek-flash`（V4.1-Flash）与 `deepseek-v4-pro`，
+# 旧的 `deepseek-chat` / `deepseek-reasoner` 已不再出现——思考与否现在是**同一个模型 + 参数**
+# （`thinking={"type":"disabled"}` 或 `reasoning_effort:"none"`），不再靠换模型名区分。
+CHAT_MODEL = "deepseek-flash"
 
 
 def actions(data: dict) -> list[dict]:

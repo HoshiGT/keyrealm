@@ -208,9 +208,14 @@ def get_display_summary(data: dict) -> str:
 # 免费档模型（ernie-speed / lite / tiny）不计费，欠费时照样能对话、看不出问题，
 # 所以自动选型刻意只挑**付费档**（ernie-3.5-8k 最便宜，其次 4.0）。
 _PROBE_MODELS = ("ernie-3.5-8k", "ernie-4.0-8k")
-# 百度把「额度用尽」放在错误码里（HTTP 200 + error_code）：19 = 总请求量已达上限。
-# 17（当日额度）/ 18（QPS）既可能是欠费也可能是限流，故意不下结论，避免误报。
-_INSUFFICIENT_CODES = {19}
+# 百度把「额度用尽」放在错误码里（HTTP 200 + `error_code`）。**但 17/18/19 官方全部归在
+# 「请求量 / 限流」，没有一个是欠费**（cloud.baidu.com/doc/NLP/s/Lk53we3le）：
+#   17 = 当日请求量已达上限   18 = QPS 超限   19 = 总请求量已达上限
+# 原来把 19 当欠费是**错的**——那会把用户往充值引（实际只是当天/总量被限）。
+# 官方真正表示欠费的是千帆那套**字符串**码（cloud.baidu.com/doc/qianfan/s/Pmh4sv5qa）：
+#   ChargeNotEnough（余额不足）/ NoOpenedBilling（未开通计费）/ OptInRequired（未开通协议）
+_INSUFFICIENT_CODES: frozenset = frozenset()          # 数值码里没有欠费
+_INSUFFICIENT_TEXT_CODES = ("chargenotenough", "noopenedbilling", "optinrequired")
 
 
 def quota_probe(data: dict) -> Optional[dict]:
@@ -264,7 +269,10 @@ def quota_probe(data: dict) -> Optional[dict]:
             return quota_ok()
         code = payload.get("error_code")
         message = str(payload.get("error_msg") or "")
-        if code in _INSUFFICIENT_CODES or is_insufficient_balance(message) or "欠费" in message:
+        # 数值码 17/18/19 官方都是**限流**（当日量 / QPS / 总量），不下欠费结论；
+        # 欠费只认官方的字符串码（ChargeNotEnough 等）与文案里的欠费字样。
+        haystack = f"{code} {message}".lower()
+        if any(t in haystack for t in _INSUFFICIENT_TEXT_CODES) or is_insufficient_balance(haystack):
             return quota_insufficient()
         # 其余（模型不可用 / 限流 / 参数错误）不下欠费结论，换下一个候选
     return quota_unknown()  # 候选试完仍无结论 → 报「实测 异常」

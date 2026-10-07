@@ -20,7 +20,8 @@
       "label": "Base URL",
       "type": "url",
       "required": true,
-      "placeholder": "https://relay.example.com/v1"
+      "placeholder": "https://relay.example.com/v1",
+      "hint": "填到 /v1 为止，或直接填裸域名均可（会做 /v1 归一化）。"
     },
     {
       "key": "api_key",
