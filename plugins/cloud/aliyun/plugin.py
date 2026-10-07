@@ -12,7 +12,7 @@
 
 - ``whoami``           查看调用者身份（STS GetCallerIdentity + 权限探测）
 - ``list_regions``     地域列表（ECS DescribeRegions，含中文名；行内「实例」下钻）
-- ``list_instances``   云主机实例列表（ECS DescribeInstances，表单可改地域）
+- ``list_instances``   云主机实例列表（ECS DescribeInstances，地域留空则枚举全部地域并汇总）
 - ``list_buckets``     对象存储桶列表（OSS ListBuckets；桶列表自带地域）
 - ``list_objects``     对象预览（OSS ListObjectsV2 + delimiter，文件与文件夹分行）
 - ``download_object``  下载单个对象（``save_to``，前端弹「另存为」）
@@ -75,6 +75,7 @@ _ENUM_PAGE = 1000
 MAX_ZIP_OBJECTS = 1000                # 单次最多打包的对象数
 MAX_ZIP_BYTES = 512 * 1024 * 1024     # 单次最多打包的原始总字节数（512 MiB）
 _ZIP_WORKERS = 8                      # 并发拉取对象的线程数
+_SWEEP_WORKERS = 8                    # 全域扫描（区域留空时逐个地域取实例）的并发线程数
 
 # 下载进度上报的节流：每写入这么多字节、或隔这么久才回调一次
 # （chunk 是 64 KiB，大文件不动节流会打出几万次事件）
@@ -396,12 +397,14 @@ def verify(data):
     code = str(payload.get("Code") or "").strip()
 
     if status == 200 and not code:
-        info: dict[str, Any] = {}
-        for src, dst in (("AccountId", "account_id"), ("Arn", "arn"), ("UserId", "user_id")):
-            value = payload.get(src)
-            if value:
-                info[dst] = value
-        return VerifyResult(status="valid", message="凭证有效", account_info=info or None)
+        # 附加信息只用来说明「这是哪个账号」——ARN / UserId 属于「这个凭据是谁」，
+        # 那是 whoami 动作的活（那里三项都在展示），列表里堆着反而挤掉了真正有用的区分信息。
+        account_id = payload.get("AccountId")
+        return VerifyResult(
+            status="valid",
+            message="凭证有效",
+            account_info={"account_id": account_id} if account_id else None,
+        )
 
     if code in _INVALID_CODES or code.startswith("InvalidAccessKeyId") or code == "SignatureDoesNotMatch":
         detail = payload.get("Message") or code
@@ -487,6 +490,8 @@ _REGION_COLUMNS = [
 
 _INSTANCE_COLUMNS = [
     {"key": "InstanceId", "label": "实例 ID", "mono": True},
+    # 「区域留空 = 枚举全部地域」时一张表里混着多个地域的实例，必须能一眼看出各在哪
+    {"key": "Region", "label": "区域", "width": 120},
     {"key": "InstanceName", "label": "实例名"},
     {"key": "Status", "label": "状态", "width": 100, "type": "tag"},
     {"key": "PublicIp", "label": "公网 IP", "width": 130, "mono": True},
@@ -560,6 +565,15 @@ _REGION_FIELD = {
     "key": "region",
     "label": "地域",
     "placeholder": f"默认 {DEFAULT_REGION}，如 cn-beijing",
+}
+
+# 云主机专用：这里「留空」的含义与 OSS 那几个动作**不同**——
+# OSS 留空回落到 DEFAULT_REGION（端点必须确定），云主机留空则枚举全部地域。
+# 同名 key 语义相反，所以文案单独一份，不复用上面的 _REGION_FIELD。
+_INSTANCE_REGION_FIELD = {
+    "key": "region",
+    "label": "地域",
+    "placeholder": "留空枚举全部地域，也可只填一个如 cn-beijing",
 }
 _ENDPOINT_FIELD = {
     "key": "endpoint",
@@ -643,12 +657,12 @@ def actions(data: dict) -> list[dict]:
             "kind": "list",
             "group": "计算",
             "order": 20,
-            "description": f"ECS DescribeInstances（地域默认 {DEFAULT_REGION}，可直接填，或从「地域列表」行内进入）",
+            "description": f"ECS DescribeInstances（地域留空 = 枚举全部地域并汇总；填了则只查该地域，如 {DEFAULT_REGION}）",
             "columns": _INSTANCE_COLUMNS,
             # 列表操作也能带 fields：前端渲染成表格上方一行内联表单，点「刷新」时并入参数
-            "fields": [_REGION_FIELD],
+            "fields": [_INSTANCE_REGION_FIELD],
             "submit": "查询",
-            "empty_text": f"暂无云主机实例（默认地域 {DEFAULT_REGION}）",
+            "empty_text": "暂无云主机实例（未填地域时为全部地域）",
         },
         {
             "id": "list_buckets",
@@ -811,19 +825,28 @@ def _run_whoami(ak: str, sk: str) -> dict:
     return {"ok": True, "rows": rows, "columns": _WHOAMI_COLUMNS, "total": len(rows), "has_more": False}
 
 
+def _fetch_regions(client, ak: str, sk: str) -> tuple[list[dict], str]:
+    """ECS DescribeRegions 的原始 Region 条目；返回 ``(items, error)``。
+
+    「地域列表」展示与「地域留空 → 枚举全部地域」共用这**一次**调用，不各写一遍签名请求。
+    """
+    resp = _rpc_get(client, ECS_ENDPOINT, "DescribeRegions", ECS_VERSION, {}, ak, sk)
+    payload = safe_json(resp) or {}
+    if resp.status_code != 200 or payload.get("Code"):
+        return [], _rpc_failure(resp, ak, sk)
+    items = first_list(payload, "Regions", "Region") or []
+    return [item for item in items if isinstance(item, dict)], ""
+
+
 def _run_list_regions(ak: str, sk: str) -> dict:
     """地域列表（ECS DescribeRegions，只读）：Regions.Region[] → 地域 ID / 中文名。"""
     with make_client() as client:
-        resp = _rpc_get(client, ECS_ENDPOINT, "DescribeRegions", ECS_VERSION, {}, ak, sk)
-    payload = safe_json(resp) or {}
-    if resp.status_code != 200 or payload.get("Code"):
-        return {"ok": False, "error": _rpc_failure(resp, ak, sk)}
+        regions, error = _fetch_regions(client, ak, sk)
+    if error:
+        return {"ok": False, "error": error}
 
-    regions = first_list(payload, "Regions", "Region") or []
     rows = []
     for item in regions:
-        if not isinstance(item, dict):
-            continue
         region_id = item.get("RegionId") or ""
         if not region_id:
             continue
@@ -845,44 +868,185 @@ def _run_list_regions(ak: str, sk: str) -> dict:
     }
 
 
-def _run_list_instances(ak: str, sk: str, params: dict) -> dict:
-    region = _field(params, "region") or DEFAULT_REGION
-    with make_client() as client:
-        resp = _rpc_get(
-            client,
-            ECS_ENDPOINT,
-            "DescribeInstances",
-            ECS_VERSION,
-            {"RegionId": region, "PageSize": "100"},
-            ak,
-            sk,
-        )
+def _ecs_endpoint(region_endpoint: str) -> str:
+    """把 DescribeRegions 给的 ``RegionEndpoint`` 归一成完整 URL；空值/不合法回落全局端点。
+
+    该字段**不带** scheme（如 ``ecs.cn-fuzhou.aliyuncs.com``），不补 ``https://`` 拼出来的
+    地址 httpx 会当相对路径处理。和 OSS 端点一样做白名单式校验，不把接口给的字符串直接拼进 URL。
+    """
+    host = (region_endpoint or "").strip().lower()
+    for scheme in ("https://", "http://"):
+        if host.startswith(scheme):
+            host = host[len(scheme):]
+    host = host.rstrip("/")
+    if not host or not _HOST_RE.match(host):
+        return ECS_ENDPOINT
+    return f"https://{host}"
+
+
+def _region_endpoints(regions: list[dict]) -> dict[str, str]:
+    """DescribeRegions 条目 → ``{RegionId: 完整端点 URL}``（条目里没有的键就不出现）。"""
+    mapping: dict[str, str] = {}
+    for item in regions:
+        region_id = str(item.get("RegionId") or "")
+        if region_id:
+            mapping[region_id] = _ecs_endpoint(str(item.get("RegionEndpoint") or ""))
+    return mapping
+
+
+def _instances_one(
+    client, ak: str, sk: str, region: str, endpoint: str = ""
+) -> tuple[list[dict], int, str]:
+    """取**单个地域**的 ECS 实例；返回 ``(rows, total, error)``（error 非空时 rows 必为空）。
+
+    ``endpoint`` 传该地域自己的 ``RegionEndpoint``（见 ``_region_endpoints``）：
+    阿里云有一批地域（cn-fuzhou / cn-wulanchabu / cn-nanjing …）**不接受**全局端点，
+    会对全局端点回「The specified endpoint cant operate this region」。
+    留空才回落全局端点 —— 老地域如 cn-hangzhou 的 RegionEndpoint 本来就等于全局地址。
+
+    ``client`` 由调用方（父线程）建好传进来：代理按线程隔离，worker 里不能再建。
+    """
+    resp = _rpc_get(
+        client,
+        endpoint or ECS_ENDPOINT,
+        "DescribeInstances",
+        ECS_VERSION,
+        {"RegionId": region, "PageSize": "100"},
+        ak,
+        sk,
+    )
     payload = safe_json(resp) or {}
     if resp.status_code != 200 or payload.get("Code"):
-        return {"ok": False, "error": _rpc_failure(resp, ak, sk)}
+        return [], 0, _rpc_failure(resp, ak, sk)
 
-    instances = first_list(payload, "Instances") or []
     rows = []
-    for inst in instances:
+    for inst in first_list(payload, "Instances") or []:
         if not isinstance(inst, dict):
             continue
         ips = first_list(inst.get("PublicIpAddress") or {}, "IpAddress") or []
         rows.append(
             {
                 "InstanceId": inst.get("InstanceId") or "",
+                "Region": region,
                 "InstanceName": inst.get("InstanceName") or "",
                 "Status": inst.get("Status") or "",
                 "PublicIp": ips[0] if ips else "",
                 "InstanceType": inst.get("InstanceType") or "",
             }
         )
+    return rows, int(payload.get("TotalCount") or len(rows)), ""
+
+
+def _sweep(items: list, worker) -> list[tuple[Any, Any, str]]:
+    """并发对每个 item 调一次 ``worker(item)``，按**原顺序**返回 ``(item, 结果, 异常名)``。
+
+    两个必须点：
+
+    - ``client`` 由**父线程**创建后用闭包共享进来：代理是线程隔离的
+      （``vault_proxy_ctx`` 用 ``threading.local``），worker 里各自 ``make_client()``
+      拿不到本次凭据的代理。httpx client 本身线程安全，共享即可。
+    - 单个 item 抛异常（Throttling / 无权限 / 网络抖动）**只记一笔**，绝不毁掉整批。
+
+    顺序按输入还原：``as_completed`` 的完成顺序不确定，直接拼接会让汇总表每次刷新行列乱序。
+    """
+    ordered: list[tuple[Any, Any, str]] = [(item, None, "") for item in items]
+    if not items:
+        return ordered
+    with ThreadPoolExecutor(max_workers=min(_SWEEP_WORKERS, len(items))) as pool:
+        futures = {pool.submit(worker, item): index for index, item in enumerate(items)}
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                ordered[index] = (items[index], future.result(), "")
+            except Exception as exc:  # noqa: BLE001 - 单个地域失败不毁整张表
+                ordered[index] = (items[index], None, type(exc).__name__)
+    return ordered
+
+
+def _summarize(items: list[str], limit: int = 5) -> str:
+    """把（可能很长的）失败清单压成一行：最多列 limit 项，其余用总数收尾。"""
+    if len(items) <= limit:
+        return "、".join(items)
+    return f"{'、'.join(items[:limit])} 等 {len(items)} 个"
+
+
+def _run_list_instances(ak: str, sk: str, params: dict) -> dict:
+    """云主机实例列表：填了地域就只查它；**留空则枚举全部地域**并发取完汇总成一张表。
+
+    ECS 的端点**随地域而定**：cn-hangzhou 的 RegionEndpoint 正好就是全局的
+    ecs.aliyuncs.com，但 cn-fuzhou / cn-wulanchabu / cn-nanjing 这类地域只认自己的
+    ecs.<region>.aliyuncs.com，对全局端点会回「cant operate this region」。
+    所以两条路都先取一次地域列表拿 ``RegionEndpoint``，再带**该地域自己的**端点发请求。
+    """
+    region = _field(params, "region")
+
+    # client 在父线程建好、共享给 worker（见 _sweep 的说明），两条分支共用同一个
+    with make_client() as client:
+        if region:
+            # 填了地域 —— 取列表只为拿端点。**取失败就静默回落全局端点照旧发**：
+            # 别把「查不到端点」变成单地域路径的新失败点，让上游按老样子报
+            # 「地域不存在 / 无权限」等原始错误。
+            regions, list_error = _fetch_regions(client, ak, sk)
+            endpoint = "" if list_error else _region_endpoints(regions).get(region, "")
+            rows, total, error = _instances_one(client, ak, sk, region, endpoint)
+            if error:
+                return {"ok": False, "error": error}
+            return {
+                "ok": True,
+                "rows": rows,
+                "columns": _INSTANCE_COLUMNS,
+                "total": total,
+                "empty_text": f"暂无云主机实例（地域 {region}）",
+                "has_more": total > len(rows),
+            }
+
+        # 留空 —— 先拿地域全集（**每条带各自端点**），再逐地域并发取实例
+        regions, error = _fetch_regions(client, ak, sk)
+        if error:
+            return {"ok": False, "error": f"未填地域，取地域列表失败：{error}"}
+        targets = [
+            (str(item.get("RegionId")), _ecs_endpoint(str(item.get("RegionEndpoint") or "")))
+            for item in regions
+            if item.get("RegionId")
+        ]
+        if not targets:
+            return {"ok": False, "error": "未填地域，且未获取到地域列表，无法枚举"}
+        swept = _sweep(
+            targets, lambda target: _instances_one(client, ak, sk, target[0], target[1])
+        )
+
+    rows: list[dict] = []
+    total = 0
+    has_more = False
+    failed: list[str] = []
+    for target, result, exc_name in swept:
+        region_id = target[0]
+        if exc_name:
+            failed.append(f"{region_id}（{exc_name}）")
+            continue
+        part_rows, part_total, part_error = result
+        if part_error:
+            failed.append(f"{region_id}（{part_error}）")
+            continue
+        rows.extend(part_rows)
+        total += part_total
+        has_more = has_more or part_total > len(part_rows)
+
+    summary = _summarize(failed)
+    empty_text = f"未填地域，已扫描全部 {len(targets)} 个地域，均无云主机实例"
+    if failed:
+        empty_text = f"{empty_text}；{len(failed)} 个地域查询失败：{summary}"
+    if failed and rows:
+        # 表里有数据时 empty_text 不会渲染，这时只能靠末尾一行备注把失败的地域说出来
+        rows.append({"InstanceName": f"备注：{len(failed)} 个地域查询失败 —— {summary}"})
+
     return {
         "ok": True,
         "rows": rows,
         "columns": _INSTANCE_COLUMNS,
-        "total": int(payload.get("TotalCount") or len(rows)),
-        "empty_text": f"暂无云主机实例（地域 {region}）",
-        "has_more": bool(payload.get("TotalCount") and int(payload["TotalCount"]) > len(rows)),
+        "total": total or len(rows),
+        "has_more": has_more,
+        "empty_text": empty_text,
     }
 
 
