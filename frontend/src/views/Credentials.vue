@@ -251,10 +251,25 @@ function blankActionDialog() {
 
 const actionDialog = ref(blankActionDialog())
 
+// 操作表单（form 的表单与 list 的参数行共用一个 ref：两者不同时挂载）
+const actionFormRef = ref(null)
+
 // 操作弹窗表单字段：按 show_if 过滤（与凭据表单同一套规则）
 const actionFormFields = computed(
   () => visibleFields(actionDialog.value.fields, actionDialog.value.values),
 )
+
+/** 操作表单的必填校验：由插件声明的 fields[].required 生成，与凭据表单同一套规则。
+ *  加 prop + 这份 rules 后，el-form-item 会自动渲染红色星号并拦截空提交。 */
+const actionRules = computed(() => {
+  const rules = {}
+  for (const field of actionFormFields.value) {
+    if (!field.required) continue
+    const trigger = field.type === 'select' || field.type === 'checkbox' ? 'change' : 'blur'
+    rules[field.key] = [{ required: true, message: `请填写${field.label}`, trigger }]
+  }
+  return rules
+})
 
 /** 进度百分比；总量未知（total<=0）时返回 0，由 el-progress 的 indeterminate 走动画 */
 const progressPercent = computed(() => {
@@ -608,9 +623,17 @@ function listRequestParams() {
   return { ...dialog.listParams, ...dialog.values }
 }
 
-function refreshList() {
+async function refreshList() {
   const dialog = actionDialog.value
   if (dialog.kind !== 'list' || dialog.listLoading) return
+  // 列表参数里若有必填项（例如收件箱的文件夹），空着就拦下——与「拉取」按钮同一条校验
+  if (actionFormRef.value) {
+    try {
+      await actionFormRef.value.validate()
+    } catch {
+      return
+    }
+  }
   fetchList(dialog.actionId, listRequestParams())
 }
 
@@ -749,6 +772,14 @@ async function pickSavePath() {
 async function runActionForm() {
   const dialog = actionDialog.value
   if (dialog.busy) return
+  // 必填未过就停在原地：红星与错误提示是给用户的反馈，不该悄悄跑掉
+  if (actionFormRef.value) {
+    try {
+      await actionFormRef.value.validate()
+    } catch {
+      return
+    }
+  }
   // 顺序：先确认（写操作）→ 再选保存路径 → 最后执行。
   // 先让人起好文件名再问「确定吗」是反的，而且取消确认不该弹出系统对话框。
   if (dialog.write && !(await confirmWrite())) return
@@ -1016,15 +1047,23 @@ const ACCOUNT_INFO_LABELS = {
   app_key: 'App Key',
   tenant: '租户',
   account: '账号',
+  mode: '应用类型',
+  // 服务账号类（firebase / gcp）：这几个键插件会原样回传，没标签就会显示成原始英文键
+  client_email: '服务账号',
+  project_id: '项目 ID',
+  private_key_id: '密钥 ID',
+  firebase_state: '项目状态',
+  hostingSite: 'Hosting 站点',
+  token_expires_in: '令牌有效期（秒）',
+  project_number: '项目号',
 }
 
-// 除余额/使用率/组织外，其余字段的展示优先级（只取最关键的少量，保持简洁）
+// 除余额/使用率/组织外，其余字段的展示顺序（只定顺序，不再限制条数）
 const ACCOUNT_INFO_PRIORITY = [
   'domain_count', 'workspace_count', 'model_count',
   'login', 'username', 'name', 'email',
   'account_id', 'user_id', 'totalEq', 'channel_id', 'server',
 ]
-const EXTRA_MAX = 2
 
 /** 把 account_info 的单个值格式化为可读文本（毫秒时间戳转日期） */
 function formatAccountValue(key, value) {
@@ -1034,37 +1073,34 @@ function formatAccountValue(key, value) {
   return String(value)
 }
 
-/** 附加信息列：把 account_info 渲染为「标签 值 · …」的可读文本 */
-function extraInfo(row) {
+/** 附加信息列：把 account_info 摊成「每行一个字段」的文本数组。
+ *  余额/使用率/组织有专门格式化且固定在前；其余键按优先级排序后**每个各占一行**
+ *  （优先级只决定顺序，不再截断条数），null / 空串 / 对象或数组值仍然跳过。 */
+function extraLines(row) {
   const info = row.status_detail && row.status_detail.account_info
-  if (!info || typeof info !== 'object') return ''
-  const parts = []
+  if (!info || typeof info !== 'object') return []
+  const lines = []
   if (info.balance !== undefined && info.balance !== null && info.balance !== '') {
     const num = Number(info.balance)
     const shown = Number.isFinite(num) ? num.toFixed(2) : String(info.balance)
-    parts.push(`余额 ${shown}${info.currency ? ` ${info.currency}` : ''}`)
+    lines.push(`余额 ${shown}${info.currency ? ` ${info.currency}` : ''}`)
   }
   if (info.usage_rate !== undefined && info.usage_rate !== null && info.usage_rate !== '') {
     const pct = Math.round(Number(info.usage_rate) * 100)
-    if (!Number.isNaN(pct)) parts.push(`使用率 ${pct}%`)
+    if (!Number.isNaN(pct)) lines.push(`使用率 ${pct}%`)
   }
-  if (info.organization) parts.push(`组织 ${info.organization}`)
-  // 其余字段按优先级挑选，最多 EXTRA_MAX 项，超长值跳过——保持简洁
+  if (info.organization) lines.push(`组织 ${info.organization}`)
   const skip = new Set(['balance', 'currency', 'organization', 'usage_rate', 'usage_label'])
-  const rest = []
   const candidates = [...ACCOUNT_INFO_PRIORITY, ...Object.keys(info)]
   const used = new Set()
   for (const key of candidates) {
-    if (rest.length >= EXTRA_MAX) break
     if (skip.has(key) || used.has(key)) continue
     used.add(key)
     const value = info[key]
     if (value === null || value === undefined || value === '' || typeof value === 'object') continue
-    const text = formatAccountValue(key, value)
-    if (text.length > 40) continue
-    rest.push(`${ACCOUNT_INFO_LABELS[key] || key} ${text}`)
+    lines.push(`${ACCOUNT_INFO_LABELS[key] || key} ${formatAccountValue(key, value)}`)
   }
-  return [...parts, ...rest].join(' · ')
+  return lines
 }
 
 function notesOf(row) {
@@ -1541,6 +1577,25 @@ const pageSize = ref(normalizePageSize(localStorage.getItem(PAGE_SIZE_KEY)))
 const currentPage = ref(1)
 watch(pageSize, (value) => localStorage.setItem(PAGE_SIZE_KEY, String(value)))
 
+// ── 行高三档：紧凑 / 标准 / 宽松 = 单元格最多显示 1 / 2 / 3 行 ──
+// 纯展示偏好，和列宽/排序一样只存浏览器；档位通过 CSS 变量作用在凭据表上（见模板 class="cred-table"）。
+const ROW_LINES_KEY = 'vault.credentials.rowLines'
+const ROW_LINES_OPTIONS = [
+  { value: 1, label: '紧凑' },
+  { value: 2, label: '标准' },
+  { value: 3, label: '宽松' },
+]
+const ROW_LINES_DEFAULT = 2
+
+/** 规整档位值：只接受 1/2/3，其余（含 localStorage 里的旧值/脏值）一律落回默认「标准」 */
+function normalizeRowLines(value) {
+  const n = Math.floor(Number(value))
+  return ROW_LINES_OPTIONS.some((opt) => opt.value === n) ? n : ROW_LINES_DEFAULT
+}
+
+const rowLines = ref(normalizeRowLines(localStorage.getItem(ROW_LINES_KEY)))
+watch(rowLines, (value) => localStorage.setItem(ROW_LINES_KEY, String(value)))
+
 /** 手输的每页条数写回前先规整：`0` / 负数 / 字母 / 空都会落回默认值。
  *  这种情况必须**说出来**——否则用户会以为自己填的 0 被界面悄悄改了。 */
 function onPageSizeChange(value) {
@@ -1701,6 +1756,9 @@ onMounted(async () => {
       </el-select>
       <el-select v-model="sortDir" class="sort-dir">
         <el-option v-for="opt in SORT_DIRS" :key="opt.value" :label="opt.label" :value="opt.value" />
+      </el-select>
+      <el-select v-model="rowLines" class="row-lines" title="行高">
+        <el-option v-for="opt in ROW_LINES_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
       </el-select>
       <el-popover placement="bottom-end" :width="200" trigger="click">
         <template #reference>
@@ -1865,6 +1923,8 @@ onMounted(async () => {
         <el-table
           ref="tableRef"
           v-loading="vaultStore.loadingCredentials"
+          class="cred-table"
+          :style="{ '--cred-row-lines': rowLines + 1 }"
           :data="pagedCredentials"
           empty-text="暂无凭据，点击右上角「添加凭据」开始"
           style="width: 100%"
@@ -1903,7 +1963,10 @@ onMounted(async () => {
             </template>
 
             <template v-else-if="col.key === 'extra'" #default="{ row }">
-              <span class="text-muted cell-ellipsis" :title="extraInfo(row) || ''">{{ extraInfo(row) || '—' }}</span>
+              <span class="text-muted cell-ellipsis" :title="extraLines(row).join('\n')">
+                <span v-for="(line, index) in extraLines(row)" :key="index" class="extra-line">{{ line }}</span>
+                <template v-if="!extraLines(row).length">—</template>
+              </span>
             </template>
 
             <template v-else-if="col.key === 'group'" #default="{ row }">
@@ -2187,7 +2250,10 @@ onMounted(async () => {
       <div v-if="actionDialog.description" class="action-desc">{{ actionDialog.description }}</div>
 
       <template v-if="actionDialog.kind === 'chat'">
-        <div class="chat-model">
+        <!-- 「模型」这一行只在**用得上**时出现：动作声明了默认 model（LLM 类都声明了），
+             或者 list_models 真的取到了候选。像 Dify 那种模型写死在应用编排里、
+             根本没实现 list_models 的插件，就不该显示一个空下拉 + 一句红色的「获取模型列表失败」。 -->
+        <div v-if="actionDialog.model || actionDialog.models.length" class="chat-model">
           <span class="text-muted">模型</span>
           <el-select
             v-model="actionDialog.model"
@@ -2239,8 +2305,14 @@ onMounted(async () => {
         </div>
       </template>
       <template v-else-if="actionDialog.kind === 'form'">
-        <el-form label-width="90px" @submit.prevent>
-          <el-form-item v-for="field in actionFormFields" :key="field.key" :label="field.label">
+        <el-form
+          ref="actionFormRef"
+          :model="actionDialog.values"
+          :rules="actionRules"
+          label-width="90px"
+          @submit.prevent
+        >
+          <el-form-item v-for="field in actionFormFields" :key="field.key" :label="field.label" :prop="field.key">
             <el-select
               v-if="field.type === 'select'"
               v-model="actionDialog.values[field.key]"
@@ -2339,15 +2411,19 @@ onMounted(async () => {
         <!-- 列表参数：例如「收件箱」要选拉取封数/文件夹 -->
         <el-form
           v-if="actionFormFields.length"
+          ref="actionFormRef"
           class="list-fields"
           size="small"
           :inline="true"
+          :model="actionDialog.values"
+          :rules="actionRules"
           @submit.prevent
         >
           <el-form-item
             v-for="field in actionFormFields"
             :key="field.key"
             :label="field.label"
+            :prop="field.key"
           >
             <el-select
               v-if="field.type === 'select'"
@@ -2625,6 +2701,29 @@ onMounted(async () => {
 .cell-ellipsis {
   display: block;
   max-width: 100%;
+}
+
+/* ── 行高三档（--cred-row-lines 只绑在凭据表上，见模板 class="cred-table"）──
+   绝不能提到 .page：el-dialog 渲染在 .page 内部，会连带改掉操作弹窗里表格的行高。
+   变量的语义是「该行能容纳的文字行数」，绑定时写成 rowLines + 1（档位 1/2/3 → 2/3/4）：
+   「名称」列天生占两行（名称 + 下面的子行），第一档必须等于现状，故最低就是 2 行。
+   min-height 让**所有行等高**；line-clamp 用同一个变量，把超出档位的内容截断（悬停看 title 全文）。 */
+.cred-table :deep(.cell) {
+  min-height: calc(1.5em * var(--cred-row-lines, 3));
+}
+
+.cred-table .cell-ellipsis {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--cred-row-lines, 3);
+  white-space: normal;
+  word-break: break-word;
+  overflow: hidden;
+}
+
+/* 附加信息：一个字段一行 */
+.extra-line {
+  display: block;
 }
 
 /* el-tag 的文字在 .el-tag__content 里，得单独压；否则分组名长了照样撑开 */
@@ -2968,6 +3067,10 @@ onMounted(async () => {
 
 .sort-dir {
   width: 96px;
+}
+
+.row-lines {
+  width: 88px;   /* 选项 label 只有两个字（紧凑/标准/宽松），无需更宽 */
 }
 
 /* ── 分页（在筛选框 .filter-bar 内整体靠右，见该处模板） ── */

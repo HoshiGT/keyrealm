@@ -359,8 +359,30 @@ App.vue
 表格列：凭据（图标 + 名称 + 掩码敏感值副标题，如 `sk-123…cdef`）、类型、备注、
 附加信息（余额等 account_info）、分组、状态、添加时间、最后验证、最后有效、操作。
 
-> **单元格一律单行省略**（`.cell-ellipsis` / `.cell-tag`）：备注、附加信息、分组名再长也不会把
-> 行高撑大——一律 `text-overflow: ellipsis`，鼠标悬停由元素自带的 `title` 显示全文。
+**「附加信息」每个字段各占一行**：`extraLines(row)` 把 `status_detail.account_info` 摊成字符串数组
+（`balance` / `usage_rate` / `organization` 有专门格式化且固定在前；其余键按
+`ACCOUNT_INFO_PRIORITY` 排序后**逐个成行**），模板用 `.extra-line` 逐行渲染，`title` 用 `\n` 连全文。
+**不再截断条数**（旧版是「最多 2 条、用 ` · ` 拼一行」）；`null` / 空串 / 对象或数组值仍跳过
+——后者是插件把数组塞进 `account_info` 时前端压根渲染不出来的原因（如 Google 的 `authorized_domains`），
+所以**「只留账号」这类要求应当落成「让 account_info 里只剩一个标量键」**，而不是删前端逻辑。
+键没有中文标签时会显示**原始英文键**，新增可读字段记得往 `Credentials.vue` 的
+`ACCOUNT_INFO_LABELS` 里补一条（服务账号类的 `client_email` / `project_id` / `private_key_id` /
+`firebase_state` / `hostingSite` / `token_expires_in` 已补）。
+
+**行高三档**：备注与附加信息**允许换行**，但行高由工具栏的「行高三档」统一控制 ——
+**紧凑 / 标准 / 宽松**（值 1 / 2 / 3，**默认「标准」**）。实现是给凭据表挂一个 CSS 变量
+`--cred-row-lines`，`.cell` 加 `min-height: calc(1.5em * var(--cred-row-lines, 3))` 保证**所有行等高**，
+`.cell-ellipsis` 用 `-webkit-line-clamp` 截断超出部分（悬停由元素自带的 `title` 显示全文）。
+
+> **变量值是「该行能容纳的文字行数」，档位 N 对应 N+1 行**（模板里写 `rowLines + 1`）：
+> 「名称」列天生就占两行（`.credential-name` + `.credential-sub`），所以档 1 必须等于现状的 2 行，
+> 逐档 +1 行 —— `min-height` 以行数为单位，若直接把档位当行数，档 1 与档 2 都会低于名称列的自然高度
+> 而**完全一样高**（实测过：58 / 58 / 78px）。改成 N+1 后实测 58 / 78 / 98px，每档正好 +1 行。
+>
+> **变量只绑在凭据表上（`class="cred-table"`），绝不绑 `.page`** —— `el-dialog` 渲染在 `.page` 内部，
+> 绑上去会连带改掉操作弹窗里两张表的行高。档位存 `localStorage['vault.credentials.rowLines']`，
+> 过 `normalizeRowLines()` 规整（只收 1/2/3，其余落回默认），与其他 `vault.credentials.*` 同一套纯前端偏好。
+
 > el-tag 的文字在 `.el-tag__content` 里，需单独压一层，否则分组名长了照样撑开。
 
 **「状态」列与派生状态「插件禁用」**：入库的状态有四个——`valid` 有效 / `invalid` 失效 /
@@ -472,6 +494,14 @@ App.vue
   > `actionDialog.credentialName`（在 `openList` / `openAction` 首次打开时从 `cred.name` 落进去）
   > 传给 `openList` / `openAction`。否则只传 `{ id }` 会让标题渲染成「云主机实例列表 ·
   > `undefined`」。
+- **操作表单的必填校验**：`form` 类的表单与 `list` 类的内联参数行**共用** `actionFormFields`，
+  两处的 `<el-form>` 都挂了 `ref="actionFormRef"` + `:model="actionDialog.values"` + `:rules="actionRules"`，
+  每个 `el-form-item` 带 `:prop="field.key"`。`actionRules` 由插件的 `fields[].required` 生成
+  （trigger：select/checkbox → `change`，其余 `blur`），提交前 `runActionForm` / `refreshList`
+  各自 `await validate()`，不过就停在原地（红星与错误提示才是给用户的反馈，不该悄悄跑掉）。
+  > 两处 `<el-form>` 复用同一个 `ref` 是安全的：`form` 与 `list` 是 `v-else-if` 分支，**不同时挂载**。
+  > 加 `prop` 之前这两处**既无红星也不校验**（插件声明了 `required` 也形同虚设），而
+  > 「新增 / 编辑凭据」表单一直是有红星与校验的（`CredentialForm.vue`）——两边口径现在才对齐。
 - **下载类操作**（`save_to`）：顺序是**先确认（若 write）→ 弹「另存为」→ 把路径塞进 `params` → 调插件**。
   路径不是秘密，而不是把带鉴权头的下载 URL 交给前端——那等于把短期凭证递给 JS。
 
