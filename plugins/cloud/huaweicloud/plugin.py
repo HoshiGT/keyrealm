@@ -568,13 +568,6 @@ def _sweep(items: list, worker) -> list[tuple[Any, Any, str]]:
     return ordered
 
 
-def _summarize(items: list[str], limit: int = 5) -> str:
-    """把（可能很长的）失败清单压成一行：最多列 limit 项，其余用总数收尾。"""
-    if len(items) <= limit:
-        return "、".join(items)
-    return f"{'、'.join(items[:limit])} 等 {len(items)} 个"
-
-
 # ── 权限探测汇总（capabilities）───────────────────────────
 
 def _probe_all(ak: str, sk: str, region: str, project_id: str) -> dict:
@@ -1183,27 +1176,19 @@ def _run_list_instances(ak: str, sk: str, params: dict, default_region: str, pro
     rows: list[dict] = []
     total = 0
     has_more = False
-    failed: list[str] = []
-    for target, result, exc_name in swept:
-        region_id = target[0]          # target 是 (区域, project_id)，取区域做标签
+    for _target, result, exc_name in swept:      # target 是 (区域, project_id)，这里只用结果
         if exc_name:
-            failed.append(f"{region_id}（{exc_name}）")
-            continue
+            continue                       # 单个区域查询失败（限流 / 该区域无权限）直接跳过，不进结果
         part_rows, part_total, part_error = result
         if part_error:
-            failed.append(f"{region_id}（{part_error}）")
             continue
         rows.extend(part_rows)
         total += part_total
         has_more = has_more or part_total > len(part_rows)
 
-    summary = _summarize(failed)
+    # 只列**成功取到**的区域：失败的区域既不进结果表，也不在空态文案里提一句——
+    # 这类失败（如子用户被限制在某几个区域）是常态，报出来只是噪音。
     empty_text = f"未填区域，已扫描全部 {len(targets)} 个区域，均无云主机实例"
-    if failed:
-        empty_text = f"{empty_text}；{len(failed)} 个区域查询失败：{summary}"
-    if failed and rows:
-        # 表里有数据时 empty_text 不会渲染，这时只能靠末尾一行备注把失败的区域说出来
-        rows.append({"InstanceName": f"备注：{len(failed)} 个区域查询失败 —— {summary}"})
 
     return {
         "ok": True,

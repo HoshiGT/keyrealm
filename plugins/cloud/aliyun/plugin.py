@@ -963,13 +963,6 @@ def _sweep(items: list, worker) -> list[tuple[Any, Any, str]]:
     return ordered
 
 
-def _summarize(items: list[str], limit: int = 5) -> str:
-    """把（可能很长的）失败清单压成一行：最多列 limit 项，其余用总数收尾。"""
-    if len(items) <= limit:
-        return "、".join(items)
-    return f"{'、'.join(items[:limit])} 等 {len(items)} 个"
-
-
 def _run_list_instances(ak: str, sk: str, params: dict) -> dict:
     """云主机实例列表：填了地域就只查它；**留空则枚举全部地域**并发取完汇总成一张表。
 
@@ -1018,27 +1011,19 @@ def _run_list_instances(ak: str, sk: str, params: dict) -> dict:
     rows: list[dict] = []
     total = 0
     has_more = False
-    failed: list[str] = []
-    for target, result, exc_name in swept:
-        region_id = target[0]
+    for _target, result, exc_name in swept:
         if exc_name:
-            failed.append(f"{region_id}（{exc_name}）")
-            continue
+            continue                       # 单个地域查询失败（限流 / 该地域无权限）直接跳过，不进结果
         part_rows, part_total, part_error = result
         if part_error:
-            failed.append(f"{region_id}（{part_error}）")
             continue
         rows.extend(part_rows)
         total += part_total
         has_more = has_more or part_total > len(part_rows)
 
-    summary = _summarize(failed)
+    # 只列**成功取到**的地域：失败的地域既不进结果表，也不在空态文案里提一句——
+    # 这类失败（如子用户被限制在某几个地域）是常态，报出来只是噪音。
     empty_text = f"未填地域，已扫描全部 {len(targets)} 个地域，均无云主机实例"
-    if failed:
-        empty_text = f"{empty_text}；{len(failed)} 个地域查询失败：{summary}"
-    if failed and rows:
-        # 表里有数据时 empty_text 不会渲染，这时只能靠末尾一行备注把失败的地域说出来
-        rows.append({"InstanceName": f"备注：{len(failed)} 个地域查询失败 —— {summary}"})
 
     return {
         "ok": True,

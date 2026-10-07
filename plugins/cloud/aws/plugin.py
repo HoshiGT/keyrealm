@@ -1217,7 +1217,6 @@ def _run_list_instances(ak: str, sk: str, token: str, params: dict) -> dict:
             return {"ok": False, "error": "未获取到任何可用区域，请在表单里指定区域"}
 
         rows: list[dict] = []
-        failed: list[str] = []
         has_more = False
         # 并发要点：client 在**父线程**创建、共享给 worker。
         # 代理是按线程隔离的（vault_proxy_ctx 用 threading.local），worker 里各自
@@ -1227,22 +1226,16 @@ def _run_list_instances(ak: str, sk: str, token: str, params: dict) -> dict:
                 pool.submit(_instances_one, client, name, ak, sk, token): name for name in names
             }
             for future in as_completed(futures):
-                name = futures[future]
                 try:
-                    part, more, err = future.result()
-                except Exception as exc:  # noqa: BLE001 - 单区域炸掉不能毁整张表
-                    failed.append(f"{name}（{type(exc).__name__}）")
+                    part, more, _err = future.result()
+                except Exception:  # noqa: BLE001 - 单区域炸掉不能毁整张表
                     continue
                 rows.extend(part)
                 has_more = has_more or more
-                if err:
-                    failed.append(f"{name}（{err}）")
 
-    note = f"已扫描全部 {len(names)} 个区域"
-    if failed:
-        shown = "、".join(failed[:5]) + ("…" if len(failed) > 5 else "")
-        note = f"{note}，其中 {len(failed)} 个区域查询失败：{shown}"
-    return _instances_result(rows, has_more, f"{note}，暂无云主机实例")
+    # 只列**成功取到**的区域：查询失败的区域（限流 / 未授权 / 未开通）既不进结果表，
+    # 也不在空态文案里提一句。这类失败（如子用户被限制在某几个区域）是常态，报出来只是噪音。
+    return _instances_result(rows, has_more, f"已扫描全部 {len(names)} 个区域，暂无云主机实例")
 
 
 # ── S3 ──────────────────────────────────────────────────
