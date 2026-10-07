@@ -88,23 +88,35 @@ _USAGE_TIMEOUT = 6.0
 
 # ── codex 对话的模型名 ────────────────────────────────────────────────────
 # **优先走官方目录端点**（见 `_codex_models_from_api`），下面这份只是它拿不到时的兜底。
-# 名单取**官方文档明确推荐**的登录态模型（`learn.chatgpt.com/docs/models`）：
-# 「复杂编码 / agentic 用 GPT-6.1 Sol，轻量重复任务用 GPT-6 Luna」，GPT-6 Sol 是推荐替代。
-# 旧值（`gpt-5.1-codex-mini` 等）是凭印象编的——官方二进制里 **0 命中**，实测直接 400：
-#     The 'gpt-5.1-codex-mini' model is not supported when using Codex with a ChatGPT account.
-# 而 `gpt-5.2-codex` / `gpt-5.3-codex` 官方已标**在登录态下 deprecated**，所以不放进来。
-# 该端点没有公开的模型清单文档，界面上的「模型」下拉允许手输（allow-create）覆盖这里。
+# 名单以**实测到的真实账号清单**为准（2026-10-08 用一把 Plus 账号打目录端点，取
+# `visibility == "list"` 的条目）：gpt-6-astra / gpt-6-sol / gpt-6-luna /
+# gpt-5.6-sol / gpt-5.6-terra / gpt-5.6-luna（另有 3 个 `visibility=="hide"` 的被排除）。
+# **光看官方文档会挑错**：`learn.chatgpt.com/docs/models` 推荐的是 `gpt-6.1-sol`，
+# 但它**不在**这把账号的可用集里——模型清单随账号/套餐而变，所以「以端点返回的真实清单为准」，
+# 官方 doc 名只作为兜底尾巴保留。旧值（`gpt-5.1-codex-mini` 等）是凭印象编的，
+# 实测直接 400：`The 'gpt-5.1-codex-mini' model is not supported when using Codex with a
+# ChatGPT account.`；`gpt-5.2-codex`/`gpt-5.3-codex` 官方已标**登录态下 deprecated**，不放进来。
+# 界面上的「模型」下拉允许手输（allow-create）覆盖这里。
 CODEX_MODELS = [
-    "gpt-6.1-sol",
+    "gpt-6-astra",
     "gpt-6-sol",
     "gpt-6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-6.1-sol",
 ]
-CODEX_CHAT_MODEL = "gpt-6.1-sol"
+# 默认对话模型：这个操作是「**简单**对话」，按官方文档自己的建议「轻量重复任务用 Luna」，
+# 且 `gpt-6-luna` 在实测账号里确实存在 → 取它，比原来的 `gpt-6.1-sol`（该账号没有）稳。
+CODEX_CHAT_MODEL = "gpt-6-luna"
 
 # 官方**目录端点**（Codex CLI 自己走的就是这条）。它不属于公开 API，但与既有的
 # `/backend-api/me` 同源、**只读**。路径与查询参数取自官方仓库 `openai/codex` 的
 # `codex-rs/codex-api/src/endpoint/models.rs`（`path() == "models"`，并追加
-# `?client_version=<ver>`），响应形如 `{"models":[{"slug":…,"visibility":…}, …]}`。
+# `?client_version=<ver>`）。响应形如 `{"models":[{"slug":…,"visibility":…}, …]}`。
+# **2026-10-08 实测确认（Plus 账号 + 真实 access_token）**：HTTP 200，返回 9 条
+# （6 条 `visibility=="list"`、3 条 `"hide"`）；**不带** `chatgpt-account-id` 头同样 200
+# （认证层与 `/me` 完全相同，无此头也认）。
 CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models"
 # 供 `?client_version=` 用；官方 CLI 会报自己的版本，这里取一个已知可用的值即可
 CODEX_CLIENT_VERSION = "0.157.1"
