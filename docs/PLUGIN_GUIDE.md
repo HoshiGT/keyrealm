@@ -23,7 +23,7 @@ plugins/
 │   ├── deepseek/
 │   │   ├── manifest.json
 │   │   └── plugin.py
-│   └── …（共 19 个子插件）
+│   └── …（共 18 个子插件）
 ├── api/                        # 类别目录（API 服务）
 │   ├── category.json
 │   ├── firecrawl/
@@ -434,18 +434,76 @@ def quota_probe(data: dict):
 
 | 返回 | 含义 |
 |------|------|
-| `None` | 未开启探测 / 无结论 / 实测未发现异常（后端什么都不改） |
+| `None` | **没开启探测**（后端什么都不改）——只有这一种情况才该返回它 |
 | `quota_ok()` → `{"account_info": {"chat_probe": "可用"}}` | 实测通过 →「附加信息」补一项「实测 可用」 |
 | `quota_insufficient()` → `{"message": "..."}` | 实测发现欠费 → 替换状态说明（`status` 仍是 `valid`，欠费 ≠ 凭据失效） |
+| `quota_unknown()` → `{"account_info": {"chat_probe": "异常"}}` | **试过但没跑通**（模型都不可用 / 鉴权 / 限流 / 网络）→ 补一项「实测 异常」 |
+
+> **三种结局都要说出来。** 只回「可用」的话，探测失败时「附加信息」列什么都**不显示**——
+> 用户勾了开关却看不到任何反馈，也分不清「没开探测」和「探测失败」。这正是
+> 「余额未知时发一次对话探测」这个开关曾经**静默失效**的原因（MiniMax / OpenRouter /
+> 华为云 MaaS / 商汤 / 智谱 / 中转站等聚合站上尤其明显：它们的模型表很大，
+> 靠名字猜出来的前几个候选未必真能对话，试满 3 个就放弃）。
+>
+> 用「**异常**」而不是「未通过」：凭据的**状态本来就是「有效」**，同屏再出现「未通过」
+> 自相矛盾（看着像凭据有问题）。「异常」说的是**探测这一步**没跑通，不涉及凭据本身。
+> 具体失败原因（哪个模型、报了什么）写日志，不塞进界面上那一行。
+>
+> 另外：`quota_chat_probe()`（`llm_protocols`）**自己仍以 `None` 表示「无法判定」**——
+> `nvidia` 那类自己遍历候选、靠真值判断「这个模型有没有结论」的调用方依赖这个契约。
+> 把 `None` 翻译成「实测 异常」是 `make_quota_probe()`（`llm_common`）的职责。
 
 判定细节（`llm_protocols.quota_chat_probe`，通用实现）：
 
 - **模型选择**：凭据里指定的模型 > 自动挑便宜的（优先名字含 `flash`/`lite`/`mini`/`nano`/
-  `haiku`/`turbo` 等，并排除 `embed`/`rerank`/`tts`/图像类）；候选最多试 3 个，模型不存在就换下一个。
-- **结论只认两种**：请求成功 → 可用；错误含 `402` 或 `余额不足`/`insufficient` 等关键字 → 欠费。
-  其它错误（401/403/429/模型不存在）**不下结论**，避免误报。自建实现请沿用同一原则。
+  `haiku`/`turbo` 等，并排除 `embed`/`rerank`/`tts`/图像类、以及 `banana`（Google 的
+  nano-banana 图像生成系列，名字里带 `nano` 会被误当成便宜聊天模型）；候选最多试
+  **10** 个（曾只有 3 个，在 OpenRouter 这类几百个模型的聚合站上极易全灭），模型不存在就换下一个。
+- **「成功」的判据是「请求到达模型并正常返回」，不是「拿到了文本」**：`max_tokens=1` 的最小探测
+  打给**推理型模型**时，那 1 个 token 会被思维链吃干净，`choices[0].message.content` 是空串。
+  官方文档直接佐证——商汤写的是「**Reasoning content and output share the `max_tokens` quota**」，
+  百炼与智谱的思考内容也都走 `reasoning_content`、且思考 token **先于**正文产生。
+  所以 `chat_completion` 在「**信封完整**（`choices[0].message` 在）但文本为空」时返回
+  `reached_model: True`，探测据此判**可用**——请求已经到过计费环节并成功返回，这就是确证。
+  （不这么判的话，这类账号会永远显示「实测 异常」，而它其实好得很。）
+- **欠费判定**走 `is_insufficient_balance()`：**先排除限流**，再认关键词/错误码。
+  > 先排除的原因是**同一个词在不同厂商含义相反**：百炼把限流码写成 `Throttling.AllocationQuota`，
+  > 而码里含 `insufficient_quota`；OpenAI 的 `insufficient_quota` 却是**真欠费**。
+  > 中文侧**刻意不加泛词**：智谱 `1316/1317` 原文同时含「主账号**余额不足**」和「**限额**将在…
+  > 重置」，把 `限额`/`使用上限` 当限流词会**误排除**一条真·余额问题。
+  > 各家已核对的欠费码：百炼 `Arrearage` / `isv.OUT_OF_SERVICE` / `AllocationQuota.FreeTierOnly` /
+  > `PrepaidBillOverdue` / `PostpaidBillOverdue` / `BudgetLimitExceeded`；智谱 `1113`；
+  > MiniMax `1008`；商汤**没有**专门的余额码（额度耗尽与限流共用 `429 quota_exceeded_error`，
+  > 官方自己都不区分，所以我们只能报「异常」而不是猜「欠费」）。
+- **MiniMax 的 `base_resp`**：它的 200 里带 `base_resp`（官方：成功时 `status_code == 0`），
+  **业务错误可能藏在 200 里**，只看 HTTP 状态码会漏判成成功；而它的 4xx 又是**另一套**信封
+  `{"type":"error","error":{…}}`、数字码塞在 message 文本里（如 `(1004)`）。两种形状都要认。
+  坑：`1039 Token 限制` 的 solution 逐字写着「请调整 `max_tokens`」——任何拿 `limit`/`token`/`quota`
+  做欠费关键字的写法都会把它误报成欠费。
 - **开关与模型从凭据数据里读**（`data["probe_chat"]` / `data["probe_model"]`），不经环境变量——
   数据本来就在插件手里。插件侧没有 `quota_probe` 属性时后端直接跳过，故**接入是可选的**。
+- **仅支持流式的模型**：百炼有一批开源思考模型用非流式调用会直接回
+  `parameter.enable_thinking only support stream call`。探测遇到它会**改用流式再试一次**
+  （`_STREAM_ONLY_HINT`），否则这批模型的探测永远是「异常」——而它们其实好得很。
+- **`token_param`**：百炼与 MiniMax 的官方文档都把 `max_tokens` 标为 deprecated、要求改用
+  `max_completion_tokens`，这两家插件显式传入。`chat_completion` / `chat_completion_stream` /
+  `make_quota_probe` / `quota_chat_probe` 都带这个参数，**默认仍是 `max_tokens`**（其它厂商照旧）。
+  anthropic 协议必须用 `max_tokens`、gemini 走 `maxOutputTokens`，都不受影响；
+  华为明确「`max_tokens` 与 `max_completion_tokens` 不可同时设置」，所以我们**只发一个**。
+
+**「简单对话」的两个显示约定**（`chat_completion_stream`）：
+
+- **纯思考输出显示思维链**：模型只产出了思维链、正文为空时（`max_tokens` 偏小会被思考吃光），
+  把思维链当正文返回，不留空白气泡。**字段名各家不同**，`_reasoning_of()` 里逐个核对过：
+  百炼 / 智谱 / 华为 MaaS / MiniMax 是 `delta.reasoning_content`；商汤自家 `sensenova-*`
+  是 `delta.reasoning`，而它网关里**转挂**的 deepseek/glm 仍是 `reasoning_content`
+  —— 同一个网关内两种写法并存，两个都要取；Anthropic 走 `thinking_delta` / `delta.thinking`。
+- **`400` 不一定是密钥有问题**：智谱那批业务码（`1211 模型不存在` / `1221 API 已下线` /
+  `1222 API 不存在` / `1261 Prompt 超长` / `1301 内容被安全审核拦截`）说明**密钥有效、是请求
+  本身被拒**，`_interpret_chat` 命中它们时返回「**有效** + 具体原因」，而不是含糊的
+  「无法确认凭证状态」——那是**假异常**。判据用**业务码**（`_REQUEST_LEVEL_CODES`），
+  **不用文案**：官方错误码表把 `1113` 写成「您的账户已欠费，请充值后重试」，线上实际回的是
+  「余额不足或无可用资源包,请充值。」，同一个码两套文案。
 
 > **通用原则：同一个 HTTP 状态码可能含义完全不同，必须读响应体再下结论。**
 > 写 `if status in (400, 401, 403): 判无效` 之前，先确认该厂商会不会用这些码表达**非凭据问题**。
@@ -897,9 +955,9 @@ def get_display_summary(data):
 
 ## 5. 插件清单
 
-**llm/ 类别（19 个）**：openai（含 Codex/ChatGPT 登录态模式）、anthropic、deepseek、openrouter、
+**llm/ 类别（18 个）**：openai（含 Codex/ChatGPT 登录态模式）、anthropic、deepseek、openrouter、
 gemini、minimax、nvidia、moonshot、siliconflow（硅基流动）、dashscope（阿里百炼）、huawei_maas、
-glm（智谱）、doubao（豆包）、tongyi（通义）、wenxin（文心）、
+glm（智谱）、doubao（豆包）、wenxin（文心）、
 openai_compatible（第三方中转）、newapi（New API 中转站）、
 sensenova（商汤日日新，OpenAI 兼容）、codebuddy（腾讯 CodeBuddy 客户端登录态）。
 
@@ -952,7 +1010,7 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
 > （先写入 `1.1.1.1` 确认生效再还原原值）；`telegram_apihash` 与 `api/gateway` 则是判定常为
 > 「未验证」（前者要登录态、后者多数厂商没有只读接口），批量跑会把人工判定的状态刷成「未验证」。
 
-> 本节共 **52 个**，即 `plugins/` 下的**全部**插件，**默认全部启用**。想临时停用某个用
+> 本节共 **51 个**，即 `plugins/` 下的**全部**插件，**默认全部启用**。想临时停用某个用
 > 「插件管理」里的**禁用**即可（状态记在 `plugins/.state.json`，见 §1.1），无需删除目录——
 > 禁用后其功能选项在界面置灰、批量验证自动跳过，其凭据**状态显示为「插件禁用」（派生，重新启用
 > 即回弹）、且不许再给它添加凭据**，而编辑 / 删除与已有数据照常保留。
@@ -999,7 +1057,13 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
   四家的「附加信息」都只回 `{"account_id": …}`（ARN / UserId / domain_id 这类挪进 `whoami`）。
   **`region` 留空 = 并发枚举全部地域**，结果行**带「区域」列**——把「这批资产分布在哪些地域」一次看全。
   枚举在**插件内部**并发完成（`list` 类操作**没有**进度条通道，见 `docs/FRONTEND.md`），前端只转圈；
-  单个地域失败（限流 / 无权限）**不毁整张表**，汇总进 `empty_text` 或末尾一行备注。
+  单个地域失败（限流 / 该地域无权限）**不毁整张表**，也**不写进结果**——那条地域直接跳过。
+  > **失败信息一律不展示**：结果表只列**成功取到**的地域，空态文案也只说「已扫描全部 N 个地域」。
+  > 理由：这类失败（子用户被限制在某几个地域、少数地域未开通）是**常态**，把
+  > `cn-east-2（HTTP 403：The IAM user is forbidden in the currently selected region）` 这种东西
+  > 拼成一行「备注」塞进表格，对用户就是噪音，还会让表格里混进一条不是实例的假行。
+  > **注意**：`download_prefix`（打包下载）那处的「失败 N 个」是**另一回事**，要保留——
+  > 那是本次下载的**结果报告**（哪些对象没下下来），不是常态噪音。
   > **每家的端点规则不同，别互相照抄**：阿里云有相当一部分地域**不认**全局端点
   > `ecs.aliyuncs.com`，必须用它自己 `DescribeRegions` 返回的 `RegionEndpoint`
   > （实测 33 个地域里 14 个会报 `The specified endpoint cant operate this region`）；
