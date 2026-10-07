@@ -9,13 +9,21 @@
   为主、联网 best-effort 增强**（详见 ``_verify_chatgpt``）。
 
 登录态**按字段分开填**，不要求粘贴整份 ``~/.codex/auth.json``（那样既难维护、又把不必要的
-字段一起存了）。三个字段一一对应 ``~/.codex/auth.json`` 里 ``tokens`` 下的同名项：
+字段一起存了）。字段一一对应 ``~/.codex/auth.json`` 里 ``tokens`` 下的同名项：
 
 - ``access_token``（必需）：本地判过期 + 联网校验都用它；
-- ``account_id``（可选）：联网校验的 ``chatgpt-account-id`` 头，留空由 JWT claim 兜底；
 - ``id_token``（可选）：仅在 access_token 缺展示字段时补充；
 - ``refresh_token``（可选）：**只读校验路径绝不使用**；填了之后才会多出「刷新 access_token」
   这个**手动**操作，由用户显式点击，用它在过期后换一组新令牌。
+
+联网时的 ``chatgpt-account-id`` 头不再单列一个输入字段（那个字段与 JWT claim 同源、纯属重复，
+已删除）：一律从 access_token 的 JWT claim ``chatgpt_account_id`` 里取（见 ``_account_id_from``），
+取不到就**不带**这个头。
+
+另外用到两个**非公开/实验性**的 chatgpt.com 端点（与 ``/backend-api/me`` 同源）：
+额度使用情况 ``GET /backend-api/wham/usage``（只读，用于「附加信息」的「使用率」一行）和
+Codex 对话 ``POST /backend-api/codex/responses``（SSE 流式，「操作」里的「简单对话」）。
+两者 403 大概率是 Cloudflare 人机挑战，一律按「未完成/不可用」处理，**绝不判凭据失效**。
 
 代刷令牌会**轮换** refresh_token，属写副作用，因此绝不混进校验路径——只有用户点那个按钮时才做，
 且换回来的新值由框架原子写回本凭据（见 backend/api.py 的 ``updated_data`` 约定），
@@ -34,7 +42,14 @@ from typing import Optional
 
 import httpx
 
-from backend.plugin_sdk import VerifyResult, guarded, make_client, safe_json
+from backend.plugin_sdk import (
+    VerifyResult,
+    body_snippet,
+    guarded,
+    make_client,
+    safe_json,
+    timeout,
+)
 from llm_common import make_quota_probe
 from llm_protocols import probe_openai_models, chat_completion, fetch_models, chat_completion_stream
 
@@ -51,10 +66,37 @@ DISPLAY_NAME = "Codex（ChatGPT 登录态）"
 # 依据：openai/codex issue #47197 明确列出该 URL；本机 codex-cli 0.157.1 二进制含
 # `chatgpt_base_url = "https://chatgpt.com/backend-api/"` 与 `chatgpt-account-id` 头名。
 CHATGPT_ME_URL = "https://chatgpt.com/backend-api/me"
-# 官方客户端默认 originator——Codex 后端有第一方白名单，别的值会被拒
+# 官方 Codex 客户端默认 originator——Codex 后端有第一方白名单，别的值会被拒
 # （二进制 login/src/auth/default_client.rs:76 旁的默认值）。
 ORIGINATOR = "codex_cli_rs"
 USER_AGENT = "codex_cli_rs/0.157.1"
+
+# 另外两个 **非公开/实验性** 的 chatgpt.com 端点（与 /backend-api/me 同源，没有官方文档）：
+# 额度使用情况（只读，用于「附加信息」的「使用率」一行）
+CHATGPT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+# Codex 对话（SSE 流式，「操作」里的「简单对话」）
+CHATGPT_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
+
+# 只有**付费套餐**才有额度窗（free 没有），因此只在付费套餐下才去读使用率。
+_USAGE_PLAN_PREFIXES = ("plus", "pro", "enterprise", "team", "business", "self_serve_business")
+# 额度窗口按**时长**辨认（响应里 primary/secondary 的顺序不可信）：18000 秒 = 5 小时窗，
+# 它就是界面上「使用率」要用的那个窗口（另一个 604800 秒 = 7 天窗）。
+_PRIMARY_WINDOW_SECONDS = 18000
+# 读使用率的短超时：它只是给「附加信息」锦上添花，不能拖慢 verify
+_USAGE_TIMEOUT = 6.0
+
+# codex 对话的静态模型名——该端点没有 /models 列表接口，只能内置一份；名字会变，
+# 界面上「模型」下拉允许手输（allow-create）覆盖这里。
+CODEX_MODELS = [
+    "gpt-5.1-codex-mini",
+    "gpt-5.1-codex",
+    "gpt-5-codex-mini",
+    "gpt-5-codex",
+    "codex-mini-latest",
+]
+CODEX_CHAT_MODEL = "gpt-5.1-codex-mini"
+# /codex/responses 的 instructions 必填且不能为空（缺了会被 400）
+CODEX_INSTRUCTIONS = "You are Codex, a coding assistant. Answer concisely."
 
 # OAuth 换令牌端点与 Codex CLI 的**公开客户端 id**（不是密钥：它以明文出现在用户令牌的
 # `aud` 里，官方 CLI 二进制里也是硬编码的）。只有在用户**显式**点「刷新 access_token」时
@@ -263,8 +305,11 @@ def _read_auth(data: dict) -> dict:
 
     不再要求粘贴整份 auth.json：字段一一对应 `~/.codex/auth.json` 里 `tokens` 下的同名项，
     - ``access_token``：必需（JWT，用于本地判过期 + 联网校验）
-    - ``account_id``：可选（联网校验的 ``chatgpt-account-id`` 头；留空由 JWT 里的 claim 兜底）
     - ``id_token``：可选（仅在 access_token 缺展示字段时补充）
+
+    以前还有一个可手填的 ``account_id`` 字段（联网头 ``chatgpt-account-id`` 的值），但它与
+    access_token 的 JWT claim 同源、纯属重复，已删除——联网头一律改由 claim 兜底
+    （见 ``_account_id_from``）。
 
     ``refresh_token`` 只在用户**显式**点「刷新 access_token」时用到（那是一次会轮换令牌的
     写操作），只读校验路径绝不碰它。
@@ -275,9 +320,33 @@ def _read_auth(data: dict) -> dict:
     return {
         "access_token": _text(data.get("access_token")),
         "id_token": _text(data.get("id_token")),
-        "account_id": _text(data.get("account_id")),
         "refresh_token": _text(data.get("refresh_token")),
     }
+
+
+def _account_id_from(claims: dict) -> str:
+    """联网头 ``chatgpt-account-id`` 的值：只从 access_token 的 JWT claim 里取。
+
+    取不到就返回空串——调用方据此**不带**这个头（该头不是必需的，401 与否看 access_token）。
+    """
+    return str((claims or {}).get("account_id") or "").strip()
+
+
+def _chatgpt_headers(access_token: str, account_id: str = "", *, stream: bool = False) -> dict:
+    """chatgpt.com 后端接口的公共请求头（``/me``、``usage``、codex 对话三处共用）。
+
+    ``account_id`` 为空时**不带** ``chatgpt-account-id`` 头。
+    """
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "originator": ORIGINATOR,
+        "User-Agent": USER_AGENT,
+        "Accept": "text/event-stream" if stream else "application/json",
+    }
+    if account_id:
+        headers["chatgpt-account-id"] = account_id
+    return headers
+
 
 
 # ── 联网探针（best-effort，结论只有「有效 / 失效 / 不下结论」三种）──
@@ -287,14 +356,7 @@ def _probe_chatgpt_me(access_token: str, account_id: str):
 
     verdict：``"valid"``（200）/ ``"invalid"``（401）/ ``None``（无法下结论，note 说明原因）。
     """
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "originator": ORIGINATOR,
-        "User-Agent": USER_AGENT,
-        "Accept": "application/json",
-    }
-    if account_id:
-        headers["chatgpt-account-id"] = account_id
+    headers = _chatgpt_headers(access_token, account_id)
     try:
         # httpx 默认走 HTTP/1.1 —— 正好避开 Cloudflare 对 HTTP/2 指纹的挑战，
         # 所以这里刻意不改 http2。
@@ -318,14 +380,82 @@ def _probe_chatgpt_me(access_token: str, account_id: str):
     return None, None, f"HTTP {code}"
 
 
+# ── 额度使用情况（best-effort 只读；取不到就什么都不加） ──
+
+def _is_paid_plan(raw) -> bool:
+    """套餐是否属于「有额度窗」的付费档（``free`` 排除在外）。
+
+    认不出来的一律当免费处理——宁可少读一次，也不要在 free 账号上显示一个空/假的使用率。
+    """
+    text = str(raw or "").strip().lower()
+    return any(text == prefix or text.startswith(prefix) for prefix in _USAGE_PLAN_PREFIXES)
+
+
+def _pick_usage_window(rate_limit: dict) -> Optional[dict]:
+    """从 ``rate_limit`` 里挑出「使用率」要用的那个窗口。
+
+    响应里有 ``primary_window`` / ``secondary_window`` 两个窗口，但**顺序不可信**，
+    所以按 ``limit_window_seconds`` 判时长：18000 秒（5 小时）就是要用的那个。
+    认不出时长时退回名为 ``primary_window`` 的那个；两个都拿不到则返回 None（不显示）。
+    """
+    for key in ("primary_window", "secondary_window"):
+        window = rate_limit.get(key)
+        if not isinstance(window, dict):
+            continue
+        try:
+            if int(window.get("limit_window_seconds")) == _PRIMARY_WINDOW_SECONDS:
+                return window
+        except (TypeError, ValueError):
+            continue
+    fallback = rate_limit.get("primary_window")
+    return fallback if isinstance(fallback, dict) else None
+
+
+def _fetch_usage_rate(access_token: str, account_id: str) -> Optional[float]:
+    """读「额度使用率」，返回 0.0–1.0 或 ``None``。
+
+    **只读**接口（绝不触碰会轮换令牌的刷新路径）。任何异常——403 人机挑战、网络失败、
+    非 JSON、字段缺失——都返回 ``None``：调用方据此**什么都不加**，界面上绝不出现假值，
+    也绝不影响 verify 的结论。
+    """
+    if not access_token:
+        return None
+    try:
+        with make_client(request_timeout=_USAGE_TIMEOUT) as client:
+            resp = client.get(CHATGPT_USAGE_URL, headers=_chatgpt_headers(access_token, account_id))
+    except httpx.HTTPError:
+        return None
+    if resp.status_code != 200:
+        return None
+    payload = safe_json(resp)
+    if not isinstance(payload, dict):
+        return None
+    rate_limit = payload.get("rate_limit")
+    if not isinstance(rate_limit, dict):
+        return None
+    window = _pick_usage_window(rate_limit)
+    if not window:
+        return None
+    try:
+        percent = float(window.get("used_percent"))
+    except (TypeError, ValueError):
+        return None
+    if percent != percent:  # NaN 防护
+        return None
+    return max(0.0, min(1.0, percent / 100.0))
+
+
 # ── 展示信息 ──────────────────────────────────────────────
 
-def _account_info(claims: dict, payload: Optional[dict]) -> Optional[dict]:
+def _account_info(claims: dict, payload: Optional[dict], usage_rate: Optional[float] = None) -> Optional[dict]:
     """凭据列表「附加信息」列。
 
     前端 ``extraInfo()`` 只额外展示 2 项（``EXTRA_MAX = 2``）、且只认有中文标签的键，
-    所以这里**只给 ``email`` 与 ``plan``**（渲染成「邮箱 x@y.com · 套餐 Plus」）——
+    所以固定项**只给 ``email`` 与 ``plan``**（渲染成「邮箱 x@y.com · 套餐 Plus」）——
     账号 id / 订阅到期 / scopes 等一律放进 ``token_info`` 操作里，免得挤掉这两项。
+
+    ``usage_rate`` 是例外：前端对它有专门的「使用率 X%」行且**不吃** ``EXTRA_MAX`` 配额，
+    所以单独作为参数传入、有值时才追加（``None`` = 没读到，什么都不加）。
     """
     payload = payload if isinstance(payload, dict) else {}
     info: dict = {}
@@ -335,6 +465,8 @@ def _account_info(claims: dict, payload: Optional[dict]) -> Optional[dict]:
     plan = _plan_label(claims.get("plan"))
     if plan:
         info["plan"] = plan
+    if usage_rate is not None:
+        info["usage_rate"] = usage_rate
     return info or None
 
 
@@ -360,7 +492,7 @@ def _verify_chatgpt(auth: dict) -> VerifyResult:
     except (TypeError, ValueError):
         exp_ts = None
 
-    account_id = auth["account_id"] or str(claims.get("account_id") or "")
+    account_id = _account_id_from(claims)
     info = _account_info(claims, None)
 
     # ① 本地先判过期（过期就没必要再联网了）
@@ -375,14 +507,20 @@ def _verify_chatgpt(auth: dict) -> VerifyResult:
             account_info=info,
         )
 
-    # ② 联网增强
+    # ② 联网增强：先 best-effort 读一次额度使用率（只读、短超时、失败即忽略）。
+    #    只有付费套餐才有额度窗，free 账号不浪费这一次请求。
+    usage_rate = None
+    if _is_paid_plan(claims.get("plan")):
+        usage_rate = _fetch_usage_rate(auth["access_token"], account_id)
+    info = _account_info(claims, None, usage_rate)
+
     verdict, payload, note = _probe_chatgpt_me(auth["access_token"], account_id)
     if verdict == "valid":
         expiry = f"，有效期还剩 {_humanize(exp_ts - time.time())}" if exp_ts else ""
         return VerifyResult(
             status="valid",
             message=f"登录态有效（已联网校验 chatgpt.com）{expiry}",
-            account_info=_account_info(claims, payload),
+            account_info=_account_info(claims, payload, usage_rate),
         )
     if verdict == "invalid":
         return VerifyResult(
@@ -409,10 +547,14 @@ def _verify_chatgpt(auth: dict) -> VerifyResult:
 # ── 模型列表（仅 API Key 模式） ───────────────────────────
 
 def list_models(data: dict) -> list:
-    """获取该厂商可用模型列表（供「简单对话」选择模型）。ChatGPT 登录态模式无此操作。"""
+    """获取该厂商可用模型列表（供「简单对话」选择模型）。
+
+    api_key 模式打 ``/v1/models``；chatgpt 模式没有等价的列表接口，返回内置的 codex 模型名
+    （该端点是非公开实验接口，名字会变，界面上允许手输覆盖）。
+    """
     data = data or {}
     if _is_chatgpt(data):
-        return []
+        return list(CODEX_MODELS)
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
     return fetch_models("openai", base_url, (data.get("api_key") or "").strip())
 
@@ -452,7 +594,7 @@ def _token_info_rows(data: dict) -> list:
     add("套餐", _plan_label(claims.get("plan")))
     add("订阅生效", _fmt_ts(claims.get("subscription_start")))
     add("订阅到期", _fmt_ts(claims.get("subscription_until")))
-    add("账号 ID", _short_id(auth["account_id"] or claims.get("account_id")))
+    add("账号 ID", _short_id(claims.get("account_id")))
     add("用户 ID", _short_id(claims.get("user_id"), 12))
 
     orgs = claims.get("organizations")
@@ -481,7 +623,131 @@ def _token_info_rows(data: dict) -> list:
     return rows
 
 
+# ── 可选操作：简单对话（chatgpt 模式，走实验性的 codex 端点） ──
+
+def _codex_input(messages: list) -> list:
+    """把「简单对话」的 ``{role, content}`` 历史转成 Responses API 的 ``input`` 数组。
+
+    ``input`` **必须是数组**（缺了会被 400）；用户的轮次内容块类型是 ``input_text``、
+    助手的是 ``output_text``（该接口对两种角色的块类型有区分）。
+    """
+    items: list = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "user").strip() or "user"
+        text = str(msg.get("content") or "")
+        if not text:
+            continue
+        part_type = "output_text" if role == "assistant" else "input_text"
+        items.append({
+            "type": "message",
+            "role": role,
+            "content": [{"type": part_type, "text": text}],
+        })
+    return items
+
+
+def _sse_error(event: dict) -> str:
+    """从 SSE 的失败/错误事件里抽出可读的错误文本。"""
+    for source in (event, event.get("response")):
+        if not isinstance(source, dict):
+            continue
+        err = source.get("error")
+        if isinstance(err, dict):
+            text = str(err.get("message") or err.get("code") or "").strip()
+            if text:
+                return f"对话失败：{text[:200]}"
+    return "对话失败（服务端返回了错误事件）"
+
+
+def _codex_chat(access_token: str, account_id: str, model: str, messages: list, on_delta=None) -> dict:
+    """codex 模式「简单对话」：``POST /backend-api/codex/responses``（SSE 流式）。
+
+    返回 ``{"ok": True, "output": 全文}`` 或 ``{"ok": False, "error": ..., "output": 已收到的部分}``。
+    这是个**非公开/实验性**端点：403 大概率是 Cloudflare 人机挑战，按「该操作用不了」处理，
+    **不代表凭据失效**（与 ``/backend-api/me`` 探针同一套判断）。
+    """
+    if not access_token:
+        return {"ok": False, "error": "缺少 access_token", "output": ""}
+    model = str(model or "").strip() or CODEX_CHAT_MODEL
+    body = {
+        "model": model,
+        "instructions": CODEX_INSTRUCTIONS,  # 必填且不能为空，缺了会被 400
+        "input": _codex_input(messages),
+        "store": False,
+        "stream": True,                      # 恒为 true：本路径只处理 SSE
+    }
+    headers = _chatgpt_headers(access_token, account_id, stream=True)
+    headers["Content-Type"] = "application/json"
+    headers["OpenAI-Beta"] = "responses=experimental"
+
+    parts: list = []
+    emit = on_delta or (lambda _t: None)
+    try:
+        with make_client() as client:
+            with client.stream("POST", CHATGPT_RESPONSES_URL, headers=headers, json=body) as resp:
+                if resp.status_code != 200:
+                    resp.read()
+                    snippet = body_snippet(resp)
+                    detail = f"：{snippet}" if snippet else ""
+                    note = "（可能是 Cloudflare 人机挑战，不代表凭据失效）" if resp.status_code == 403 else ""
+                    return {"ok": False, "error": f"HTTP {resp.status_code}{note}{detail}", "output": ""}
+                for line in resp.iter_lines():
+                    # SSE 里只认 data: 行（event:/id:/心跳一律忽略）
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        event = json.loads(data)
+                    except ValueError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    kind = event.get("type")
+                    if kind == "response.output_text.delta":
+                        delta = event.get("delta")
+                        if isinstance(delta, str) and delta:
+                            parts.append(delta)
+                            emit(delta)
+                    elif kind == "response.completed":
+                        break
+                    elif kind in ("response.failed", "error"):
+                        return {"ok": False, "error": _sse_error(event), "output": "".join(parts)}
+    except httpx.TimeoutException:
+        return {"ok": False, "error": f"请求超时（{int(timeout())} 秒）", "output": "".join(parts)}
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": f"网络请求失败（{type(exc).__name__}）", "output": "".join(parts)}
+    except Exception as exc:  # noqa: BLE001 - 操作边界兜底
+        return {"ok": False, "error": f"执行异常（{type(exc).__name__}）", "output": "".join(parts)}
+
+    output = "".join(parts)
+    if not output.strip():
+        return {"ok": False, "error": "响应中没有可读内容", "output": ""}
+    return {"ok": True, "output": output.strip()}
+
+
+def _chatgpt_account_id(data: dict) -> str:
+    """从凭据里解出 chatgpt-account-id（= access_token 的 JWT claim）。"""
+    auth = _read_auth(data)
+    return _account_id_from(_extract_claims(_decode_jwt_payload(auth["access_token"])))
+
+
 _CHAT_ACTION = {"id": "chat", "name": "简单对话", "kind": "chat", "model": CHAT_MODEL}
+
+# codex 模式的「简单对话」：走 chatgpt.com 的实验性端点，默认模型可被用户手输覆盖
+_CODEX_CHAT_ACTION = {
+    "id": "chat",
+    "name": "简单对话",
+    "kind": "chat",
+    "model": CODEX_CHAT_MODEL,
+    "group": "对话",
+    "order": 5,
+    "description": "直连 chatgpt.com 的实验性 codex 端点（SSE 流式）；模型名可手输覆盖",
+}
+
 
 _TOKEN_INFO_ACTION = {
     "id": "token_info",
@@ -588,13 +854,14 @@ def actions(data: dict) -> list[dict]:
     """声明可用操作，按认证方式返回：
 
     - ``api_key``：凭据含 API Key 时提供「简单对话」（流式）；
-    - ``chatgpt``：填了 access_token 时提供「登录态详情」（纯本地只读，不联网）。
+    - ``chatgpt``：填了 access_token 时提供「简单对话」（codex 端点，流式）与
+      「登录态详情」（纯本地只读，不联网）。
     """
     data = data or {}
     if _is_chatgpt(data):
         if not (data.get("access_token") or "").strip():
             return []
-        acts = [dict(_TOKEN_INFO_ACTION)]
+        acts = [dict(_TOKEN_INFO_ACTION), dict(_CODEX_CHAT_ACTION)]
         # 只有填了 refresh_token 才给「刷新」——没它就无从刷新
         if (data.get("refresh_token") or "").strip():
             acts.append(dict(_REFRESH_ACTION))
@@ -605,13 +872,21 @@ def actions(data: dict) -> list[dict]:
 
 
 def run_action(action_id: str, params: dict, data: dict) -> dict:
-    """执行操作：简单对话（api_key）或登录态详情（chatgpt）。"""
+    """执行操作：简单对话（api_key / codex）或登录态详情（chatgpt）。"""
     data = data or {}
     params = params or {}
 
     if _is_chatgpt(data):
         if action_id == "refresh":
             return _do_refresh(data)
+        if action_id == "chat":
+            auth = _read_auth(data)
+            return _codex_chat(
+                auth["access_token"],
+                _chatgpt_account_id(data),
+                params.get("model") or CODEX_CHAT_MODEL,
+                params.get("messages") or [],
+            )
         if action_id != "token_info":
             return {"ok": False, "error": "未知操作"}
         try:
@@ -638,12 +913,22 @@ def stream_action(action_id: str, params: dict, data: dict, on_delta) -> dict:
     """流式执行操作：简单对话（每段文本调用 on_delta(text)）。
 
     非 chat 的操作（如 chatgpt 模式的 ``token_info``，只读列表）交回 ``run_action``，
-    保证两条路径的产出与 ``actions()`` 声明一致。
+    保证两条路径的产出与 ``actions()`` 声明一致。chat 在两种认证方式下都是流式的，
+    只是走的端点不同（api_key → ``/chat/completions``，chatgpt → codex 端点）。
     """
-    if action_id != "chat":
-        return run_action(action_id, params, data)
     data = data or {}
     params = params or {}
+    if action_id != "chat":
+        return run_action(action_id, params, data)
+    if _is_chatgpt(data):
+        auth = _read_auth(data)
+        return _codex_chat(
+            auth["access_token"],
+            _chatgpt_account_id(data),
+            params.get("model") or CODEX_CHAT_MODEL,
+            params.get("messages") or [],
+            on_delta=on_delta,
+        )
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
     if not base_url:
         return {"ok": False, "error": "需要填写 Base URL"}

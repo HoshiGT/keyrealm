@@ -61,17 +61,6 @@
       }
     },
     {
-      "key": "account_id",
-      "label": "account_id",
-      "type": "text",
-      "required": false,
-      "placeholder": "留空则自动从 access_token 里解析",
-      "hint": "可选。auth.json 里 tokens.account_id（形如 4d5f757d-…）。填了会让联网校验带上 chatgpt-account-id 头；留空也能用，插件会从 access_token 的 JWT 里取。",
-      "show_if": {
-        "auth_mode": "chatgpt"
-      }
-    },
-    {
       "key": "id_token",
       "label": "id_token",
       "type": "password",
