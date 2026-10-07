@@ -380,6 +380,10 @@ async function placeActionMenu(anchorRect) {
 /** 点「操作」：0 个 → 提示；1 个 → 直接进；≥2 个 → 弹选择菜单 */
 async function openActions(row, event) {
   closeActionMenu()
+  // 锚点矩形必须在**任何 await 之前**同步取走：事件派发一结束，event.currentTarget 就被置为 null，
+  // 放到下面的 await api.listCredentialActions(...) 之后再读只能拿到 null，
+  // 菜单会退化成用 event.clientX/clientY 定位（贴光标而非贴按钮左下角）。
+  const anchorRect = event && event.currentTarget ? event.currentTarget.getBoundingClientRect() : null
   let actions = []
   try {
     actions = await api.listCredentialActions(row.id)
@@ -412,18 +416,17 @@ async function openActions(row, event) {
   }
 
   const sorted = [...topLevel].sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
-  const rect = event && event.currentTarget ? event.currentTarget.getBoundingClientRect() : null
   actionMenu.value = {
     visible: true,
-    x: rect ? rect.left : (event?.clientX ?? 0),
-    y: rect ? rect.bottom + 4 : (event?.clientY ?? 0),
+    x: anchorRect ? anchorRect.left : (event?.clientX ?? 0),
+    y: anchorRect ? anchorRect.bottom + 4 : (event?.clientY ?? 0),
     row,
     items: sorted,
     all: actions,
     note: '',
     pending: true,
   }
-  placeActionMenu(rect)
+  placeActionMenu(anchorRect)
   // 菜单先按声明全列出，权限探测回来再收敛（避免「先显示后消失」的抖动）
   loadCapabilities(row.id).then((caps) => {
     if (!actionMenu.value.visible) return
@@ -432,7 +435,7 @@ async function openActions(row, event) {
     actionMenu.value.note = caps.note
     actionMenu.value.pending = false
     // 条目变了、高度也跟着变，重新贴一次边（否则收敛后被裁）
-    placeActionMenu(rect)
+    placeActionMenu(anchorRect)
     if (!available.length) {
       closeActionMenu()
       ElMessageBox.alert(caps.note || '当前凭据没有任何可用操作权限', '无可用操作', {

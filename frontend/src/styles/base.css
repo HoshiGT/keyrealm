@@ -944,10 +944,15 @@ html.dark :is(
   font-size: 13px;
 }
 
-/* 内容区进入动画：每次路由切换、组件重新挂载时播放一次 */
+/* 内容区进入动画：每次路由切换、组件重新挂载时播放一次。
+   ⚠️ 这里**不能**加 `both`/`forwards`：填充模式会把末帧的 `transform: translateY(0)` 永久留在页面上，
+   而「计算值 ≠ none 的 transform」会让该元素成为 `position: fixed` 后代的**包含块**——
+   页内浮层（`.ctx-menu` 操作菜单、`.ctx-mask` 遮罩）的 left/top 于是被解释成相对本元素的坐标，
+   整体偏移一个内容区原点的距离；遮罩也不再铺满视口。
+   末帧值与元素自身样式一致（opacity:1 / 无 transform），不加填充模式视觉上完全相同。 */
 .layout-main > * ,
 .v-enter {
-  animation: v-fade-up var(--v-slow) var(--v-ease) both;
+  animation: v-fade-up var(--v-slow) var(--v-ease);
 }
 
 /* ── 12. 动效关键帧 ────────────────────────────────────────────────── */

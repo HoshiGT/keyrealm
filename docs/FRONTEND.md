@@ -175,6 +175,28 @@ EP 自己给这类列的规则是 `background: inherit`——继承所在行的�
 > 覆盖列仍然会**盖住**相邻列的内容（粘性定位的本质），本修法只保证「盖住 = 干净遮盖」而不是
 > 「透出乱字」。要连内容一起看清，只能重新分配列宽让它不溢出（见下节「任务」表格的老问题）。
 
+### 浮层的包含块：进场动画不能留 `transform`
+
+`position: fixed` 元素的包含块默认是视口，但**只要某个祖先的 `transform` / `filter` /
+`backdrop-filter` / `will-change` / `perspective` / `contain` 计算值 ≠ `none`**，最近的那个祖先就
+成为它的包含块。而 `el-dialog` 的 `.el-overlay` 在本项目**渲染在 `.page` 内部**
+（实测 `overlayParentChain: [div.page, main.el-main.layout-main, section.el-container, …]` 且
+`overlayInsidePage: true`，EP 未做 teleport）。
+
+`.layout-main > *` 的进场动画曾是 `animation: v-fade-up … both`。`both` 会**保留末帧**——
+末帧是 `translateY(0)`，计算值 `matrix(1, 0, 0, 1, 0, 0)`（≠ `none`），于是 `.page` **永久**成为
+`.el-overlay` 的包含块：弹窗不再相对视口居中（A/B 实测偏移 `dx=83, dy=70`），遮罩也缩成 `.page`
+的大小（`784×245`）而不铺满窗口——这就是用户报的「分组管理点『编辑』显示异常」。
+
+修法：去掉 `both`（`base.css` 的 `.layout-main > *, .v-enter { animation: v-fade-up … }`）。
+进场动画本来就只跑一次，不需要用 `both` 保持末帧。改后实测 `.page` 的 `transform: none`、
+弹窗 `dx=0, dy=-12`、遮罩 `1000×700` 铺满视口。
+
+> 这与上面「浮层 popper 进场动画只动 `opacity`」是**同源**问题，都是 `transform` 动画的副作用：
+> 一条是动画**期间**顶掉 popper 的内联 `translate3d` 坐标，一条是动画**结束之后**改变 fixed 后代的
+> 包含块。统一结论：**`.layout-main > *` 及其任何祖先，都不能让 `transform` 的计算值长期 ≠ `none`**
+> ——这也是为什么进场动画宁可只动 `opacity`。
+
 ### 已知取舍：侧边栏 176px 让「状态」列几乎看不见
 
 `AppLayout.vue` 的侧边栏在本次重构里从 **152px 加宽到 176px**——152px 下品牌名被截成
