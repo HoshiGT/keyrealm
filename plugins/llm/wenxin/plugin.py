@@ -18,7 +18,7 @@ from backend.plugin_sdk import (
     safe_json,
     timeout,
 )
-from llm_common import probe_model, probe_requested, quota_insufficient, quota_ok
+from llm_common import probe_model, probe_requested, quota_insufficient, quota_ok, quota_unknown
 from llm_protocols import is_insufficient_balance
 
 NAME = "百度文心"
@@ -216,8 +216,9 @@ _INSUFFICIENT_CODES = {19}
 def quota_probe(data: dict) -> Optional[dict]:
     """余额未知时发一次最小对话请求，实测账户是否可用。
 
-    按 ``llm_common`` 的 ``quota_probe`` 契约返回：``None``（未开启 / 无结论）/
-    ``quota_ok()``（实测可用）/ ``quota_insufficient()``（实测欠费）。
+    按 ``llm_common`` 的 ``quota_probe`` 契约返回：``None``（未开启探测）/
+    ``quota_ok()``（实测可用）/ ``quota_insufficient()``（实测欠费）/
+    ``quota_unknown()``（试过但没跑通 → 附加信息显示「实测 异常」）。
     """
     data = data or {}
     if not probe_requested(data):
@@ -231,15 +232,15 @@ def quota_probe(data: dict) -> Optional[dict]:
     # 模型：用户指定的优先（须是本插件认识的端点），否则自动挑一个付费档
     chosen = probe_model(data)
     if chosen and chosen not in _CHAT_ENDPOINTS:
-        return None  # 指定了不支持的模型，无从探测
+        return quota_unknown()  # 指定了不支持的模型，探测跑不起来
     candidates = [chosen] if chosen else list(_PROBE_MODELS)
     candidates = [m for m in candidates if m in _CHAT_ENDPOINTS]
     if not candidates:
-        return None
+        return quota_unknown()
 
     token, err = _get_access_token(base_url, api_key)
     if err or not token:
-        return None  # 换 token 失败不构成「欠费」结论（verify 已确认凭据有效）
+        return quota_unknown()  # 换 token 失败不构成「欠费」结论（verify 已确认凭据有效）
 
     for name in candidates[:2]:
         url = (
@@ -255,7 +256,7 @@ def quota_probe(data: dict) -> Optional[dict]:
                     json={"messages": [{"role": "user", "content": "hi"}]},
                 )
         except httpx.HTTPError:
-            return None  # 网络问题不构成欠费结论
+            return quota_unknown()  # 网络问题不构成欠费结论
         payload = safe_json(resp)
         if not isinstance(payload, dict):
             continue
@@ -265,5 +266,5 @@ def quota_probe(data: dict) -> Optional[dict]:
         message = str(payload.get("error_msg") or "")
         if code in _INSUFFICIENT_CODES or is_insufficient_balance(message) or "欠费" in message:
             return quota_insufficient()
-        # 其余（模型不可用 / 限流 / 参数错误）不下结论，换下一个候选
-    return None
+        # 其余（模型不可用 / 限流 / 参数错误）不下欠费结论，换下一个候选
+    return quota_unknown()  # 候选试完仍无结论 → 报「实测 异常」

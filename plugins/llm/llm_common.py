@@ -77,8 +77,25 @@ def quota_insufficient() -> dict:
     return {"message": "凭证有效，但账户欠费或无可用额度（已用最小对话实测）"}
 
 
-def make_quota_probe(default_base_url, protocol="openai"):
+def quota_unknown() -> dict:
+    """探测结论：**试过但没跑通**，无法判断账户是否可用 → 附加信息补一项「实测 异常」。
+
+    与 ``quota_ok`` / ``quota_insufficient`` 并列的第三种结局，**必须说出来**：只回「可用」
+    的话，探测失败时附加信息列什么都不显示 —— 用户勾了开关却看不到任何反馈，也分不清
+    「没开探测」和「探测失败」。
+
+    用「异常」而不是「未通过」：这条凭据的**状态本来就是「有效」**，同屏再出现「未通过」
+    会自相矛盾（看着像凭据有问题）。「异常」说的是**探测这一步**没跑通（模型都不可用 /
+    鉴权 / 限流 / 网络），不涉及凭据本身的判定。失败原因写日志，不塞进界面上这一行。
+    """
+    return {"account_info": {"chat_probe": "异常"}}
+
+
+def make_quota_probe(default_base_url, protocol="openai", token_param="max_tokens"):
     """生成子插件的 ``quota_probe(data)`` —— 通用（OpenAI / Anthropic / Gemini 协议）实现。
+
+    ``token_param`` 原样透传给 ``quota_chat_probe``：阿里云百炼与 MiniMax 的官方文档已把
+    ``max_tokens`` 标为 deprecated、要求改用 ``max_completion_tokens``，由这两家插件显式传入。
 
     ``default_base_url`` 与 ``protocol`` 可以是常量，也可以是 ``fn(data) -> 值`` 的**可调用对象**
     ——同一插件支持多种接口格式时（如智谱 GLM 同时提供 OpenAI 与 Anthropic 端点）用它按凭据取。
@@ -99,6 +116,12 @@ def make_quota_probe(default_base_url, protocol="openai"):
         if not base_url or not api_key:
             return None
         from llm_protocols import quota_chat_probe
-        return quota_chat_probe(base_url, api_key, proto, probe_model(data))
+        verdict = quota_chat_probe(base_url, api_key, proto, probe_model(data), token_param)
+        if verdict:
+            return verdict
+        # 试过但没得出确定结论 → 报「实测 异常」（见 quota_unknown 的说明）。
+        # 「None == 无法判定」这个契约留给 `quota_chat_probe`（nvidia 那类自己遍历候选、
+        # 靠真值判断的调用方依赖它），把它翻译成界面上那一行是这里的职责。
+        return quota_unknown()
 
     return quota_probe

@@ -11,8 +11,8 @@
       "label": "Base URL",
       "type": "url",
       "required": false,
-      "placeholder": "留空使用默认地址",
-      "default": "https://api.minimax.chat/v1"
+      "placeholder": "默认 https://api.minimax.cn/v1（国际站 https://api.minimax.io/v1）",
+      "default": "https://api.minimax.cn/v1"
     },
     {
       "key": "api_key",

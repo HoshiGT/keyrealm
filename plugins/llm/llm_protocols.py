@@ -19,16 +19,37 @@ from typing import Any, Optional
 
 import httpx
 
-from backend.plugin_sdk import VerifyResult, body_snippet, make_client, safe_json, timeout
+from backend.plugin_sdk import VerifyResult, body_snippet, log, make_client, safe_json, timeout
 
 # 欠费/余额不足判定关键字（出现在错误正文中）
 _INSUFFICIENT_BALANCE_KEYWORDS = (
     "余额不足",
     "充值",
+    "欠费",
     "insufficient",
     "no balance",
     "out of balance",
     "1113",  # 智谱错误码：余额不足
+    # ── 阿里云百炼：官方错误码表 help.aliyun.com/zh/model-studio/error-code ──
+    # 400 Arrearage（实测原文）：{"type":"Arrearage","code":"Arrearage",
+    #   "message":"Access denied, please make sure your account is in good standing.
+    #    For details, see: …/error-code#overdue-payment"}
+    "arrearage",
+    "overdue",            # PrepaidBillOverdue / PostpaidBillOverdue
+    "out_of_service",     # isv.OUT_OF_SERVICE：余额不足导致服务被暂停
+    "freetieronly",       # AllocationQuota.FreeTierOnly：免费额度用尽，需认证并充值
+    "budgetlimitexceeded",  # 预算管理额度用尽且开启「达预算即停」
+)
+
+# **限流类关键字：必须先排除，再看欠费。**
+# 阿里云百炼的限流码是 `429 Throttling.AllocationQuota`，而它同一页里另有
+# `insufficient_quota` 字样 —— 只按 `insufficient` 匹配，会把「TPS/TPM 被限流」
+# 误报成「账户欠费」，把用户往充值的错误方向引。命中限流一律不算欠费。
+_THROTTLING_KEYWORDS = (
+    "throttl",             # 百炼 Throttling.AllocationQuota
+    "rate limit",
+    "ratelimit",
+    "too many requests",   # HTTP 429 的标准短语
 )
 
 
@@ -47,13 +68,19 @@ def _anthropic_root(base_url: str) -> str:
 # ── 简单对话 ─────────────────────────────────────────────
 
 def chat_completion(base_url: str, api_key: str, model: str, messages: list,
-                    protocol: str = "openai", max_tokens: int = 512) -> dict:
+                    protocol: str = "openai", max_tokens: int = 512,
+                    token_param: str = "max_tokens") -> dict:
     """发起一次简单对话。返回 {"ok": bool, "output": str} 或 {"ok": False, "error": str}。
 
     protocol:
       - "openai"     → POST {base}/chat/completions，Bearer 头
       - "anthropic"  → POST {base}/v1/messages，x-api-key 头
       - "gemini"     → POST {base}/models/{model}:generateContent?key=…（模型名在路径里）
+
+    ``token_param``：**只对 openai 协议生效**，默认 `max_tokens`。阿里云百炼与 MiniMax 的
+    官方文档都已把 `max_tokens` 标为 **deprecated**、要求改用 `max_completion_tokens`，
+    由这两家插件显式传入。anthropic 协议**必须**用 `max_tokens`（官方就这么定义的），
+    gemini 用的是 `maxOutputTokens`、走的是另一条分支，都不受这个参数影响。
     """
     if not model:
         return {"ok": False, "error": "未指定模型"}
@@ -91,7 +118,7 @@ def chat_completion(base_url: str, api_key: str, model: str, messages: list,
                 resp = client.post(
                     root + "/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={"model": model, "messages": messages, "max_tokens": max_tokens},
+                    json={"model": model, "messages": messages, token_param: max_tokens},
                 )
     except httpx.TimeoutException:
         return {"ok": False, "error": f"请求超时（{int(timeout())} 秒）"}
@@ -103,6 +130,15 @@ def chat_completion(base_url: str, api_key: str, model: str, messages: list,
     status = resp.status_code
     payload = safe_json(resp)
     if status == 200 and isinstance(payload, dict):
+        # MiniMax 的 200 响应里带 `base_resp`（官方文档：成功时 `status_code == 0`）。
+        # 它的业务错误**可以藏在 200 里**，只看 HTTP 状态码会漏判成成功——这里必须叠加判断。
+        # （它的 4xx 又是**另一套**信封 `{"type":"error","error":{…}}`，数字码塞在 message 文本里。）
+        base = payload.get("base_resp")
+        if isinstance(base, dict) and base.get("status_code") not in (0, None):
+            msg = str(base.get("status_msg") or "")
+            if is_insufficient_balance(msg):      # 1008 余额不足
+                return {"ok": False, "error": f"账户欠费或无可用额度（{msg}）"}
+            return {"ok": False, "error": f"业务错误（{base.get('status_code')}）：{msg}"}
         if protocol == "gemini":
             candidates = payload.get("candidates")
             if isinstance(candidates, list) and candidates and isinstance(candidates[0], dict):
@@ -121,37 +157,57 @@ def chat_completion(base_url: str, api_key: str, model: str, messages: list,
             choices = payload.get("choices")
             if isinstance(choices, list) and choices and isinstance(choices[0], dict):
                 message = choices[0].get("message")
-                if isinstance(message, dict) and message.get("content"):
-                    return {"ok": True, "output": str(message["content"]).strip()}
+                if isinstance(message, dict):
+                    text = str(message.get("content") or "").strip()
+                    if text:
+                        return {"ok": True, "output": text}
+                    # **信封是完整的**（`choices[0].message` 在），只是文本为空。
+                    # 最典型的成因：我们做欠费探测时发的是 `max_tokens=1`，而推理型模型会把这
+                    # 1 个 token 全用在思维链上（OpenAI 兼容的 `reasoning_content`），`content`
+                    # 于是为空串。请求**已经到达模型并成功返回**，就说明账号可用——
+                    # 探测要的是「能不能用」，不是那句文本，所以带 `reached_model` 让探测能认。
+                    #
+                    # 带上响应体摘要 **只为了可诊断**：华为 MaaS 的官方文档说它**不**共用额度
+                    # （`max_tokens` 只限正文、思维链另算），与实测「没有可读内容」在文档层面
+                    # 是矛盾的——光看文档解释不了，得有原始响应体才能定性。摘要会经
+                    # `_redact_result` / 操作出口净化，不外泄密钥。
+                    body = body_snippet(resp)
+                    detail = f": {body}" if body else ""
+                    return {"ok": False, "error": f"响应中没有可读内容{detail}", "reached_model": True}
         return {"ok": False, "error": "响应中没有可读内容"}
-    # Gemini 无效 key 返回 400
-    if status in (400, 401, 403):
-        snippet = body_snippet(resp)
-        detail = f": {snippet}" if snippet else ""
-        return {"ok": False, "error": f"鉴权或请求错误 (HTTP {status}){detail}"}
+    # **同一个状态码含义可能完全不同**：不能见到 400 就说「鉴权或请求错误」——
+    # 阿里云百炼欠费就是 HTTP 400 + `{"type":"Arrearage","code":"Arrearage"}`，
+    # 判成鉴权错误会把用户往「密钥写错了」的方向引。先读响应体，欠费就说欠费。
     snippet = body_snippet(resp)
-    return {"ok": False, "error": f"HTTP {status}" + (f": {snippet}" if snippet else "")}
+    if is_insufficient_balance(snippet):
+        return {"ok": False, "error": f"账户欠费或无可用额度 (HTTP {status})"}
+    detail = f": {snippet}" if snippet else ""
+    if status in (400, 401, 403):
+        return {"ok": False, "error": f"鉴权或请求错误 (HTTP {status}){detail}"}
+    return {"ok": False, "error": f"HTTP {status}{detail}"}
 
 
 # ── 流式简单对话 ─────────────────────────────────────────
 
-def _extract_delta(protocol: str, line: str) -> str:
-    """从一行 SSE 数据里取出新增文本（无则返回空串）。"""
+def _sse_payload(line: str):
+    """把一行 SSE 解析成 dict；不是 `data:` 行 / 空 / `[DONE]` / 坏 JSON → None。"""
     if isinstance(line, bytes):
         line = line.decode("utf-8", "ignore")
     line = line.strip()
     if not line.startswith("data:"):
-        return ""
+        return None
     payload = line[5:].strip()
     if not payload or payload == "[DONE]":
-        return ""
+        return None
     try:
         obj = json.loads(payload)
     except Exception:
-        return ""
-    if not isinstance(obj, dict):
-        return ""
+        return None
+    return obj if isinstance(obj, dict) else None
 
+
+def _delta_of(obj: dict, protocol: str) -> str:
+    """该帧里的**正文**增量（无则空串）。"""
     if protocol == "gemini":
         candidates = obj.get("candidates")
         if isinstance(candidates, list) and candidates and isinstance(candidates[0], dict):
@@ -169,12 +225,40 @@ def _extract_delta(protocol: str, line: str) -> str:
     return ""
 
 
+def _reasoning_of(obj: dict, protocol: str) -> str:
+    """该帧里的**思维链**增量（无则空串）。
+
+    字段名各家不同——**按官方文档逐个核对过，别只认一个**：
+
+    - 百炼 / 智谱 / 华为 MaaS / MiniMax：`delta.reasoning_content`
+    - 商汤：自家 `sensenova-*` 系列是 `delta.reasoning`，而它网关里**转挂**的
+      `deepseek-*` / `glm-*` 仍是 `reasoning_content` —— 同一个网关内两种字段名并存。
+    - Anthropic：扩展思考走 `content_block_delta` 且 `delta.type == "thinking_delta"`，
+      正文在 `delta.thinking`（不是 `text`）。
+    """
+    if protocol == "anthropic":
+        delta = obj.get("delta") or {}
+        if isinstance(delta, dict) and str(delta.get("type") or "") == "thinking_delta":
+            return str(delta.get("thinking") or "")
+        return ""
+    choices = obj.get("choices")
+    if not (isinstance(choices, list) and choices and isinstance(choices[0], dict)):
+        return ""
+    delta = choices[0].get("delta")
+    if not isinstance(delta, dict):
+        return ""
+    return str(delta.get("reasoning_content") or delta.get("reasoning") or "")
+
+
 def chat_completion_stream(base_url: str, api_key: str, model: str, messages: list,
                            protocol: str = "openai", max_tokens: int = 512,
-                           on_delta=None) -> dict:
+                           on_delta=None, token_param: str = "max_tokens") -> dict:
     """流式对话：每收到一段文本即调用 `on_delta(text)`。
 
     返回 {"ok": True, "output": 全文} 或 {"ok": False, "error": ..., "output": 已收到的部分}。
+
+    **纯思考输出**（模型只产出思维链、正文为空）时，把思维链当正文返回，不留空白气泡——
+    字段名各家不同，见 `_reasoning_of`。`token_param` 语义同 `chat_completion`。
     """
     if not model:
         return {"ok": False, "error": "未指定模型", "output": ""}
@@ -184,6 +268,8 @@ def chat_completion_stream(base_url: str, api_key: str, model: str, messages: li
     root = base_url.rstrip("/")
     messages = messages or []
     parts: list = []
+    reasons: list = []        # 思维链增量（纯思考输出时兜底显示，见收尾处）
+    saw_frame = False         # 是否见到过数据帧（区分「模型答了但没文本」与「什么都没回」）
     emit = on_delta or (lambda _t: None)
 
     if protocol == "gemini":
@@ -217,7 +303,7 @@ def chat_completion_stream(base_url: str, api_key: str, model: str, messages: li
             method="POST",
             url=root + "/chat/completions",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": model, "messages": messages, "max_tokens": max_tokens, "stream": True},
+            json={"model": model, "messages": messages, token_param: max_tokens, "stream": True},
         )
 
     try:
@@ -226,6 +312,10 @@ def chat_completion_stream(base_url: str, api_key: str, model: str, messages: li
                 if resp.status_code != 200:
                     resp.read()
                     snippet = body_snippet(resp)
+                    # 与 chat_completion 同一套判定：先读响应体认欠费，再说是不是鉴权问题
+                    if is_insufficient_balance(snippet):
+                        return {"ok": False, "error": f"账户欠费或无可用额度 (HTTP {resp.status_code})",
+                                "output": "".join(parts)}
                     detail = f": {snippet}" if snippet else ""
                     if resp.status_code in (400, 401, 403):
                         return {"ok": False, "error": f"鉴权或请求错误 (HTTP {resp.status_code}){detail}",
@@ -233,10 +323,17 @@ def chat_completion_stream(base_url: str, api_key: str, model: str, messages: li
                     return {"ok": False, "error": f"HTTP {resp.status_code}{detail}",
                             "output": "".join(parts)}
                 for line in resp.iter_lines():
-                    text = _extract_delta(protocol, line)
+                    obj = _sse_payload(line)
+                    if obj is None:
+                        continue
+                    saw_frame = True      # 见到过数据帧 = 模型确实回了（供 reached_model 用）
+                    text = _delta_of(obj, protocol)
                     if text:
                         parts.append(text)
                         emit(text)
+                    think = _reasoning_of(obj, protocol)
+                    if think:
+                        reasons.append(think)
     except httpx.TimeoutException:
         return {"ok": False, "error": f"请求超时（{int(timeout())} 秒）", "output": "".join(parts)}
     except httpx.HTTPError as exc:
@@ -246,7 +343,15 @@ def chat_completion_stream(base_url: str, api_key: str, model: str, messages: li
 
     output = "".join(parts)
     if not output.strip():
-        return {"ok": False, "error": "响应中没有可读内容", "output": ""}
+        # **纯思考输出**：模型只产出了思维链、没有正文。成因见 `_reasoning_of` 与 §2.4：
+        # 思考内容走 `reasoning_content`（商汤自家走 `reasoning`），且思考 token 先于正文产生；
+        # `max_tokens` 偏小时会被思考吃光，正文就空了。此时把**思维链**显示出来，
+        # 而不是留一个空白气泡（用户明确要求）。
+        thinking = "".join(reasons).strip()
+        if thinking:
+            return {"ok": True, "output": thinking}
+        # 一个数据帧都没见到 → 不是「模型答了但没文本」，是真的没回东西
+        return {"ok": False, "error": "响应中没有可读内容", "output": "", "reached_model": saw_frame}
     return {"ok": True, "output": output.strip()}
 
 
@@ -305,13 +410,24 @@ def fetch_models(protocol: str, base_url: str, api_key: str) -> list:
 _PROBE_MODEL_HINTS = (
     "flash", "lite", "mini", "nano", "small", "haiku", "air", "turbo", "free", "8b", "7b",
 )
-# 不能用于对话的模型（嵌入 / 重排 / 语音 / 图像等），探测时排除
+# 不能用于对话的模型（嵌入 / 重排 / 语音 / 图像生成等），探测时排除。
+# `banana` 是 Google 的 nano-banana 图像生成系列——它的名字里带 `nano`，会被「便宜款」关键词
+# 误判成小型对话模型而排到候选最前面（输出里也确实含 text，光看 modality 拦不住）。
 _PROBE_MODEL_EXCLUDE = (
     "embed", "rerank", "tts", "whisper", "moderation", "audio", "video", "image",
-    "dall", "flux", "stable-diffusion", "sd3", "veo", "sora",
+    "dall", "flux", "stable-diffusion", "sd3", "veo", "sora", "banana",
 )
-# 一次探测最多尝试几个候选模型（模型不可用时换下一个）
-_PROBE_MAX_CANDIDATES = 3
+# 一次探测最多尝试几个候选模型（模型不可用时换下一个）。
+# **别设太小**：OpenRouter 这类聚合站的模型表有几百个，靠名字猜出来的前几个未必真能对话
+# （实测它排在最前的是 `google/gemini-nano-banana-2.1` 这种图像生成模型、以及各种冷门/受限条目）。
+# 只试 3 个就放弃，会让「余额未知时发一次对话探测」这个开关**长期静默失效**——
+# 用户勾了、验证也过了，界面上却什么都不显示，而且没有任何线索说明为什么。
+# 每次尝试只是一发 max_tokens=1 的请求，放宽到 10 个的代价可以接受。
+_PROBE_MAX_CANDIDATES = 10
+
+# 厂商回这句 = 该模型**仅支持流式**（阿里云百炼的开源思考模型会这样回），
+# 欠费探测遇到它要改用流式再试一次，否则这批模型的探测永远是「异常」。
+_STREAM_ONLY_HINT = "only support stream"
 
 
 def _probe_model_candidates(base_url: str, api_key: str, protocol: str) -> list:
@@ -324,19 +440,26 @@ def _probe_model_candidates(base_url: str, api_key: str, protocol: str) -> list:
 
 
 def quota_chat_probe(base_url: str, api_key: str, protocol: str = "openai",
-                     preferred_model: str = "") -> Optional[dict]:
+                     preferred_model: str = "", token_param: str = "max_tokens") -> Optional[dict]:
     """发一次最小对话请求，判断账户是否真的可用（欠费探测）。
 
     只在「凭据有效但拿不到余额」时才有意义：``/v1/models`` 对欠费账户同样返回 200，
     分不清「可用」与「账户欠费」，这里用 ``max_tokens=1`` 的一发请求换一个确定结论。
 
-    返回 ``None``（未发现异常 / 无法判定）或：
+    返回 ``None``（无法判定）或：
 
     - ``{"account_info": {"chat_probe": "可用"}}``：实测通过；
-    - ``{"message": "..."}``：实测发现账户欠费或无可用额度。
+    - ``{"account_info": {"chat_probe": "欠费"}, "message": "..."}``：实测发现账户欠费。
+
+    **``None`` 的语义保持「无法判定」不变**——`nvidia` 这类自己遍历候选、靠真值判断
+    「这个模型有没有结论」的调用方依赖它（若失败也返回 dict，它们会在第一个候选失败时
+    就收工）。把「异常」这一行摆到界面上是 ``make_quota_probe`` 的职责：
+    它知道用户开了开关，``None`` 就说明「试过但没成」。
+
+    具体失败原因（哪个模型、报了什么）写进日志，不塞进界面上那一行。
 
     模型选择：``preferred_model`` 优先（用户在设置里指定），否则自动挑一个便宜的；
-    候选模型不可用时换下一个，都不成则放弃（不误报）。
+    候选模型不可用时换下一个，全试完仍无结论则返回 ``None``（不误报欠费）。
     """
     if not base_url or not api_key:
         return None
@@ -345,21 +468,44 @@ def quota_chat_probe(base_url: str, api_key: str, protocol: str = "openai",
     )
     candidates = [c for c in candidates if c][:_PROBE_MAX_CANDIDATES]
     if not candidates:
+        log(f"欠费探测：拿不到可用的模型列表（{base_url}），无法实测")
         return None
 
+    tried: list[str] = []
     for model in candidates:
         resp = chat_completion(
             base_url, api_key, model,
             [{"role": "user", "content": "hi"}],
-            protocol=protocol, max_tokens=1,
+            protocol=protocol, max_tokens=1, token_param=token_param,
         )
-        if resp.get("ok"):
+        # `reached_model`：HTTP 200 且信封完整、只是文本为空（推理型模型吃掉了那 1 个 token）。
+        # 请求已经到过计费环节并成功返回 —— 对「账户能不能用」这个问题就是确证。
+        if resp.get("ok") or resp.get("reached_model"):
             return {"account_info": {"chat_probe": "可用"}}
         error = str(resp.get("error") or "")
         # 402 / 欠费关键字 = 账户没钱（模型本身是能用的，说明请求已到计费环节）
         if "402" in error or is_insufficient_balance(error):
-            return {"message": "凭证有效，但账户欠费或无可用额度（已用最小对话实测）"}
+            return {
+                "account_info": {"chat_probe": "欠费"},
+                "message": "凭证有效，但账户欠费或无可用额度（已用最小对话实测）",
+            }
+        # **仅支持流式的模型**：百炼有一批开源思考模型用非流式调用会直接回
+        # `parameter.enable_thinking only support stream call`。遇到它就用流式再试一次，
+        # 否则这批模型的欠费探测永远是「异常」——而它们其实好得很。
+        if _STREAM_ONLY_HINT in error.lower():
+            streamed = chat_completion_stream(
+                base_url, api_key, model,
+                [{"role": "user", "content": "hi"}],
+                protocol=protocol, max_tokens=1, token_param=token_param,
+            )
+            if streamed.get("ok") or streamed.get("reached_model"):
+                return {"account_info": {"chat_probe": "可用"}}
+            error = f"{error}；改走流式后：{streamed.get('error')}"
         # 其它错误（模型不存在 / 鉴权 / 限流）不构成欠费结论，换下一个候选
+        tried.append(f"{model}（{error[:80]}）")
+
+    log("欠费探测：试了 %d 个模型都没能确认账户可用 —— %s"
+        % (len(tried), "；".join(tried[:5]) + ("…" if len(tried) > 5 else "")))
     return None
 
 
@@ -436,6 +582,25 @@ def _interpret_simple(resp: httpx.Response) -> VerifyResult:
     return _unconfirmed(status, body_snippet(resp))
 
 
+# 「密钥没问题、是**请求本身**被拒」的业务码：命中就报「有效 + 具体原因」，
+# 而不是含糊的「无法确认凭证状态」。**按业务码判，不按文案**——智谱官方错误码表
+# （docs.bigmodel.cn/cn/api/api-code）里 `1113` 写的是「您的账户已欠费，请充值后重试」，
+# 线上实际回的是「余额不足或无可用资源包,请充值。」，同一个码两套文案。
+#   1211 模型不存在 / 1221 API 已下线 / 1222 API 不存在 / 1261 Prompt 超长 /
+#   1301 内容被安全审核拦截
+_REQUEST_LEVEL_CODES = frozenset({"1211", "1221", "1222", "1261", "1301"})
+
+
+def _error_code(payload) -> str:
+    """取错误响应体里的业务码（`{"error":{"code": …}}`）；取不到返回空串。"""
+    if not isinstance(payload, dict):
+        return ""
+    err = payload.get("error")
+    if isinstance(err, dict) and err.get("code") is not None:
+        return str(err["code"]).strip()
+    return ""
+
+
 def _interpret_chat(resp: httpx.Response) -> VerifyResult:
     """chat 探针判定：额外识别 429 余额不足（欠费）与速率限制。"""
     status = resp.status_code
@@ -443,6 +608,12 @@ def _interpret_chat(resp: httpx.Response) -> VerifyResult:
     snippet = body_snippet(resp)
     if status == 200:
         return VerifyResult(status="valid", message="凭证有效", account_info=_extract_account_info(payload))
+    # 400 不一定是「密钥有问题」。智谱那批码说明**密钥有效、是请求本身被拒**
+    # （模型名写错 / 接口下线 / prompt 超长 / 内容被审核），报成「无法确认凭证状态」
+    # 会把用户往「是不是 key 填错了」的方向引 —— 那是**假异常**。
+    code = _error_code(payload)
+    if status == 400 and code in _REQUEST_LEVEL_CODES:
+        return VerifyResult(status="valid", message=f"凭证有效，但请求被拒（{code}）：{snippet}")
     if status in (401, 403):
         return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
     if status == 429:
@@ -464,12 +635,24 @@ def _unconfirmed(status: int, snippet: str) -> VerifyResult:
 
 
 def is_insufficient_balance(text: str) -> bool:
-    """文本里是否含「欠费 / 余额不足」类关键字。
+    """文本里是否表示「欠费 / 余额不足 / 无可用额度」。
 
     各协议通用；子插件自己实现 ``quota_probe`` 时直接复用这个判定（另可按需叠加厂商
     专属错误码，如百度文心的 17/18/19）。
+
+    **先排除限流**：同一个词在不同厂商的含义可能相反——百炼的 ``insufficient_quota``
+    出现在 ``Throttling.AllocationQuota``（**限流**）里，而 OpenAI 的 ``insufficient_quota``
+    是**欠费**。命中限流关键字就直接返回 False，否则会把「被限流」误报成「欠费」。
+
+    **只排除英文限流词，中文侧刻意不加泛词**：智谱的 ``1316/1317`` 原文是
+    「主账号**余额不足**，无法使用超额按量付费。您的**限额**将在…重置」——它**同时**含
+    「余额不足」和「限额/使用上限」，若把 `限额`、`使用上限` 当限流词先排除，就会把这条
+    真·余额问题误判成限流。而智谱其余那些纯额度码（``1308 已达到 N 使用上限``、
+    ``1318–1321 消费上限``）本来就不含任何欠费词，返回 False 是对的，不需要额外规则。
     """
     lowered = (text or "").lower()
+    if any(kw in lowered for kw in _THROTTLING_KEYWORDS):
+        return False
     return any(kw in lowered for kw in _INSUFFICIENT_BALANCE_KEYWORDS)
 
 

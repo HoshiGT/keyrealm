@@ -1,6 +1,8 @@
 """华为云 ModelArts MaaS API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
 
-参考文档：https://support.huaweicloud.com/maas/
+参考文档：https://support.huaweicloud.com/intl/zh-cn/model-call-maas/model-call-019.html  （MaaS 标准 API V2 · 对话）
+参考文档：https://support.huaweicloud.com/model-call-maas/model-call-029.html             （获取模型列表）
+参考文档：https://support.huaweicloud.com/model-call-maas/model-call-035.html             （错误码）
 """
 from __future__ import annotations
 
@@ -12,7 +14,17 @@ NAME = "华为云 ModelArts MaaS"
 DEFAULT_BASE_URL = "https://api-ap-southeast-1.modelarts-maas.com/v2"
 PROTOCOL = "openai_models"
 
-# 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费
+# 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费。
+#
+# 注意华为与商汤在 `max_tokens` 上的官方口径**相反**，而两边实测现象却一样（正文为空）：
+#   华为官方：`max_tokens`「模型回答**不包含**思维链内容」——只限正文，思维链另算，
+#             所以理论上 `max_tokens=1` 时正文该有内容；且 `max_tokens` 与
+#             `max_completion_tokens` **不可同时设置**（同时给会直接报错）。
+#   商汤官方：「Reasoning content and output **share** the `max_tokens` quota」——共用额度，
+#             1 个 token 必然被思维链吃光。
+# 华为这一侧**文档解释不了实测**（官方说该有正文、实测没有）。好在两边都不影响结论：
+# `chat_completion` 只要「信封完整」就标记 `reached_model`，探测据此判「可用」——
+# 请求确实到过模型并正常返回。真正的成因要抓原始响应体（错误信息里已带响应体摘要）。
 quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai")
 
 

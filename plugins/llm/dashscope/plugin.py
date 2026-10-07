@@ -12,8 +12,13 @@ NAME = "阿里云百炼 DashScope"
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 PROTOCOL = "openai_models"
 
+# 官方把 `max_tokens` 标为 **deprecated**、要求改用 `max_completion_tokens`（两家文档都写了），
+# 所以这里显式传新参数名；`chat_completion` / `chat_completion_stream` / `make_quota_probe`
+# 都支持 `token_param`，默认仍是 `max_tokens`（其它厂商照旧）。
+TOKEN_PARAM = "max_completion_tokens"
+
 # 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费
-quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai")
+quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai", TOKEN_PARAM)
 
 
 def validate(data: dict) -> list[str]:
@@ -80,6 +85,7 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
         params.get("model") or CHAT_MODEL,
         params.get("messages") or [],
         protocol="openai",
+        token_param=TOKEN_PARAM,
     )
 
 
@@ -99,6 +105,7 @@ def stream_action(action_id: str, params: dict, data: dict, on_delta) -> dict:
         params.get("model") or CHAT_MODEL,
         params.get("messages") or [],
         protocol="openai",
+        token_param=TOKEN_PARAM,
         on_delta=on_delta,
     )
 

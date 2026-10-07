@@ -15,7 +15,7 @@ from __future__ import annotations
 import httpx
 
 from backend.plugin_sdk import VerifyResult, guarded
-from llm_common import probe_requested
+from llm_common import probe_requested, quota_unknown
 from llm_protocols import (
     probe_openai_chat,
     chat_completion,
@@ -116,7 +116,9 @@ def quota_probe(data: dict) -> dict | None:
         verdict = quota_chat_probe(base_url, api_key, "openai", preferred_model=model)
         if verdict:
             return verdict
-    return None
+    # 候选都试完仍无结论：报「实测 异常」，别静默——勾了开关却什么都不显示，用户分不清
+    # 「没开探测」和「探测失败」。
+    return quota_unknown()
 
 
 def list_models(data: dict) -> list:
