@@ -468,6 +468,10 @@ App.vue
   > 被整体换成**新对象**，而 `const dialog = actionDialog.value` 取的仍是**旧对象**——
   > 若末尾用 `dialog.listParams` 会拿到上一次（首次为空）的参数，表现为「第一次提示缺少参数、
   > 点一下刷新才好」（GitHub「详情」、OSS「预览」、进入目录要连点两次都是这个原因）。
+  > 下钻时凭据名随对话框一路带着：`runRowAction` 不回头查凭据列表，而是把
+  > `actionDialog.credentialName`（在 `openList` / `openAction` 首次打开时从 `cred.name` 落进去）
+  > 传给 `openList` / `openAction`。否则只传 `{ id }` 会让标题渲染成「云主机实例列表 ·
+  > `undefined`」。
 - **下载类操作**（`save_to`）：顺序是**先确认（若 write）→ 弹「另存为」→ 把路径塞进 `params` → 调插件**。
   路径不是秘密，而不是把带鉴权头的下载 URL 交给前端——那等于把短期凭证递给 JS。
 

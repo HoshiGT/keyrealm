@@ -202,6 +202,7 @@ function blankActionDialog() {
   return {
     visible: false,
     credentialId: null,
+    credentialName: '', // 行内下钻/表单不再回头查凭据列表，标题里的凭据名随对话框一路带着
     actionId: '',
     kind: '',
     title: '',
@@ -470,6 +471,7 @@ function openAction(cred, action, seed = {}, extra = {}) {
     ...blankActionDialog(),
     visible: true,
     credentialId: cred.id,
+    credentialName: cred.name || '',
     actionId: action.id,
     kind: action.kind || '',
     title: `${action.name || '操作'} · ${cred.name}`,
@@ -533,6 +535,7 @@ function openList(cred, action, params = {}, actionsOverride = []) {
     ...(sameCredential ? dialog : blankActionDialog()),
     visible: true,
     credentialId: cred.id,
+    credentialName: cred.name || '',
     actionId: action.id,
     kind: 'list',
     title: `${action.name || '列表'} · ${cred.name}`,
@@ -662,19 +665,19 @@ function runRowAction(rowAction, row) {
   if (kind === 'list') {
     // 下钻：把当前帧压栈，返回时直接还原
     actionDialog.value.listStack = [...actionDialog.value.listStack, listFrame(actionDialog.value)]
-    openList({ id: actionDialog.value.credentialId }, target, params)
+    openList({ id: actionDialog.value.credentialId, name: actionDialog.value.credentialName }, target, params)
     return
   }
   if (kind === 'form') {
     // 打开表单并用行参数预填；确认留到提交时（预填后就弹确认等于白问）
-    openAction({ id: actionDialog.value.credentialId }, target, params, {
+    openAction({ id: actionDialog.value.credentialId, name: actionDialog.value.credentialName }, target, params, {
       actions: actionDialog.value.actions,
       row,
     })
     return
   }
   // 其它（含 chat）：与普通操作一致
-  openAction({ id: actionDialog.value.credentialId }, target, params, {
+  openAction({ id: actionDialog.value.credentialId, name: actionDialog.value.credentialName }, target, params, {
     actions: actionDialog.value.actions,
     row,
   })
