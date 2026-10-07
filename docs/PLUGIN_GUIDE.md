@@ -321,8 +321,8 @@ def proxy():
 | 其它可读字段 | 如 `organization` / `domain_count` / `account_id` | `组织 Xxx` / `域名数 1` / `账号 ID …` |
 
 - **LLM 类**：附加信息只展示**余额**；无余额概念的 plan 账号展示**使用率**。余额由**各厂商自己的 `plugin.py`** 按各自的余额端点 best-effort 查询（金额合理性闸见下条）——目前 DeepSeek / Moonshot 有余额接口，OpenRouter 用 `/credits` 计算余额与使用率；OpenAI 的 ChatGPT 登录态模式经实验性端点 `GET /backend-api/wham/usage` 读 5 小时窗的 `used_percent` 作为 `usage_rate`（付费套餐才查，取不到就不显示）；Anthropic / Gemini / 智谱等多数无公开余额接口，附加信息为空。
-- **金额合理性闸**：one-api / new-api 类中转站在「不限额」时会把硬限额（`hard_limit_usd`）填成 `99999999.99`、`1e8` 这类哨兵值，拿它去减消耗就会得出 `99999996.47` 这种假余额。所有要展示的金额都必须先过 `llm_common.plausible_amount()`（有限数值且绝对值 < `AMOUNT_LIMIT = 1e7`），不通过就**宁可不显示**。新增带余额的厂商/中转插件时务必一并加这道闸。
-- **中转站**：`openai_compatible`（通用 OpenAI 兼容）与 `newapi`（New API 中转站专用）都走 one-api 兼容的 `/dashboard/billing/subscription` + `/dashboard/billing/usage`。New API 的 `hard_limit_usd` 是**令牌总额度（剩余 + 已用）**，`total_usage` 单位是**美分**，故 `余额 = hard_limit_usd − total_usage / 100`；命中哨兵值则按「不限额度」处理，改为展示 `套餐 不限额度` 而非数字。
+- **金额合理性闸**：one-api / new-api 类中转站在「不限额」时会把硬限额（`hard_limit_usd`）填成哨兵值（New API 官方写死 **`100000000`（1e8）**，且只在**令牌维度**出现——`token.UnlimitedQuota` 分支），拿它去减消耗就会得出 `99999900` 这种假余额。所有要展示的金额都必须先过 `llm_common.plausible_amount()`（有限数值且绝对值 < `AMOUNT_LIMIT = 1e7`），不通过就**宁可不显示**。新增带余额的厂商/中转插件时务必一并加这道闸。
+- **中转站**：`openai_compatible`（通用 OpenAI 兼容）与 `newapi`（New API 中转站专用）都走 one-api 兼容的 `/dashboard/billing/subscription` + `/dashboard/billing/usage`。New API 的 `hard_limit_usd` 是**令牌总额度（剩余 + 已用）**，`total_usage` 单位是**美分**，故 `余额 = hard_limit_usd − total_usage / 100`（依据官方 `controller/billing.go` / `channel-billing.go`）；命中哨兵值则按「不限额度」处理，改为展示 `套餐 不限额度` 而非数字。**两处官方源码确认的坑**：(a) `total_usage` 是**终身累计**、非本月（new-api 的 `GetUsage` **忽略** `start_date`/`end_date`，那是 OpenAI 原生接口的行为）；(b) `*_USD` 里的数字**不一定是美元**——官方按站点 `QuotaDisplayType` 三分支填 `USD`/`CNY`/`TOKENS`，故 `newapi` 在「`used > total`」（两字段不同单位的信号）时**不显示余额**，宁缺毋滥。
 - **多条 = 多行**：前端把 `account_info` 摊成**每个字段一行**（不再「最多 2 条、用 ` · ` 拼一行」）。
   所以**每多回一个键，列表里就多一行**——只想要一行的信息，就只回一个键。
 - **值是对象/数组的键前端会跳过**（渲染不出来）。想把数组里的东西展示出来，请在插件里**先摊平成标量**
@@ -485,9 +485,10 @@ def quota_probe(data: dict):
 - **仅支持流式的模型**：百炼有一批开源思考模型用非流式调用会直接回
   `parameter.enable_thinking only support stream call`。探测遇到它会**改用流式再试一次**
   （`_STREAM_ONLY_HINT`），否则这批模型的探测永远是「异常」——而它们其实好得很。
-- **`token_param`**：百炼与 MiniMax 的官方文档都把 `max_tokens` 标为 deprecated、要求改用
-  `max_completion_tokens`，这两家插件显式传入。`chat_completion` / `chat_completion_stream` /
-  `make_quota_probe` / `quota_chat_probe` 都带这个参数，**默认仍是 `max_tokens`**（其它厂商照旧）。
+- **`token_param`**：官方已把 `max_tokens` 标 deprecated、要求改用 `max_completion_tokens` 的厂商，
+  由其插件显式传入——百炼、MiniMax、OpenAI（api_key 模式）、Moonshot、`openai_compatible` 都属于
+  这一类。`chat_completion` / `chat_completion_stream` / `make_quota_probe` / `quota_chat_probe` /
+  `probe_openai_chat` 都带这个参数，**默认仍是 `max_tokens`**（其它厂商照旧）。
   anthropic 协议必须用 `max_tokens`、gemini 走 `maxOutputTokens`，都不受影响；
   华为明确「`max_tokens` 与 `max_completion_tokens` 不可同时设置」，所以我们**只发一个**。
 
