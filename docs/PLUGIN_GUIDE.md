@@ -364,8 +364,9 @@ def timeout(fallback: float = TIMEOUT) -> float:
 
 **单次请求可以覆盖全局超时**（`make_client(request_timeout=…)`、
 `probe_openai_chat(..., timeout=…)`）：用于「一次 `verify` 里要连试多个候选、每个只给短超时」
-的厂商——例如 NVIDIA 的模型清单是过期超集，押注单个模型名必烂，于是按候选短名单逐个试
-（`plugins/llm/nvidia/plugin.py` 的 `PROBE_MODELS` / `PROBE_TIMEOUT`）。
+的厂商——例如 NVIDIA 的模型清单是过期超集，押注单个模型名必烂，于是按候选逐个试
+（`plugins/llm/nvidia/plugin.py` 的 `_candidates` + `PROBE_TIMEOUT`）。候选名单**运行时候取**
+（`llm_protocols.probe_model_candidates`，24h 缓存），**不再内置短名单**。
 
 > ⚠️ 自己循环试候选时，**每个候选的超时（`httpx.TimeoutException`）与网络异常必须在插件内
 > `try` 掉**。让它冒泡到 `@guarded` 会直接结束整次 `verify`——第一个候选挂死就白费了后面的候选，
@@ -424,11 +425,11 @@ def quota_probe(data: dict):
 
 实例：`plugins/llm/wenxin/plugin.py`——文心要用 `API_KEY|SECRET_KEY` 换 `access_token`、
 聊天端点还带模型后缀，通用实现拼不出来；且它有个坑：**免费档模型（ernie-speed / lite / tiny）
-不计费，欠费时照样能对话**，所以自动选型只挑付费档（`ernie-3.5-8k`）。
+不计费，欠费时照样能对话**，所以自动选型只挑付费档（从端点表现推，见 `_PAID_MODELS`）。
 
 另一个实例：`plugins/llm/nvidia/plugin.py`——NVIDIA 没有余额接口，且**模型清单是过期超集**
-（列着但已下线的模型会 `410`/`404`）。它的 `quota_probe` 直接复用 `verify` 的候选短名单逐个试，
-谁通就用谁，全试完没结论就 `None`。
+（列着但已下线的模型会 `410`/`404`）。它的 `quota_probe` 复用 `verify` 的同一批**运行时候选**
+（`probe_model_candidates`，24h 缓存）逐个试，谁通就用谁，全试完没结论就 `None`。
 
 `quota_probe(data)` 的返回约定（后端消费，插件不必自己判断展示）：
 
@@ -663,8 +664,19 @@ def get_display_summary(data):
 | `actions(data) -> list[dict]` | ✅ | 声明有哪些操作；返回 `[]` 表示没有可用操作（凭据行的按钮**仍然显示**，只是置灰 + 悬停提示「暂无可用功能」，见 §5）。**必须是本地、便宜、无副作用的**——它只负责渲染菜单 |
 | `run_action(action_id, params, data) -> dict` | ✅ | 执行操作 |
 | `capabilities(data) -> dict` | 可选 | **探测该凭据真正能用哪些操作**（可联网）；没实现 = 全部可用 |
-| `list_models(data) -> list` | 可选 | 可用模型名列表（LLM「简单对话」把它变成可搜索下拉） |
+| `list_models(data, force=False) -> list` | 可选 | 可用模型名列表（LLM「简单对话」把它变成可搜索下拉）。`force=True` 表示**用户点了「刷新模型列表」**，插件应据此穿透模型清单缓存 |
 | `stream_action(action_id, params, data, on_delta)` | 可选 | 流式执行；未实现时自动回退 `run_action` |
+
+**模型清单缓存**：实现在 `llm_protocols`——`fetch_models` 与 `probe_model_candidates`（欠费探测挑候选）
+**共用一份 24h 缓存**（键 = 协议 + Base URL + 密钥指纹；文件 `plugins/.model_cache.json`，打包排除）。
+自动路径（探测挑候选）读缓存，**只有用户手动刷新才重新联网**。
+
+> **铁律：不要把模型名写死在代码里。** 模型名与可用性随**账号 / 套餐 / 地域 / 客户端版本**快速变化
+> （实例：codex 目录端点按 `?client_version=` 发清单，`gpt-6.1-sol` 要到 **0.159.0** 才出现——
+> 本机装的旧版 codex 二进制里连这个串都没有）。默认模型一律**运行时取**：
+> 用户指定 → 运行时清单首项 → 拿不到就**报错让用户手选**，绝不退回内置名
+> （`llm_protocols.resolve_chat_model` 就是这条约定）。同理，`actions()` 里 chat 操作的
+> `model` 字段**留空 `""`**（前端打开时会自动填运行时清单首项）。
 
 #### 操作项（action）的字段
 
@@ -676,7 +688,7 @@ def get_display_summary(data):
 | `fields` | `form` / `list` | 输入项：`[{key,label,type(text/password/select/textarea/number),default,placeholder,options,required}]`。**`list` 也能带 fields**：点「拉取/刷新」时把表单值作为 `params` 传进 `run_action`。**`required: true` 会在操作表单里渲染红色星号并在提交前校验**（空着点提交会被拦下，`form` 与 `list` 两处同规则） |
 | `submit` | `form` / `list` | 提交/刷新按钮文案（默认「运行」） |
 | `write` | 全部 | 可选布尔，声明为**会改动远端数据**。前端在**提交前**弹二次确认（只列非敏感字段值） |
-| `model` | `chat` | 默认模型名（用户可改） |
+| `model` | `chat` | 模型输入框的**初始值**（用户可改）。**推荐留空 `""`**——前端打开时自动填运行时清单首项（见上「铁律」），**别在这里写死模型名** |
 | `columns` | `list` | `[{key,label,width?,mono?(等宽),type?("text"/"number"/"tag")}]` |
 | `row_actions` | `list` | 每行的按钮，见 §3.1.2 |
 | `empty_text` | `list` | 空列表文案 |
@@ -958,7 +970,7 @@ def get_display_summary(data):
 
 **llm/ 类别（18 个）**：openai（含 Codex/ChatGPT 登录态模式）、anthropic、deepseek、openrouter、
 gemini、minimax、nvidia、moonshot、siliconflow（硅基流动）、dashscope（阿里百炼）、huawei_maas、
-glm（智谱）、doubao（豆包）、wenxin（文心）、
+glm（智谱）、ark（火山方舟，托管豆包 / DeepSeek / Qwen 等多家模型）、wenxin（文心）、
 openai_compatible（第三方中转）、newapi（New API 中转站）、
 sensenova（商汤日日新，OpenAI 兼容）、codebuddy（腾讯 CodeBuddy 客户端登录态）。
 
@@ -1005,7 +1017,10 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
 
 **exchange/ 类别（2 个）**：okx、binance。
 
-**mail/ 类别（1 个）**：smtp（通用 SMTP，覆盖 Gmail / QQ / 163 / 126 等）。
+**mail/ 类别（1 个）**：smtp（通用 SMTP，覆盖 Gmail / QQ / 163 / 126 等）。TLS **默认最低 1.2**——
+服务器只开 **TLS 1.1**（老校内邮件常见）时会报「SSL/TLS 握手失败」（服务端回 `protocol version` 告警），
+勾选凭据里的「**允许旧版 TLS**」（`allow_legacy_tls`，默认关）即可；降级会让授权码走在更弱的信道上，
+所以默认不开、须用户确认服务器可信后自行开启。SMTP 与 IMAP 两条路径共用这个开关。
 
 > 说明：标记 `batch_verify: false`（只能手动单个验证）的有三个：`duckdns` 的校验本身是写操作
 > （先写入 `1.1.1.1` 确认生效再还原原值）；`telegram_apihash` 与 `api/gateway` 则是判定常为
@@ -1037,12 +1052,28 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
   > refresh_token，不写回就会让本机 CLI 与库里的登录态永久错位。
   > codex 模式的「简单对话」走 chatgpt.com 的**非公开实验端点** `POST /backend-api/codex/responses`
   > （SSE 流式；`input` 必须是数组、`instructions` 非空、`stream` 恒 true）。该端点与 `/me` 同源，
-  > 403 多为人机挑战，**不判凭据失效**；模型名会变，故用内置静态列表 + 允许手输覆盖。
+  > 403 多为人机挑战，**不判凭据失效**。
+  > 模型清单**不写死**：现取 `GET /backend-api/codex/models?client_version=<本机 codex 版本>`
+  > （取 `visibility=="list"` 的条目），退到 Codex CLI 的 `~/.codex/models_cache.json`，都没有就留空让用户手输。
+  > ⚠️ 该目录**按客户端版本**发：`client_version` 低于 **0.159.0** 时服务端**不返回 `gpt-6.1-sol`**
+  > （实测 0.157.1→9 条、0.159.0→10 条），且该参数**必填**（不带→400）；所以本机装旧版 codex 也会
+  > 看不见新模型，插件用下界 `_CODEX_MIN_CLIENT_VERSION` 兜底。另：目录**不是准入白名单**——
+  > `gpt-5.5` 标 `hide` 也能对话、`gpt-6.1-sol` 目录里没有但 `/codex/responses` 接受。
   >
   > `codebuddy`（纯登录态类）同样是分字段填写：**必需** `access_token`、`uid`（探针请求头
   > `X-User-Id`）；**可选** `refresh_token`（只存不用）、`enterprise_id`、`domain`
   > （默认 `www.codebuddy.cn`）。它**没有**刷新操作——刷新端点未实测确认，
   > 拿猜的接口去轮换用户的令牌风险太大。
+  >
+  > `ark`（火山方舟，原 `doubao`，已泛化）—— **方舟是字节的模型托管平台，不等于豆包**：同一把 key
+  > 能调豆包 / DeepSeek / 智谱 GLM / 阿里 Qwen 等多家模型。两点必知：**`/models` 不含你自己的
+  > 「推理接入点」`ep-xxxxxxxx`**（接入点才是很多人实际调用的对象，**必须手输**，列表里永远没有）；
+  > **`/models` 混着大量已关停的历史模型**（实测 135 条里 83 条 `status=="Shutdown"`，且按创建时间排、
+  > **首项就是关停款**）→ 插件在 `list_models` 里**剔除 `Shutdown`、并把非对话类（embedding /
+  > seedance / seedream / tts…）排到最后**，免得默认取首项时选到死模型。另：**接入点被关是 HTTP 400
+  > `InvalidEndpoint.ClosedEndpoint`，不代表 key 失效**（key 有效时 `/models` 仍 200，别误判失效）。
+  > 老库里 `llm_doubao` 类型的凭据用 `python scripts/migrate_doubao_to_ark.py` 一次性迁移
+  > （默认只演练，`--apply` 才写库）。
 - **dns**：
   - dnspod / godaddy / cloudflare —— **域名（站点）列表 → 行内「解析」下钻到解析记录 → 行内「修改」**，
     以及行内「新增」；前两者是 `write`，Cloudflare 用同一个表单（留空 `record_id` 即新增）
