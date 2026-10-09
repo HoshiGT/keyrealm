@@ -84,8 +84,10 @@ def setup_logging(level: str = DEFAULT_LEVEL, console: bool | None = None) -> No
         sh.setFormatter(fmt)
         root.addHandler(sh)
 
-    # 压制第三方 chatty logger（其 INFO 对用户无意义）
-    for noisy in ("httpx", "httpcore"):
+    # 压制第三方 chatty logger（其 INFO/DEBUG 对用户无意义）。
+    # PIL.PngImagePlugin 在每次 Image.open() 时会刷 STREAM b'IHDR' / b'IDAT' 一类的
+    # 分块调试行，标识图处理（backend/icon_ink.py）每次启动都会触发，须一并压掉。
+    for noisy in ("httpx", "httpcore", "PIL.PngImagePlugin"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     _configured = True

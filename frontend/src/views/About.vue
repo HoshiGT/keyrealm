@@ -47,7 +47,6 @@ onMounted(() => {
       </div>
 
       <el-descriptions :column="2" border size="small" class="about-desc">
-        <el-descriptions-item label="项目名称">Credential Vault（凭据保险库）</el-descriptions-item>
         <el-descriptions-item label="版本号">v{{ versionInfo.display }}</el-descriptions-item>
         <el-descriptions-item label="数据库结构版本">v{{ versionInfo.schemaVersion || '—' }}</el-descriptions-item>
         <el-descriptions-item label="运行环境">{{ runtimeLabel }}</el-descriptions-item>
