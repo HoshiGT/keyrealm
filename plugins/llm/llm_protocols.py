@@ -573,6 +573,10 @@ def _probe_model_candidates(base_url: str, api_key: str, protocol: str, force: b
     字段不存在时（多数厂商只回 `data[].id`）退回老办法：按名字选「便宜款」，再兜底其它模型。
     """
     items = _model_items(protocol, base_url, api_key, force)
+    # **剔掉已关停的**：方舟 `/models` 是过期超集（实测 135 条里 83 条 `status=="Shutdown"`，
+    # 且按创建时间排、**首项就是关停款**）。不剔的话，「按名字像 lite/flash 挑」会优先挑到
+    # `doubao-lite-*` 这些早就关停的款，探测十次全 404（2026-10-09 实测就是这个现象）。
+    items = [i for i in items if str(i.get("status") or "").strip().lower() != "shutdown"]
     if items and any(isinstance(i.get("architecture"), dict) for i in items):
         pool = [i for i in items
                 if "text" in ((i.get("architecture") or {}).get("output_modalities") or [])]

@@ -22,17 +22,16 @@
 """
 from __future__ import annotations
 
-from backend.plugin_sdk import VerifyResult, guarded
-from llm_common import make_quota_probe
+from backend.plugin_sdk import VerifyResult, guarded, log
+from llm_common import probe_requested, quota_unknown
 from llm_protocols import (probe_openai_models, chat_completion, model_items,
-                           chat_completion_stream, resolve_chat_model)
+                           chat_completion_stream, resolve_chat_model, quota_chat_probe)
 
 NAME = "火山方舟"
 DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 PROTOCOL = "openai_models"
 
-# 余额拿不到时的可选项（凭据级开关，默认关闭）：发一次最小对话请求判断是否欠费
-quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai")
+# 欠费探测见文件下方的 `quota_probe()` —— 不走 `make_quota_probe`，理由写在那里
 
 # 方舟清单里**不能对话**的模型家族（嵌入 / 视频生成 / 图像生成 / 语音 / 翻译）。
 # 它们只是**排到最后**、并不从下拉里删掉——用户仍可能想选（也仍可手输接入点）。
@@ -94,6 +93,42 @@ def list_models(data: dict, force: bool = False) -> list:
     # 默认模型取的是本清单首项 → 让「能对话的」排在前面（非对话类沉底）
     names.sort(key=lambda n: (any(h in n.lower() for h in _NON_CHAT_HINTS), n))
     return names
+
+
+# 欠费探测最多试几个候选（每个都是一发 max_tokens=1 的请求）
+_PROBE_MAX_CANDIDATES = 6
+
+
+def quota_probe(data: dict) -> Optional[dict]:
+    """欠费探测（凭据开关 ``probe_chat``，默认关）。
+
+    **刻意不用通用实现 `make_quota_probe`**：它会「按名字像 flash/lite 的挑一个」再去试，
+    而方舟 `/models` 是**过期超集**（实测 135 条里 83 条已关停，另有一堆未开通/找不到的）——
+    实测它挑出的全是 `doubao-lite-*` 这些关停款，十个候选全 404、白等 25 秒仍无结论。
+
+    这里改成**与 `list_models` 同源的候选**（已剔除 Shutdown、非对话类沉底）：
+    **下拉里能选到的，就是探测会去试的**；凭据里指定的 `probe_model` 优先。逐个试、命中即止。
+    """
+    data = data or {}
+    if not probe_requested(data):
+        return None
+    base_url = _base_url(data)
+    api_key = (data.get("api_key") or "").strip()
+    if not base_url or not api_key:
+        return None
+    preferred = str(data.get("probe_model") or "").strip()
+    candidates = ([preferred] if preferred else []) + [
+        m for m in list_models(data) if m != preferred
+    ]
+    candidates = candidates[:_PROBE_MAX_CANDIDATES]
+    for model in candidates:
+        verdict = quota_chat_probe(base_url, api_key, "openai", preferred_model=model)
+        if verdict:
+            return verdict
+    # 试完仍无结论：写清原因（界面上按 quota_unknown 显示「实测 异常」，不静默）
+    log(f"{NAME}：欠费探测试了 {len(candidates)} 个候选都没结论"
+        f"——方舟 /models 是过期超集，可在凭据里直接指定「探测使用的模型」")
+    return quota_unknown()
 
 
 # ── 可选操作：简单对话 ──────────────────────────────────
