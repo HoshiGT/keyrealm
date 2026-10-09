@@ -12,10 +12,13 @@
 1. **`/models` 列的是平台基础模型，不含你自己的「推理接入点」**（`ep-xxxxxxxx`）。
    接入点才是很多人实际调用的对象 → 它**不会出现在模型下拉里，必须手输**
    （对话弹窗与「探测使用的模型」两处的模型框都支持直接输入）。
-2. **`/models` 里混着大量已关停的历史模型**（实测 135 条里 **83 条 `status == "Shutdown"`**），
-   且列表按创建时间排、**首项就是关停款**；同时还混着**嵌入 / 视频生成 / 图像生成**等
-   不能对话的模型。因为「默认模型」取的是清单首项，本插件在 `list_models` 里
-   **剔除 `Shutdown`、并把非对话类名字排到最后**，免得默认选到一个用不了的模型。
+2. **`/models` 会随时间变，且不全是「你现在能调的」**：实测某账号 135 条里 **83 条已关停**
+   （按创建时间排、**首项就是关停款**），另有 `ModelNotOpen`（存在但未开通）等条目。
+   所以本插件**剔除 `Shutdown`、非对话类沉底**，并以「**刷新到的这份清单**」为探测候选
+   —— 不再对着早就作废的款白发请求；若你知道确切的可用模型（含接入点 `ep-xxx`），
+   直接在凭据里指定「探测使用的模型」即可只试它一个。
+3. **欠费探测的候选 = 你刷新模型列表看到的那份**（已滤 `Shutdown`）；逐个试、命中即止，
+   全试完如实报「异常」并把试过的模型写进日志。
 
 鉴权是标准 Bearer API Key（`Authorization: Bearer <api_key>`）：`/models` 校验该 key
 （无鉴权 → 401、伪造 key → 401），所以验证直接用 `/models` 探针即可，无需对话探测。
@@ -77,7 +80,12 @@ def verify(data: dict) -> VerifyResult:
 
 
 def list_models(data: dict, force: bool = False) -> list:
-    """方舟可用模型列表（**剔除已关停的**，非对话类排到最后；见文件头）。
+    """方舟**平台目录**里的模型（已剔除 ``Shutdown``、非对话类沉底）。
+
+    ⚠️ **这是「平台提供什么」，不是「你这个账号能调什么」**。实测该目录里的条目常返回
+    `InvalidEndpointOrModel.NotFound`（不存在）或 `ModelNotOpen`（未开通），而**能用的模型
+    可能根本不在目录里**（如接入点 `ep-xxx`、或未登记进目录的模型）—— 所以**别把它当成
+    「可选模型清单」**；对话与探测的模型都可以直接手输。
 
     ``force=True``：用户点了「刷新模型列表」，穿透 24h 模型清单缓存。
     """
@@ -102,12 +110,14 @@ _PROBE_MAX_CANDIDATES = 6
 def quota_probe(data: dict) -> Optional[dict]:
     """欠费探测（凭据开关 ``probe_chat``，默认关）。
 
-    **刻意不用通用实现 `make_quota_probe`**：它会「按名字像 flash/lite 的挑一个」再去试，
-    而方舟 `/models` 是**过期超集**（实测 135 条里 83 条已关停，另有一堆未开通/找不到的）——
-    实测它挑出的全是 `doubao-lite-*` 这些关停款，十个候选全 404、白等 25 秒仍无结论。
+    **候选＝本插件 `list_models`**，也就是用户点「刷新模型列表」时看到的那一份：
+    已**剔除 `Shutdown`**（实测某账号 135 条里 83 条已关停、且按创建时间排、首项就是关停款）、
+    非对话类沉底。这样「**探测会试的 ＝ 刷新能看到的**」，不再对着早就作废的款白发请求；
+    凭据里指定了 `probe_model` 就只试它一个。
 
-    这里改成**与 `list_models` 同源的候选**（已剔除 Shutdown、非对话类沉底）：
-    **下拉里能选到的，就是探测会去试的**；凭据里指定的 `probe_model` 优先。逐个试、命中即止。
+    ⚠️ 方舟的清单**会随时间变、也不全是「现在就能调的」**（仍有 `ModelNotOpen` 等条目），
+    所以是「**逐个试、命中即止**」；一次最多 `_PROBE_MAX_CANDIDATES` 个，全试完就如实报
+    「异常」并把试过的模型写进日志。
     """
     data = data or {}
     if not probe_requested(data):
@@ -121,13 +131,14 @@ def quota_probe(data: dict) -> Optional[dict]:
         m for m in list_models(data) if m != preferred
     ]
     candidates = candidates[:_PROBE_MAX_CANDIDATES]
+    if not candidates:
+        return quota_unknown()
     for model in candidates:
         verdict = quota_chat_probe(base_url, api_key, "openai", preferred_model=model)
         if verdict:
             return verdict
-    # 试完仍无结论：写清原因（界面上按 quota_unknown 显示「实测 异常」，不静默）
-    log(f"{NAME}：欠费探测试了 {len(candidates)} 个候选都没结论"
-        f"——方舟 /models 是过期超集，可在凭据里直接指定「探测使用的模型」")
+    log(f"{NAME}：欠费探测试了 {len(candidates)} 个候选都没结论（{'、'.join(candidates)}）"
+        f"——方舟的清单会变、也不全是当前可调的，可在凭据里指定「探测使用的模型」")
     return quota_unknown()
 
 
