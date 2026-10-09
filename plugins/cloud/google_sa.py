@@ -176,7 +176,7 @@ def token_error_detail(payload: dict, snippet: str = "") -> str:
 
 
 # token 端点回 ``invalid_grant`` 时，只有描述命中这些短语才敢判「这组凭据已失效」：
-#   account not found    → 服务账号已被删除（doc 11 里 9 把 Firebase SA 的实测回包）
+#   account not found    → 服务账号已被删除（Firebase SA 的典型回包）
 #   Invalid JWT Signature→ 私钥被轮换/吊销，与 client_email 对不上
 # 其余 invalid_grant（时钟偏移、issuer 格式）说明密钥本身没问题，只能算「拿不准」，
 # 否则会把「本机时间不对」误报成凭据失效。

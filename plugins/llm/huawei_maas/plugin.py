@@ -14,17 +14,9 @@ NAME = "华为云 ModelArts MaaS"
 DEFAULT_BASE_URL = "https://api-ap-southeast-1.modelarts-maas.com/v2"
 PROTOCOL = "openai_models"
 
-# 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费。
-#
-# 注意华为与商汤在 `max_tokens` 上的官方口径**相反**，而两边实测现象却一样（正文为空）：
-#   华为官方：`max_tokens`「模型回答**不包含**思维链内容」——只限正文，思维链另算，
-#             所以理论上 `max_tokens=1` 时正文该有内容；且 `max_tokens` 与
-#             `max_completion_tokens` **不可同时设置**（同时给会直接报错）。
-#   商汤官方：「Reasoning content and output **share** the `max_tokens` quota」——共用额度，
-#             1 个 token 必然被思维链吃光。
-# 华为这一侧**文档解释不了实测**（官方说该有正文、实测没有）。好在两边都不影响结论：
-# `chat_completion` 只要「信封完整」就标记 `reached_model`，探测据此判「可用」——
-# 请求确实到过模型并正常返回。真正的成因要抓原始响应体（错误信息里已带响应体摘要）。
+# 余额不可获取时，可选用最小对话请求判断额度状态，默认关闭。
+# `max_tokens` 仅限制正文，不包含思维链，且不能与 `max_completion_tokens` 同时设置。
+# 正文为空不必然表示调用失败；`chat_completion` 依据完整响应信封设置 `reached_model`。
 quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai")
 
 

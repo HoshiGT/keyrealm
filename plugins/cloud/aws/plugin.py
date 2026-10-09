@@ -1261,7 +1261,7 @@ def _bucket_region(client, bucket: str, listed: str, ak: str, sk: str, token: st
 
     结果按桶缓存（桶名全局唯一，「桶在哪个区域」是不会变的全局事实）。
 
-    ``?location`` 有个坑：S3 早已不接受「用 us-east-1 签名去问别处的桶」，会回
+    ``?location`` 需要注意：S3 早已不接受「用 us-east-1 签名去问别处的桶」，会回
     ``400 AuthorizationHeaderMalformed``——但**错误体里的 ``<Region>`` 就是答案**
     （官方 SDK 也靠这个提示纠偏）。所以：
     - 200 → 解析 ``LocationConstraint``（空 = us-east-1）；
@@ -1302,7 +1302,7 @@ def _location_constraint(text: str) -> str:
 def _resolve_bucket_regions(client, buckets: list[tuple[str, str]], ak: str, sk: str, token: str) -> dict:
     """并发问出各桶的区域，返回 ``{桶名: 区域}``。
 
-    ListBuckets 不给 ``BucketRegion``（实测当前 S3 就不给，只给 Name/CreationDate/BucketArn），
+    ListBuckets 不给 ``BucketRegion``（当前 S3 只给 Name/CreationDate/BucketArn），
     于是每个桶都要多问一次；几十个桶串行问会让表格转上十几秒，所以同样并发。
 
     并发要点与实例扫描一致：``client`` 在**父线程**创建后共享给 worker——代理是按线程

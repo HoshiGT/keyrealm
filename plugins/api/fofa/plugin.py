@@ -1,7 +1,7 @@
 """FOFA 密钥验证插件。
 
 - 端点: GET https://fofa.info/api/v1/info/my?key=<api_key>（email 可选）
-- 鉴权: 查询参数 key；email 为可选项，实测上游不校验它（带上/不带、甚至给错的 email
+- 鉴权: 查询参数 key；email 为可选项，上游不校验它（带上/不带、甚至给错的 email
   都返回同样结果），因此仅在用户填写时才一并带上，以免无谓地外发邮箱。
 - 判定依据: 200 且 body.error == False 视为有效(取 fcoin / vip_level);
   200 且 body.error == True 视为无效(取 errmsg, 并净化其中可能回显的 email/key); 其余状态视为不确定。
@@ -44,7 +44,7 @@ def validate(data):
     if not data:
         return ["配置数据为空"]
     errors = []
-    # email 不再是必填：它只是本地留档，上游并不校验（实测带不带上结果一致）
+    # email 不再是必填：它只是本地留档，上游并不校验
     if not (data.get("api_key") or "").strip():
         errors.append("API Key 不能为空")
     return errors

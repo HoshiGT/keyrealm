@@ -1,6 +1,6 @@
 """
 MCP Server — SSE 传输，Bearer Token 鉴权
-端口：8765（自动降级 8766/8767）
+端口：8765（端口被占用时直接启动失败，不自动退让）
 """
 from __future__ import annotations
 
@@ -11,10 +11,9 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
-# MCP 这一串依赖（mcp / starlette / uvicorn，连带 pydantic…）实测常驻约 58MB RSS，
-# 但本模块**只有真正启动服务**时才需要它们，而 MCP 默认关闭、要用户手动开启
-# （见 main.py 的启动注释）。所以全部下沉到用到的函数里按需导入，顶层只留标准库
-# 与 backend 内部模块——否则「从头到尾没开过 MCP」也要一直背着这 58MB。
+# MCP 这一串依赖（mcp / starlette / uvicorn，连带 pydantic…）常驻约 58MB RSS，但本模块
+# **只有真正启动服务**时才需要它们，而 MCP 默认关闭、要用户手动开启（见 main.py）。
+# 故全部下沉到用到的函数里按需导入，顶层只留标准库与 backend 内部模块。
 if TYPE_CHECKING:  # 仅供类型标注；本文件有 `from __future__ import annotations`，运行期不求值
     import uvicorn
     from mcp.server.mcpserver import MCPServer
@@ -62,9 +61,9 @@ def _push_event(name: str, detail: dict):
 def _perm_denied(tool_name: str) -> Optional[dict]:
     """无权时返回**可读的错误载荷**；有权返回 ``None``。
 
-    **刻意不抛异常**（原来是 raise PermissionError）：MCP 客户端把工具异常呈现成一句
-    「Error executing tool xxx」，**原因被吞掉**——2026-10-09 实测：用户没给这两个工具开权限，
-    屏幕上只有那一句，完全不知道该去哪开。改成**返回结构化错误**，message 才能原样送到用户眼前。
+    **刻意不抛异常**：MCP 客户端把工具异常呈现成一句「Error executing tool xxx」，
+    **原因被吞掉**，用户只看到那句、不知道该去哪开权限。改成**返回结构化错误**，
+    message 才能原样送到用户眼前。
 
     返回类型与各工具的**声明保持一致**（dict 工具返回 dict、list 工具返回 ``[denied]``），
     免得触发 MCP 的输出校验。
@@ -163,8 +162,8 @@ def _build_mcp_app() -> MCPServer:
         denied = _perm_denied("vault_create_credential")
         if denied:
             return denied
-        # 不要在这里复制一份创建逻辑——否则「表单创建继承默认、MCP 创建不继承」这类
-        # 不一致会悄悄出现（历史上就是复制出来的两份，改一处漏一处）。
+        # 不要在这里复制一份创建逻辑——否则会出现「表单创建继承默认、MCP 创建不继承」
+        # 这类不一致（两份实现改一处漏一处）。
         from . import api as _api
         result = _api.create_credential(name, credential_type, data, group_id, auto_verify)
         if isinstance(result, dict) and result.get("error"):

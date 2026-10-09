@@ -33,7 +33,7 @@ _INSUFFICIENT_BALANCE_KEYWORDS = (
     "out of balance",
     "1113",  # 智谱错误码：余额不足
     # ── 阿里云百炼：官方错误码表 help.aliyun.com/zh/model-studio/error-code ──
-    # 400 Arrearage（实测原文）：{"type":"Arrearage","code":"Arrearage",
+    # 400 Arrearage（响应原文）：{"type":"Arrearage","code":"Arrearage",
     #   "message":"Access denied, please make sure your account is in good standing.
     #    For details, see: …/error-code#overdue-payment"}
     "arrearage",
@@ -179,7 +179,7 @@ def chat_completion(base_url: str, api_key: str, model: str, messages: list,
                     # 探测要的是「能不能用」，不是那句文本，所以带 `reached_model` 让探测能认。
                     #
                     # 带上响应体摘要 **只为了可诊断**：华为 MaaS 的官方文档说它**不**共用额度
-                    # （`max_tokens` 只限正文、思维链另算），与实测「没有可读内容」在文档层面
+                    # （``max_tokens`` 只限正文、思维链另算），与实际返回「没有可读内容」在文档层面
                     # 是矛盾的——光看文档解释不了，得有原始响应体才能定性。摘要会经
                     # `_redact_result` / 操作出口净化，不外泄密钥。
                     body = body_snippet(resp)
@@ -505,7 +505,7 @@ _PROBE_MODEL_EXCLUDE = (
 )
 # 一次探测最多尝试几个候选模型（模型不可用时换下一个）。
 # **别设太小**：OpenRouter 这类聚合站的模型表有几百个，靠名字猜出来的前几个未必真能对话
-# （实测它排在最前的是 `google/gemini-nano-banana-2.1` 这种图像生成模型、以及各种冷门/受限条目）。
+# （其清单头部常是 `google/gemini-nano-banana-2.1` 这类图像生成模型，以及各种冷门/受限条目）。
 # 只试 3 个就放弃，会让「余额未知时发一次对话探测」这个开关**长期静默失效**——
 # 用户勾了、验证也过了，界面上却什么都不显示，而且没有任何线索说明为什么。
 # 每次尝试只是一发 max_tokens=1 的请求，放宽到 10 个的代价可以接受。
@@ -565,17 +565,17 @@ def _probe_model_candidates(base_url: str, api_key: str, protocol: str, force: b
     先按厂商声明的输出模态排除**非文本输出**的模型（OpenRouter 的
     `architecture.output_modalities` 是官方字段；对纯图像/纯音频输出的模型有效）。
 
-    > **但别指望它解决 OpenRouter 那种问题**：2026-10-07 实测它那 465 个模型**全部**含
-    > `text` 输出——包括 `google/gemini-nano-banana-2.1`（`text+image->text+image`，是图像
-    > 生成却也能出文本）。真正把那个挡掉的是 `_PROBE_MODEL_EXCLUDE` 里的 `banana`。
+    > **但这挡不住 OpenRouter 那类问题**：其 465 个模型**全部**含 `text` 输出——包括
+    > `google/gemini-nano-banana-2.1`（`text+image->text+image`，是图像生成却也能出文本）。
+    > 真正把那一个挡掉的是 `_PROBE_MODEL_EXCLUDE` 里的 `banana`。
     > 也就是说「名字像便宜聊天模型、其实是生成模型」只能靠名字黑名单，modality 分不出来。
 
     字段不存在时（多数厂商只回 `data[].id`）退回老办法：按名字选「便宜款」，再兜底其它模型。
     """
     items = _model_items(protocol, base_url, api_key, force)
-    # **剔掉已关停的**：方舟 `/models` 是过期超集（实测 135 条里 83 条 `status=="Shutdown"`，
-    # 且按创建时间排、**首项就是关停款**）。不剔的话，「按名字像 lite/flash 挑」会优先挑到
-    # `doubao-lite-*` 这些早就关停的款，探测十次全 404（2026-10-09 实测就是这个现象）。
+    # **剔掉已关停的**：方舟 `/models` 是过期超集（其中 83/135 条为 `status=="Shutdown"`，
+    # 且按创建时间排序、**首项通常是关停款**）。不剔除的话，「按名字像 lite/flash 挑」会优先挑到
+    # `doubao-lite-*` 这类早已关停的款，探测多次全部 404。
     items = [i for i in items if str(i.get("status") or "").strip().lower() != "shutdown"]
     if items and any(isinstance(i.get("architecture"), dict) for i in items):
         pool = [i for i in items
@@ -661,7 +661,7 @@ def quota_chat_probe(base_url: str, api_key: str, protocol: str = "openai",
 
 # ── 校验探针 ─────────────────────────────────────────────
 
-# 上游偶发的 5xx：实测智谱 Anthropic 端点在免费模型上约 1/3 概率返回
+# 上游偶发的 5xx：智谱 Anthropic 端点在免费模型上约 1/3 概率返回
 # 500 Internal Network Failure，同一请求重试即成功——不重试会把好 key 误判为失败。
 # 只重试 5xx：429（限流）与 4xx 重试没有意义，反而加重对端负担。
 _TRANSIENT_STATUS = (500, 502, 503, 504)

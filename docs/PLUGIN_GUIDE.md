@@ -189,7 +189,7 @@ plugins/
 |------|------|
 | `credential_type` | **插件身份，全局唯一**。它是数据库插件表的 UNIQUE 键、模块缓存键、凭据与插件的关联键。同类插件约定前缀：`llm_<厂商>`、`api_<服务>` |
 | `fields[].type` | `text` / `url` / `password` / `textarea` / `select`（配 `options`）/ `number` / `checkbox` / `model`（**可下拉可自由输入**的模型名，候选来自 `list_models`，取不到也能手打） |
-| `fields[].options` | 仅 `select`。两种写法都行：纯字符串数组 `["openai","anthropic"]`（值与显示都用它）；或对象数组 `[{"value":"chatgpt","label":"ChatGPT 登录态"}]`（**显示 label、存 value**）。前端统一归一（`utils/format.normalizeOptions`），需要给用户看中文时用对象写法，别把中文当值存库 |
+| `fields[].options` | 仅 `select`。两种写法都行：纯字符串数组 `["openai","anthropic"]`（值与显示都用它）；或对象数组 `[{"value":"chatgpt","label":"ChatGPT 登录态"}]`（**显示 label、存 value**）。前端统一归一（`utils/format.normalizeOptions`），需要给用户看中文时用对象写法，**不要把中文当作值存库** |
 | `fields[].show_if` | 可选。**条件显隐**：`{"另一个字段key": 值 或 [值,…]}`，只有那个字段的当前值命中时才渲染本字段。用于「同厂商不同模式」——例如 `openai` 的 `auth_mode` 选 `api_key` 时只显示 API Key 那组、选 `chatgpt` 时只显示登录态那组。前端按当前表单值实时求值（`utils/format.visibleFields`），**保存时未命中字段的值不提交**（免得切模式后另一组的密钥还留在库里）。 |
 | `fields[].preset` | 可选，是否允许作为「类别/插件默认设置」被预设。**默认允许**（只要非敏感）；填 `false` 可排除该字段。**敏感字段永远不可预设**（默认值表是明文列） |
 | `fields[].hint` | 可选，字段下方的一行灰字说明。用于解释开关或高级项（如 LLM 的「余额未知时发一次对话探测」），前端 `CredentialForm.vue` 渲染为 `.field-hint` |
@@ -211,21 +211,21 @@ plugins/
 > 1. **方形单色标优先**——横向 wordmark（如 `Dify`、`OKX` 的官方字标）缩到 16px 会糊成一团；
 > 2. **必须能独立渲染**——不要在 SVG 里用 `currentColor`：图标是以 `<img src="data:image/svg+xml;base64,…">`
 >    渲染的，没有 CSS 继承，`currentColor` 只会解析成黑色。（颜色写在 `<style>` / `class` 里**本身没问题**，
->    `icon_ink` 会连 CSS 声明一起解析；只是别指望 `<img>` 能继承页面样式。）
-> 3. **不留烤死的白底 / 白边**——深色主题下白底会变成一块白砖（`wecom` 曾把白底烤进位图，100% 不透明），
->    白边则是低分辨率圆角砖硬缩放留下的晕（`feishu` 曾是 48px）。若源图只有「彩色图形 + 白底」，
->    不能直接按亮度设 alpha（那会把图形内部也叫成半透明、整块发灰），要按合成模型
->    `observed = ink·a + 255(1−a)` **解出 a 再把墨色反解回来**（现成实现见 `tmp/logosrc/cutout.py`；
+>    `icon_ink` 会连 CSS 声明一起解析；`<img>` 不会继承页面样式。）
+> 3. **不留烤死的白底 / 白边**——深色主题下白底会变成一块白砖（白底烤进位图即 100% 不透明，
+>    如 `wecom`），白边则是低分辨率圆角砖硬缩放留下的晕（如 `feishu`，源图仅 48px）。若源图只有
+>    「彩色图形 + 白底」，不能直接按亮度设 alpha（那会把图形内部也判成半透明、整块发灰），要按合成
+>    模型 `observed = ink·a + 255(1−a)` **解出 a 再把墨色反解回来**（现成实现见 `tmp/logosrc/cutout.py`；
 >    图标本身的深色可见度另由 `backend/icon_ink.py` 判定）。
-> 4. **位图长边压在 128px 以内**——渲染位最大 22px，640×640 纯属浪费（曾占冷启动分析的大头，
->    20 张 640² 缩到 128² 后总耗时 232 ms → 66 ms）。位图一律缩到 **128×128**（LANCZOS，保 alpha）；
+> 4. **位图长边压在 128px 以内**——渲染位最大 22px，640×640 纯属浪费（20 张 640² 缩到 128² 后，
+>    冷启动分析总耗时从 232 ms 降至 66 ms）。位图一律缩到 **128×128**（LANCZOS，保 alpha）；
 >    例外是原生就小的图（如 `qq_bot` 官方 favicon 只有 62×62 且无更高清源，原样保留，不做假放大）。
 
 ### 字段输入约定（新增插件必守）
 
 **凭据输入一律尽量单行**：一个字段一个值，不要求用户「粘贴整份配置」。
 
-- **能拆就拆**：邮箱 / 私钥 / 项目 ID 各占一格，别用一个大 `textarea` 收一坨。
+- **能拆就拆**：邮箱 / 私钥 / 项目 ID 各占一格，不要用一个大 `textarea` 收一坨。
   硬约束来自前端渲染优先级——`CredentialForm.vue` 按 `text||url` → `password||sensitive` → `textarea`
   顺序判定，**`sensitive` 压过 `textarea`**：声明成 `textarea` 的敏感字段实际渲染的是**单行密码框**，
   「多行」与「加密存储」不可兼得。所以声明要与渲染一致：
@@ -321,8 +321,8 @@ def proxy():
 | 其它可读字段 | 如 `organization` / `domain_count` / `account_id` | `组织 Xxx` / `域名数 1` / `账号 ID …` |
 
 - **LLM 类**：附加信息只展示**余额**；无余额概念的 plan 账号展示**使用率**。余额由**各厂商自己的 `plugin.py`** 按各自的余额端点 best-effort 查询（金额合理性闸见下条）——目前 DeepSeek / Moonshot 有余额接口，OpenRouter 用 `/credits` 计算余额与使用率；OpenAI 的 ChatGPT 登录态模式经实验性端点 `GET /backend-api/wham/usage` 读 5 小时窗的 `used_percent` 作为 `usage_rate`（付费套餐才查，取不到就不显示）；Anthropic / Gemini / 智谱等多数无公开余额接口，附加信息为空。
-- **金额合理性闸**：one-api / new-api 类中转站在「不限额」时会把硬限额（`hard_limit_usd`）填成哨兵值（New API 官方写死 **`100000000`（1e8）**，且只在**令牌维度**出现——`token.UnlimitedQuota` 分支），拿它去减消耗就会得出 `99999900` 这种假余额。所有要展示的金额都必须先过 `llm_common.plausible_amount()`（有限数值且绝对值 < `AMOUNT_LIMIT = 1e7`），不通过就**宁可不显示**。新增带余额的厂商/中转插件时务必一并加这道闸。
-- **中转站**：`openai_compatible`（通用 OpenAI 兼容）与 `newapi`（New API 中转站专用）都走 one-api 兼容的 `/dashboard/billing/subscription` + `/dashboard/billing/usage`。New API 的 `hard_limit_usd` 是**令牌总额度（剩余 + 已用）**，`total_usage` 单位是**美分**，故 `余额 = hard_limit_usd − total_usage / 100`（依据官方 `controller/billing.go` / `channel-billing.go`）；命中哨兵值则按「不限额度」处理，改为展示 `套餐 不限额度` 而非数字。**两处官方源码确认的坑**：(a) `total_usage` 是**终身累计**、非本月（new-api 的 `GetUsage` **忽略** `start_date`/`end_date`，那是 OpenAI 原生接口的行为）；(b) `*_USD` 里的数字**不一定是美元**——官方按站点 `QuotaDisplayType` 三分支填 `USD`/`CNY`/`TOKENS`，故 `newapi` 在「`used > total`」（两字段不同单位的信号）时**不显示余额**，宁缺毋滥。
+- **金额合理性闸**：one-api / new-api 类中转站在「不限额」时会把硬限额（`hard_limit_usd`）填成哨兵值（New API 官方写死 **`100000000`（1e8）**，且只在**令牌维度**出现——`token.UnlimitedQuota` 分支），拿它去减消耗就会得出 `99999900` 这种假余额。所有要展示的金额都必须先过 `llm_common.plausible_amount()`（有限数值且绝对值 < `AMOUNT_LIMIT = 1e7`），不通过**则不展示该金额**。新增带余额的厂商/中转插件时需一并加这道闸。
+- **中转站**：`openai_compatible`（通用 OpenAI 兼容）与 `newapi`（New API 中转站专用）都走 one-api 兼容的 `/dashboard/billing/subscription` + `/dashboard/billing/usage`。New API 的 `hard_limit_usd` 是**令牌总额度（剩余 + 已用）**，`total_usage` 单位是**美分**，故 `余额 = hard_limit_usd − total_usage / 100`（依据官方 `controller/billing.go` / `channel-billing.go`）；命中哨兵值则按「不限额度」处理，改为展示 `套餐 不限额度` 而非数字。**两处官方源码确认的字段差异**：(a) `total_usage` 是**终身累计**、非本月（new-api 的 `GetUsage` **忽略** `start_date`/`end_date`，那是 OpenAI 原生接口的行为）；(b) `*_USD` 里的数字**不一定是美元**——官方按站点 `QuotaDisplayType` 三分支填 `USD`/`CNY`/`TOKENS`，故 `newapi` 在「`used > total`」（两字段不同单位的信号）时**不显示余额**，宁缺毋滥。
 - **多条 = 多行**：前端把 `account_info` 摊成**每个字段一行**（不再「最多 2 条、用 ` · ` 拼一行」）。
   所以**每多回一个键，列表里就多一行**——只想要一行的信息，就只回一个键。
 - **值是对象/数组的键前端会跳过**（渲染不出来）。想把数组里的东西展示出来，请在插件里**先摊平成标量**
@@ -364,13 +364,12 @@ def timeout(fallback: float = TIMEOUT) -> float:
 
 **单次请求可以覆盖全局超时**（`make_client(request_timeout=…)`、
 `probe_openai_chat(..., timeout=…)`）：用于「一次 `verify` 里要连试多个候选、每个只给短超时」
-的厂商——例如 NVIDIA 的模型清单是过期超集，押注单个模型名必烂，于是按候选逐个试
+的厂商——例如 NVIDIA 的模型清单是过期超集，单个模型名不可靠，于是按候选逐个试
 （`plugins/llm/nvidia/plugin.py` 的 `_candidates` + `PROBE_TIMEOUT`）。候选名单**运行时候取**
 （`llm_protocols.probe_model_candidates`，24h 缓存），**不再内置短名单**。
 
 > ⚠️ 自己循环试候选时，**每个候选的超时（`httpx.TimeoutException`）与网络异常必须在插件内
-> `try` 掉**。让它冒泡到 `@guarded` 会直接结束整次 `verify`——第一个候选挂死就白费了后面的候选，
-> 表现和改之前一模一样。
+> `try` 掉**。让它冒泡到 `@guarded` 会直接结束整次 `verify`——第一个候选挂死就白费了后面的候选。
 
 ---
 
@@ -424,7 +423,7 @@ def quota_probe(data: dict):
 ```
 
 实例：`plugins/llm/wenxin/plugin.py`——文心要用 `API_KEY|SECRET_KEY` 换 `access_token`、
-聊天端点还带模型后缀，通用实现拼不出来；且它有个坑：**免费档模型（ernie-speed / lite / tiny）
+聊天端点还带模型后缀，通用实现拼不出来；另有一处特殊行为：**免费档模型（ernie-speed / lite / tiny）
 不计费，欠费时照样能对话**，所以自动选型只挑付费档（从端点表现推，见 `_PAID_MODELS`）。
 
 另一个实例：`plugins/llm/nvidia/plugin.py`——NVIDIA 没有余额接口，且**模型清单是过期超集**
@@ -441,10 +440,9 @@ def quota_probe(data: dict):
 | `quota_unknown()` → `{"account_info": {"chat_probe": "异常"}}` | **试过但没跑通**（模型都不可用 / 鉴权 / 限流 / 网络）→ 补一项「实测 异常」 |
 
 > **三种结局都要说出来。** 只回「可用」的话，探测失败时「附加信息」列什么都**不显示**——
-> 用户勾了开关却看不到任何反馈，也分不清「没开探测」和「探测失败」。这正是
-> 「余额未知时发一次对话探测」这个开关曾经**静默失效**的原因（MiniMax / OpenRouter /
-> 华为云 MaaS / 商汤 / 智谱 / 中转站等聚合站上尤其明显：它们的模型表很大，
-> 靠名字猜出来的前几个候选未必真能对话，试满 3 个就放弃）。
+> 用户勾了开关却看不到任何反馈，也分不清「没开探测」和「探测失败」。聚合站
+> （MiniMax / OpenRouter / 华为云 MaaS / 商汤 / 智谱 / 中转站）上尤其明显：它们的模型表很大，
+> 靠名字猜出的前几个候选未必真能对话，试满 3 个就放弃。
 >
 > 用「**异常**」而不是「未通过」：凭据的**状态本来就是「有效」**，同屏再出现「未通过」
 > 自相矛盾（看着像凭据有问题）。「异常」说的是**探测这一步**没跑通，不涉及凭据本身。
@@ -459,14 +457,14 @@ def quota_probe(data: dict):
 - **模型选择**：凭据里指定的模型 > 自动挑便宜的（优先名字含 `flash`/`lite`/`mini`/`nano`/
   `haiku`/`turbo` 等，并排除 `embed`/`rerank`/`tts`/图像类、以及 `banana`（Google 的
   nano-banana 图像生成系列，名字里带 `nano` 会被误当成便宜聊天模型）；候选最多试
-  **10** 个（曾只有 3 个，在 OpenRouter 这类几百个模型的聚合站上极易全灭），模型不存在就换下一个。
+  **10** 个——在 OpenRouter 这类几百个模型的聚合站上候选太少极易全灭；模型不存在就换下一个。
 - **「成功」的判据是「请求到达模型并正常返回」，不是「拿到了文本」**：`max_tokens=1` 的最小探测
   打给**推理型模型**时，那 1 个 token 会被思维链吃干净，`choices[0].message.content` 是空串。
   官方文档直接佐证——商汤写的是「**Reasoning content and output share the `max_tokens` quota**」，
   百炼与智谱的思考内容也都走 `reasoning_content`、且思考 token **先于**正文产生。
   所以 `chat_completion` 在「**信封完整**（`choices[0].message` 在）但文本为空」时返回
   `reached_model: True`，探测据此判**可用**——请求已经到过计费环节并成功返回，这就是确证。
-  （不这么判的话，这类账号会永远显示「实测 异常」，而它其实好得很。）
+  （否则这类账号会永远显示「实测 异常」，尽管其实际可用。）
 - **欠费判定**走 `is_insufficient_balance()`：**先排除限流**，再认关键词/错误码。
   > 先排除的原因是**同一个词在不同厂商含义相反**：百炼把限流码写成 `Throttling.AllocationQuota`，
   > 而码里含 `insufficient_quota`；OpenAI 的 `insufficient_quota` 却是**真欠费**。
@@ -475,28 +473,28 @@ def quota_probe(data: dict):
   > 各家已核对的欠费码：百炼 `Arrearage` / `isv.OUT_OF_SERVICE` / `AllocationQuota.FreeTierOnly` /
   > `PrepaidBillOverdue` / `PostpaidBillOverdue` / `BudgetLimitExceeded`；智谱 `1113`；
   > MiniMax `1008`；商汤**没有**专门的余额码（额度耗尽与限流共用 `429 quota_exceeded_error`，
-  > 官方自己都不区分，所以我们只能报「异常」而不是猜「欠费」）。
+  > 官方自己都不区分，框架只能报「异常」而不是猜「欠费」）。
 - **MiniMax 的 `base_resp`**：它的 200 里带 `base_resp`（官方：成功时 `status_code == 0`），
   **业务错误可能藏在 200 里**，只看 HTTP 状态码会漏判成成功；而它的 4xx 又是**另一套**信封
   `{"type":"error","error":{…}}`、数字码塞在 message 文本里（如 `(1004)`）。两种形状都要认。
-  坑：`1039 Token 限制` 的 solution 逐字写着「请调整 `max_tokens`」——任何拿 `limit`/`token`/`quota`
+  注意：`1039 Token 限制` 的 solution 逐字写着「请调整 `max_tokens`」——任何拿 `limit`/`token`/`quota`
   做欠费关键字的写法都会把它误报成欠费。
 - **开关与模型从凭据数据里读**（`data["probe_chat"]` / `data["probe_model"]`），不经环境变量——
   数据本来就在插件手里。插件侧没有 `quota_probe` 属性时后端直接跳过，故**接入是可选的**。
 - **仅支持流式的模型**：百炼有一批开源思考模型用非流式调用会直接回
   `parameter.enable_thinking only support stream call`。探测遇到它会**改用流式再试一次**
-  （`_STREAM_ONLY_HINT`），否则这批模型的探测永远是「异常」——而它们其实好得很。
+  （`_STREAM_ONLY_HINT`），否则这批模型的探测会一直停在「异常」，尽管它们实际可用。
 - **`token_param`**：官方已把 `max_tokens` 标 deprecated、要求改用 `max_completion_tokens` 的厂商，
   由其插件显式传入——百炼、MiniMax、OpenAI（api_key 模式）、Moonshot、`openai_compatible` 都属于
   这一类。`chat_completion` / `chat_completion_stream` / `make_quota_probe` / `quota_chat_probe` /
   `probe_openai_chat` 都带这个参数，**默认仍是 `max_tokens`**（其它厂商照旧）。
   anthropic 协议必须用 `max_tokens`、gemini 走 `maxOutputTokens`，都不受影响；
-  华为明确「`max_tokens` 与 `max_completion_tokens` 不可同时设置」，所以我们**只发一个**。
+  华为明确「`max_tokens` 与 `max_completion_tokens` 不可同时设置」，故只发一个。
 
 **「简单对话」的两个显示约定**（`chat_completion_stream`）：
 
 - **纯思考输出显示思维链**：模型只产出了思维链、正文为空时（`max_tokens` 偏小会被思考吃光），
-  把思维链当正文返回，不留空白气泡。**字段名各家不同**，`_reasoning_of()` 里逐个核对过：
+  把思维链当正文返回，不留空白气泡。**字段名各家不同**，`_reasoning_of()` 逐个适配：
   百炼 / 智谱 / 华为 MaaS / MiniMax 是 `delta.reasoning_content`；商汤自家 `sensenova-*`
   是 `delta.reasoning`，而它网关里**转挂**的 deepseek/glm 仍是 `reasoning_content`
   —— 同一个网关内两种写法并存，两个都要取；Anthropic 走 `thinking_delta` / `delta.thinking`。
@@ -509,10 +507,10 @@ def quota_probe(data: dict):
 
 > **通用原则：同一个 HTTP 状态码可能含义完全不同，必须读响应体再下结论。**
 > 写 `if status in (400, 401, 403): 判无效` 之前，先确认该厂商会不会用这些码表达**非凭据问题**。
-> 两个已踩的坑：Gemini 的 `400` 既可能是 `API_KEY_INVALID`（真失效），也可能是
+> 两个已知反例：Gemini 的 `400` 既可能是 `API_KEY_INVALID`（真失效），也可能是
 > `FAILED_PRECONDITION`「出口地区不支持」（key 没问题）；NVIDIA 的 `/models` **根本不鉴权**，
 > 拿它验证会「任何 key 都有效」。判定时读 `error.status` / `details[].reason` / 错误文案，
-> 拿不准就返回 `error`（不是 `invalid`）——**假红比假绿更坑人**。
+> 拿不准就返回 `error`（不是 `invalid`）——**假红（误报失效）比假绿更危险**。
 
 ---
 
@@ -521,8 +519,7 @@ def quota_probe(data: dict):
 「用哪个代理」是**每个凭据的通用设置**，默认所有插件都会出现该选项——判据是插件**默认走代理**
 （对应 `backend/plugin_manager.plugin_uses_proxy()`，默认 `True`）。
 
-确实**完全不走网络**的插件在模块级显式声明即可把它从界面上隐去（目前仓库里已没有这类插件——
-`im_wechat_ilink` 早先不发请求时标过 `False`，接入只读探测后已恢复默认）：
+确实**完全不走网络**的插件在模块级显式声明即可把它从界面上隐去（目前仓库里已没有这类插件）：
 
 ```python
 USES_PROXY = False   # 本插件无出网请求，代理选项没有意义
@@ -531,9 +528,9 @@ USES_PROXY = False   # 本插件无出网请求，代理选项没有意义
 > **`smtplib` / `imaplib` 类插件不适用这条**：它们不能走 HTTP 代理，但可以走 **SOCKS / HTTP CONNECT
 > 隧道**，所以照样支持「使用代理」。做法见 §2.6。
 
-> 早期是用「模块里有没有 `make_client`」判定的——那样会**漏掉间接发请求的插件**：
-> 例如 NVIDIA NIM 自己没 `import make_client`，而是经 `llm_protocols` 的 `probe_openai_chat`
-> 发请求，于是被误判为「不走代理」而隐藏了选项。现改为「默认 True + 显式排除」。
+> 判据不能是「模块里有没有 `make_client`」：那会**漏掉间接发请求的插件**——例如 NVIDIA NIM 自己
+> 没有 `import make_client`，而是经 `llm_protocols` 的 `probe_openai_chat` 发请求，于是被误判为
+> 「不走代理」而隐藏了选项。故取「默认 True + 显式排除」。
 
 ---
 
@@ -576,17 +573,17 @@ class TunneledSMTP_SSL(smtplib.SMTP_SSL):  # SMTPS
 **每个子插件自带完整实现**，只从 `backend/plugin_sdk.py` 与类别模块引用工具；服务之间允许重复代码
 （刻意为之）——但**通用工具不再重复**，一律取自 `backend/plugin_sdk.py`。
 
-**模块 docstring 里要带官方参考链接** —— 写清你实现端点与判定阈值时依据的**官方文档页**，
+**模块 docstring 里要带官方参考链接** —— 写清实现端点与判定阈值时依据的**官方文档页**，
 一行一个：
 
     参考文档：https://docs.example.com/api-reference
 
-- **可以没有，不能乱写**：确认不了官方文档地址的，这一行**就不写**，别凭印象编 URL；
+- **可以没有，不能乱写**：确认不了官方文档地址的，这一行**就不写**，不要凭印象编 URL；
   也**只写官方**页面，不写 CSDN / 掘金 / 博客 / 第三方 SDK 仓库这类转述页。
 - 官方**文档页**优先于官网首页。
 - **位置不限，在模块 docstring 里即可**：惯用「紧跟首段摘要之后」或「放在 docstring 末尾」，
-  两种现网都有，不必强求统一；但别把它混进正文注释里（那样就不成其为「模块说明」了）。
-- 依据了多个官方页（如「鉴权」与「错误码」各一页）就写多行 `参考文档：`，但别为凑数堆链接。
+  两种现网都有，不必强求统一；但不要把它混进正文注释里（那样就不成其为「模块说明」了）。
+- 依据了多个官方页（如「鉴权」与「错误码」各一页）就写多行 `参考文档：`，但不要为凑数堆链接。
 - **写进去之前要实际打开确认过**（能访问、内容确实是该服务的文档）；被挡或 404 的一律不写。
 - **只给开发者看，不上界面**：这行只留在 `plugin.py` 的 docstring（代码注释）里。
   不许写进 `manifest.json` 的 `description` 或任何字段的 label/hint/placeholder，不许出现在
@@ -642,7 +639,7 @@ def get_display_summary(data):
   **厂商/服务专属逻辑**（端点、字段、余额解析、签名等）写在各子插件自己的 `plugin.py` 里，
   服务之间允许重复（刻意为之）。加载子插件时框架会把插件目录与类别目录注入 `sys.path`。
 - **端点、字段、判定、余额、签名等具体逻辑写在各子插件自己的 `plugin.py` 里**，
-  **新增服务插件无需修改上层代码、`backend/plugin_sdk.py` 或任何类别模块**——照抄同级子插件即可。
+  **新增服务插件无需修改上层代码、`backend/plugin_sdk.py` 或任何类别模块**——参照同级子插件即可。
 - `verify` 用 `guarded(...)` 包住，保证不抛异常；异常只暴露类型名（有些服务密钥在
   URL/query 中，透出异常文本会把密钥写进凭据记录）。
 - `verify(data)` 的返回值做鸭子类型处理，接受：
@@ -671,9 +668,9 @@ def get_display_summary(data):
 **共用一份 24h 缓存**（键 = 协议 + Base URL + 密钥指纹；文件 `plugins/.model_cache.json`，打包排除）。
 自动路径（探测挑候选）读缓存，**只有用户手动刷新才重新联网**。
 
-> **铁律：不要把模型名写死在代码里。** 模型名与可用性随**账号 / 套餐 / 地域 / 客户端版本**快速变化
+> **规则：不要把模型名写死在代码里。** 模型名与可用性随**账号 / 套餐 / 地域 / 客户端版本**快速变化
 > （实例：codex 目录端点按 `?client_version=` 发清单，`gpt-6.1-sol` 要到 **0.159.0** 才出现——
-> 本机装的旧版 codex 二进制里连这个串都没有）。默认模型一律**运行时取**：
+> 旧版 codex 二进制里没有这个串）。默认模型一律**运行时取**：
 > 用户指定 → 运行时清单首项 → 拿不到就**报错让用户手选**，绝不退回内置名
 > （`llm_protocols.resolve_chat_model` 就是这条约定）。同理，`actions()` 里 chat 操作的
 > `model` 字段**留空 `""`**（前端打开时会自动填运行时清单首项）。
@@ -688,7 +685,7 @@ def get_display_summary(data):
 | `fields` | `form` / `list` | 输入项：`[{key,label,type(text/password/select/textarea/number),default,placeholder,options,required}]`。**`list` 也能带 fields**：点「拉取/刷新」时把表单值作为 `params` 传进 `run_action`。**`required: true` 会在操作表单里渲染红色星号并在提交前校验**（空着点提交会被拦下，`form` 与 `list` 两处同规则） |
 | `submit` | `form` / `list` | 提交/刷新按钮文案（默认「运行」） |
 | `write` | 全部 | 可选布尔，声明为**会改动远端数据**。前端在**提交前**弹二次确认（只列非敏感字段值） |
-| `model` | `chat` | 模型输入框的**初始值**（用户可改）。**推荐留空 `""`**——前端打开时自动填运行时清单首项（见上「铁律」），**别在这里写死模型名** |
+| `model` | `chat` | 模型输入框的**初始值**（用户可改）。**推荐留空 `""`**——前端打开时自动填运行时清单首项（见上「规则」），**不要在这里写死模型名** |
 | `columns` | `list` | `[{key,label,width?,mono?(等宽),type?("text"/"number"/"tag")}]` |
 | `row_actions` | `list` | 每行的按钮，见 §3.1.2 |
 | `empty_text` | `list` | 空列表文案 |
@@ -700,7 +697,7 @@ def get_display_summary(data):
 `run_action` 的返回：
 
 - 普通：`{"ok": True, "output": "多行文本"}` 或 `{"ok": False, "error": "人话原因"}`
-  —— **失败时 `error` 会原样展示给用户**，别写「执行失败」这种没信息量的。
+  —— **失败时 `error` 会原样展示给用户**，不要写「执行失败」这种没信息量的。
 - **列表**：`{"ok": True, "rows": [{"<列key>": 值, ...}], "columns"?, "row_actions"?, "empty_text"?, "total"?, "has_more"?}`
   —— `rows` 里每项的键就是 `columns` 的 `key`；后四个可以在返回里**覆盖声明**（做动态列）。
 
@@ -758,7 +755,7 @@ return {"ok": True, "output": f"已保存到 {path}"}
 ```
 
 - `download_to_file(response, path) -> (ok, message)`：**非 200 直接失败、不碰磁盘**；先写 `.part` 再 `os.replace` 原子替换，
-  避免留下「名字正常、内容截断」的半成品。**不要去插件里自己 open/write。**
+  避免留下「名字正常、内容截断」的半成品。**不要在插件里自己 open/write。**
 - **插件绝不要弹任何对话框**：流式路径上插件跑在新建线程里，跨线程弹窗会卡界面；而且对话框属于界面层的事。
 
 #### 3.1.4 `capabilities`：权限探测（隐藏用不了的操作）
@@ -767,10 +764,10 @@ return {"ok": True, "output": f"已保存到 {path}"}
 def capabilities(data: dict) -> dict:
     """{"available": ["list_buckets", "list_instances"], "note": "具备云主机与对象存储权限"}"""
 ```
-- 前端**只在点「操作」时调一次**（按凭据缓存，不落 localStorage），所以这里可以联网——但要**串行、每个都 try、给足超时**，别让用户等太久。
+- 前端**只在点「操作」时调一次**（按凭据缓存，不落 localStorage），所以这里可以联网——但要**串行、每个都 try、给足超时**，不要让用户等太久。
 - `available` 列出**当前凭据真正可用**的操作 id：**没权限的操作会被隐藏**；`available == []` 时前端把 `note` 展示给用户。
 - **探测失败必须 fail-open**：拿不准时**抛异常**（框架会兜住并当作「未知 → 全部可用」）或返回 `{"available": None}`。
-  **千万不要为了省事返回空列表** —— 那等于一次网络抖动就把用户能用的功能全藏了。
+  **不要为省事返回空列表** —— 那等于一次网络抖动就把用户能用的功能全部隐藏。
 - 三种状态在前端是可区分的：**没有操作** / **有操作但没权限（显示 note）** / **探测失败（全部展示）**。
 
 #### 3.1.5 可复用的辅助（`backend/plugin_sdk.py` 提供）
@@ -778,7 +775,7 @@ def capabilities(data: dict) -> dict:
 | 辅助 | 用途 |
 |---|---|
 | `VerifyResult` / `guarded()` | 结果类型（`status`/`message`/`account_info`）；`guarded` 兜底未预期异常 → error 结果 |
-| `log()` / `log_debug()` | 写应用统一日志（别用 `print`，打包成 GUI 后 stdio 没了、告警会静默丢失） |
+| `log()` / `log_debug()` | 写应用统一日志（不要用 `print`，打包成 GUI 后 stdio 已关闭，告警会静默丢失） |
 | `proxy()` / `make_client()` | 本次生效的代理；建 httpx 客户端（自动带上代理与超时） |
 | `TIMEOUT` / `timeout()` | 超时的默认值与实际生效值（读 `VAULT_TIMEOUT`，见 §2.3） |
 | `safe_json()` / `body_snippet()` | 响应体解析为 dict；正文压成一行并截断，用于把上游报错带进提示 |
@@ -790,7 +787,7 @@ def capabilities(data: dict) -> dict:
 > `status_detail`，而框架在 `plugin_manager` 出口做的净化拦不住这种自己拼的片段。
 > 空值返回空串；过短的值只保留首 2 位。
 
-#### 3.1.6 一个可以照抄的最小骨架
+#### 3.1.6 最小骨架模板
 
 ```python
 def actions(data: dict) -> list[dict]:
@@ -898,7 +895,7 @@ def on_progress(current: int, total: int, text: str = "") -> None:
 - **`on_progress` 必须是关键字参数且带默认值**（`on_progress=None`）。框架用
   `inspect.signature` 判断插件认不认这个名字，**不认就不传**——所以只写
   `stream_action(a, p, d, on_delta)` 的老插件照常工作，不会被新参数打断。
-- **节流**：别在 `iter_bytes` 的每个 chunk 上回调（大文件会推出几万条事件）。
+- **节流**：不要在 `iter_bytes` 的每个 chunk 上回调（大文件会推出几万条事件）。
   按每 ~256KB 或每 0.2 秒报一次即可。
 - 报什么：单对象下载按**字节**报（`current=已写, total=Content-Length`）；多对象打包按
   **对象个数**报（跨对象累加字节不直观）。
@@ -918,17 +915,17 @@ def stream_action(action_id, params, data, on_delta, on_progress=None, should_ca
 
 - 取消是**协作式**的：框架只置一个标志位（`backend/tasks.py`），真正停下靠插件在循环里查。
   做不到立刻杀线程，但会在下一个检查点（每个 chunk / 每个对象）停下。
-- **插件只负责干净地停下并返回 ok=False**，不要去猜「取消还是失败」——框架持有取消标志，
+- **插件只负责干净地停下并返回 ok=False**，不要猜「取消还是失败」——框架持有取消标志，
   会据实把任务标成「已取消」（刚好在取消前跑完的仍算成功）。
-- 一定要**清掉 `.part` 之类的临时文件**，别留下半成品。
+- 必须**清掉 `.part` 之类的临时文件**，不要留下半成品。
 
 ---
 
 ## 4. 编写一个新插件（以新增 OpenAI 兼容服务为例）
 
 1. 新建目录 `plugins/llm/my_vendor/`。
-2. 写 `manifest.json`（`credential_type` 取 `llm_my_vendor`，字段照抄上文结构）。
-3. 写 `plugin.py` —— **照抄同类别下任一已有子插件**（如 `plugins/llm/openai_compatible/plugin.py`），
+2. 写 `manifest.json`（`credential_type` 取 `llm_my_vendor`，字段参照上文结构）。
+3. 写 `plugin.py` —— **参照同类别下任一已有子插件**（如 `plugins/llm/openai_compatible/plugin.py`），
    端点、判定、余额、`validate`、`get_display_summary` 全部自带，只从 `backend/plugin_sdk.py`
    引用通用工具（类别特有工具则从 `llm_common` 取）：
 
@@ -976,7 +973,7 @@ sensenova（商汤日日新，OpenAI 兼容）、codebuddy（腾讯 CodeBuddy �
 
 > **同一厂商的多种接口格式不拆分插件**，而是合成一个。用不用「格式」字段取决于**key 是否按协议分权**：
 >
-> - **不分权就不设字段**——`glm`（智谱）即如此：2026-10-05 实测同一把 key 在 OpenAI 端点与
+> - **不分权就不设字段**——`glm`（智谱）即如此：同一把 key 在 OpenAI 端点与
 >   Anthropic 端点都能通过（智谱把 `claude-sonnet-4` 之类模型名也做了映射），所以插件只有一条
 >   路径（OpenAI 兼容端点），既不设开关、也不对旧地址做特判。普通平台用默认地址，Coding Plan
 >   在 Base URL 里填 `/api/coding/paas/v4`。
@@ -990,9 +987,9 @@ sensenova（商汤日日新，OpenAI 兼容）、codebuddy（腾讯 CodeBuddy �
 **api/ 类别（8 个）**：firecrawl（网页抓取）、tavily（搜索）、metaso（秘塔 AI 搜索）、fofa（FOFA 网络空间测绘）、
 coze（字节扣子）、dify（Dify 应用 / 工作流）、google_api_credentials（Google API 凭据，一对 key/secret）、
 gateway（短信网关 / 接码服务商，
-字段按各厂商叫法通用化——`app_key` / `app_secret` 装不下的一律塞 `extra_params`；实测有可用只读校验接口的
-8 家：Engagelab、Infobip、CM、laaffic、nxcloud、buka、Ultramsg——Infobip 印度 200 有效、香港那把在该
-入口 403「无权限」故判 `error`；Ultramsg 域名对任意实例/口令都返回同一段文案，只能报「未验证」；其余 8 家
+字段按各厂商叫法通用化——`app_key` / `app_secret` 装不下的一律塞 `extra_params`；有可用只读校验接口的
+厂商：Engagelab、Infobip、CM、laaffic、nxcloud、buka、Ultramsg——Infobip 印度节点 200 有效、香港节点在该
+入口 403「无权限」故判 `error`；Ultramsg 域名对任意实例 / 口令都返回同一段文案，只能报「未验证」；其余厂商
 没有只读接口，一律如实报「未验证」）。
 
 **dns/ 类别（4 个）**：dnspod、duckdns、godaddy、cloudflare（从 cloud/ 移入：它就是域名解析类）。
@@ -1011,8 +1008,8 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
 项目 ID 只喂额外探测），**不接收整段 JSON**——见 §2「字段输入约定」。
 `google_sa.py` 是协议级共享模块：gcp 与 firebase 都要把邮箱 + 私钥签成 RS256 JWT 换 access_token，
 这步两家完全一致，故单独成模块（判定「什么状态码算有效」仍在各自 plugin.py 内）。
-2026-10-06 用交付目录里的 adminsdk 密钥实测：私钥在单行框里被压掉换行后照样换得到 token；
-`private_key_id` 缺失不影响；只填 `client_email` + `private_key` 也能通过。
+私钥在单行框里被压掉换行后照样换得到 token；`private_key_id` 缺失不影响；只填
+`client_email` + `private_key` 也能通过。
 （Cloudflare 已移到 `dns/` —— 它本质是域名解析类。）
 
 **exchange/ 类别（2 个）**：okx、binance。
@@ -1056,19 +1053,19 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
   > 模型清单**不写死**：现取 `GET /backend-api/codex/models?client_version=<本机 codex 版本>`
   > （取 `visibility=="list"` 的条目），退到 Codex CLI 的 `~/.codex/models_cache.json`，都没有就留空让用户手输。
   > ⚠️ 该目录**按客户端版本**发：`client_version` 低于 **0.159.0** 时服务端**不返回 `gpt-6.1-sol`**
-  > （实测 0.157.1→9 条、0.159.0→10 条），且该参数**必填**（不带→400）；所以本机装旧版 codex 也会
+  > （0.157.1 → 9 条、0.159.0 → 10 条），且该参数**必填**（不带→400）；所以本机装旧版 codex 也会
   > 看不见新模型，插件用下界 `_CODEX_MIN_CLIENT_VERSION` 兜底。另：目录**不是准入白名单**——
   > `gpt-5.5` 标 `hide` 也能对话、`gpt-6.1-sol` 目录里没有但 `/codex/responses` 接受。
   >
   > `codebuddy`（纯登录态类）同样是分字段填写：**必需** `access_token`、`uid`（探针请求头
   > `X-User-Id`）；**可选** `refresh_token`（只存不用）、`enterprise_id`、`domain`
-  > （默认 `www.codebuddy.cn`）。它**没有**刷新操作——刷新端点未实测确认，
-  > 拿猜的接口去轮换用户的令牌风险太大。
+  > （默认 `www.codebuddy.cn`）。它**没有**刷新操作——刷新端点未经确认，
+  > 不用推测的接口去轮换用户的令牌。
   >
   > `ark`（火山方舟，原 `doubao`，已泛化）—— **方舟是字节的模型托管平台，不等于豆包**：同一把 key
   > 能调豆包 / DeepSeek / 智谱 GLM / 阿里 Qwen 等多家模型。两点必知：**`/models` 不含你自己的
   > 「推理接入点」`ep-xxxxxxxx`**（接入点才是很多人实际调用的对象，**必须手输**，列表里永远没有）；
-  > **`/models` 混着大量已关停的历史模型**（实测 135 条里 83 条 `status=="Shutdown"`，且按创建时间排、
+  > **`/models` 混着大量已关停的历史模型**（135 条里 83 条 `status=="Shutdown"`，且按创建时间排、
   > **首项就是关停款**）→ 插件在 `list_models` 里**剔除 `Shutdown`、并把非对话类（embedding /
   > seedance / seedream / tts…）排到最后**，免得默认取首项时选到死模型。另：**接入点被关是 HTTP 400
   > `InvalidEndpoint.ClosedEndpoint`，不代表 key 失效**（key 有效时 `/models` 仍 200，别误判失效）。
@@ -1096,9 +1093,9 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
   > 拼成一行「备注」塞进表格，对用户就是噪音，还会让表格里混进一条不是实例的假行。
   > **注意**：`download_prefix`（打包下载）那处的「失败 N 个」是**另一回事**，要保留——
   > 那是本次下载的**结果报告**（哪些对象没下下来），不是常态噪音。
-  > **每家的端点规则不同，别互相照抄**：阿里云有相当一部分地域**不认**全局端点
+  > **每家的端点规则不同，不要互相套用**：阿里云有相当一部分地域**不认**全局端点
   > `ecs.aliyuncs.com`，必须用它自己 `DescribeRegions` 返回的 `RegionEndpoint`
-  > （实测 33 个地域里 14 个会报 `The specified endpoint cant operate this region`）；
+  > （33 个地域里 14 个会报 `The specified endpoint cant operate this region`）；
   > AWS 是 `ec2.{region}.amazonaws.com`；华为 ECS 要先有 `project_id`（凭据里填了就用，
   > 没填则**只读**查 `GET /v3/auth/projects` 推断，无副作用）；腾讯云按区域拼即可。
   > **华为 OBS 的 `ListBuckets` 与地域无关**（任何地域的 endpoint 都返回全部区域的桶，
@@ -1121,28 +1118,28 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
   > 用 `conn.xatom("ID", ...)`（CPython 的 `imaplib.Commands` 里**没有** `ID`，直接
   > `_simple_command` 在 AUTH 态会抛 `command ID illegal in state AUTH`），
   > 且**尽力而为、失败放过**（服务器 CAPABILITY 里没有 `ID` 就跳过，发送异常一律吞掉——不引入新失败点）。
-  > 2026-10-07 用真实 163 与 126 邮箱 A/B 验过：改动前必现该错，改动后正常打开 INBOX。
+  > 在 163 与 126 邮箱上验证过：不发 `ID` 必现该错，发出后正常打开 INBOX。
 
 > 以上按**声明了操作（`actions()`）**的插件列举。`api/google_api_credentials`（原 `api/app_secret`）、
 > `cloud/gcp`、`im/telegram_apihash`、`im/wecom`、`im/dingtalk`（后两者拆分自原 `im/webhook`）、
 > `api/gateway` 目前只做凭据验证，未声明任何「操作」。
-> （`cloud/aws`、`cloud/huaweicloud`、`cloud/firebase`、`api/dify` 与本轮已补上操作，见上文。）
+> （`cloud/aws`、`cloud/huaweicloud`、`cloud/firebase`、`api/dify` 已补上操作，见上文。）
 
 > **按权限显隐**：aliyun / tencentcloud / aws / huaweicloud / firebase / dify / feishu / github 实现了
 > `capabilities()`，没权限的操作不会出现在菜单里；
 > 一个都没有时给出说明。**探测失败一律 fail-open**（全都展示）——只有上游**明确**说「密钥无效」才判定为无可用操作。
-> （实测例：一把**只有 S3 权限**的 AWS key，云主机与区域列表两项被隐藏，`note` 写明
+> （示例：一把**只有 S3 权限**的 AWS key，云主机与区域列表两项被隐藏，`note` 写明
 > 「已隐藏无权限的操作：区域列表（UnauthorizedOperation）、云主机实例列表（UnauthorizedOperation）」。）
 
 #### 附：阿里云 OSS 与腾讯云 COS 的签名（自建在各自 plugin.py 内）
 
-两者都**不复用**云 API 的签名，写新对象存储插件时别搞混：
+两者都**不复用**云 API 的签名，写新对象存储插件时不要混用：
 
 - **OSS V1**：`StringToSign = VERB\nContent-MD5\nContent-Type\nDate\nCanonicalizedOSSHeaders + CanonicalizedResource`，
   `Signature = base64(HMAC-SHA1(AccessKeySecret, StringToSign))`（**key 不加 `&`**，这点与云 API RPC v1 不同），
   请求头 `Date`(RFC1123 GMT) + `Authorization: OSS <AK>:<Sig>`；`max-keys`/`prefix`/`marker` **不进**规范串。
 - **COS**：`q-sign-algorithm=sha1`。`signKey = HMAC-SHA1(SecretKey, signTime)` —— **单次** HMAC！
-  （曾误写成 `HMAC(HMAC(SecretKey, signTime), keyTime)` 的双重形式，那会让所有请求 403。）
+  （写成 `HMAC(HMAC(SecretKey, signTime), keyTime)` 的双重形式会让所有请求 403。）
   `httpString = <method 小写>\n<path>\n<params>\n<headers>\n`（k/v 都 `quote(x, safe="-_.~")`、按字典序 `&` 连接），
   `stringToSign = "sha1\n" + signTime + "\n" + sha1(httpString) + "\n"`，`signature = HMAC-SHA1(signKey, stringToSign)`。
 - 两家的响应都是 **XML**（用 `response.text` + `xml.etree.ElementTree`，用 `tag.rsplit('}', 1)[-1]` 绕开 namespace），

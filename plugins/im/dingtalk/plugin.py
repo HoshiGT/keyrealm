@@ -14,7 +14,7 @@
   - 400105（不支持的类型）/ 310000（sign not match，只是该机器人开了加签）→ token 成立 ⇒ valid
   - 300001 / 300005（token is not exist）→ token 不成立                        ⇒ invalid
   - 660026（sending too many messages per minute）→ 风控限流，与 token 无关
-    （实测对无效 token 也会返回）⇒ 「无法确认」，不是无效
+    （对无效 token 也会返回）⇒ 「无法确认」，不是无效
   最后兜一层：万一机器人真把探测类型当普通消息收下了（errcode 0），如实说明
   「探测内容已被投递」，不假装什么都没发生。
 

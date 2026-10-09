@@ -1,26 +1,14 @@
 """NVIDIA NIM API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
 
-**鉴权只能靠 chat 端点**：`GET /v1/models` 不鉴权（匿名与真 key 返回同一份清单，
-拿它验证会「任何 key 都有效」）。`POST /v1/chat/completions` 才走鉴权
-（坏 key → 401/403，真 key → 200，欠费 → 402/429）。
+``GET /v1/models`` 不执行鉴权，不能用于确认 API Key 有效性；鉴权探针使用
+``POST /v1/chat/completions``。有效凭据通常返回 200，错误凭据返回 401/403，
+账户额度不足可能返回 402/429。
 
-但 NVIDIA **会下线模型**，且各账号开通的模型不同（清单是过期超集：大量 410 Gone
-与 404 Not found for account），所以**不能赌单个模型名**——候选逐个短超时试，命中即止
-（历史上的硬编码 model 就曾因「网关接受后永不响应」把真 key 必卡成超时）。
+NVIDIA 的模型可用性因账号而异，``/v1/models`` 可能包含已下线或未授权模型，
+此类模型会返回 404/410。候选模型在运行时从模型列表筛选，按 24 小时缓存；
+探针逐个尝试候选并设置短超时，避免单个不可用模型阻塞验证。
 
-候选名单**不再写死**：运行时从 ``/v1/models`` 按「像便宜对话模型」的线索现挑，
-结果按 24h 缓存（见 ``llm_protocols`` 的模型清单缓存说明）；用户点「刷新模型列表」即穿透缓存。
-
-> **哪些是实测、哪些有官方背书**（2026-10-07 逐页核对官方文档后的结论）：
-> 上面三点——「`/v1/models` 不鉴权」「清单是过期超集、下线模型返 410/404」「欠费 → 402/429」
-> ——**官方文档均未背书**。官方 API 参考只声明 `200/202/422/500` 与通用 `InvokeError` 错误体，
-> `401/402/403/410/429` **一字未提**；模型清单「过期超集」与「410 Gone」只见于开发者论坛，
-> 官方参考页的 `404` 指的是**本地容器启动/端口**问题，与模型下线无关。
-> 所以这些判断**别拿官方文档去"纠正"**，它们来自本机实测。
->
-> 另：`reasoning_content` **不在**各模型 OpenAPI 的 `Message` schema 里（`additionalProperties:false`），
-> 但**同一页的官方示例代码又去读它**（`getattr(chunk.choices[0].delta, "reasoning_content", None)`）
-> ——官方自己就用容错取值。所以我们按「字段可能不存在」处理是对的，别改成硬读。
+``reasoning_content`` 不在部分模型的 OpenAPI ``Message`` schema 中，响应处理应将其视为可选字段。
 
 参考文档：https://docs.api.nvidia.com/nim/reference/
 参考文档：https://docs.nvidia.com/nim/large-language-models/latest/get-started/advanced/get-started-inkling.html
@@ -45,7 +33,7 @@ NAME = "NVIDIA NIM"
 DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
 PROTOCOL = "openai_chat"
 
-# 单个候选给的超时：多个候选累加也不能太久。卡住的模型会烧满这个值再换下一个。
+# 单个候选超时设为 10 秒，避免不可用模型延长整体探测。
 PROBE_TIMEOUT = 10.0
 
 
@@ -63,10 +51,9 @@ def validate(data: dict) -> list[str]:
 
 
 def _candidates(data: dict) -> list[str]:
-    """探针候选：凭据指定的 ``probe_model`` 优先，其后是**运行时**从 ``/v1/models`` 挑的候选。
+    """构造探针候选，将凭据指定模型置于首位，其后接运行时模型列表候选。
 
-    名单来自 ``probe_model_candidates``（按 24h 缓存，用户刷新即穿透）——**不再内置写死短名单**。
-    NVIDIA 的清单是过期超集，所以仍然靠「多个候选 + 短超时 + 换下一个」而不是押注某一个名字。
+    模型列表按 24 小时缓存，用户刷新时穿透缓存；多候选与短超时用于应对账号不可用模型。
     """
     data = data or {}
     preferred = str(data.get("probe_model") or "").strip()
@@ -103,7 +90,7 @@ def _verify(data: dict) -> VerifyResult:
         except httpx.HTTPError as exc:
             reason = f"网络请求失败（{type(exc).__name__}）"
             continue
-        # 200 → 有效；401/403 → 密钥本身无效，换模型也是白换，直接定论
+        # 200 表示有效；401/403 表示密钥无效，无需继续尝试其他模型
         if result.status in ("valid", "invalid"):
             return result
         # 404 / 410 / 5xx 等：这个模型不可用，换下一个候选
@@ -121,11 +108,9 @@ def verify(data: dict) -> VerifyResult:
 
 
 def quota_probe(data: dict) -> dict | None:
-    """欠费探测（凭据开关 ``probe_chat``，默认关）：复用 verify 那套**运行时候选**。
+    """按凭据开关执行欠费探测，并复用运行时模型候选。
 
-    通用实现 ``make_quota_probe`` 只会「自动挑一个名字像 flash 的便宜模型」然后**只试它一个**；
-    NVIDIA 的清单是过期超集，单一模型很容易挑到已失效/挂死的款，所以这里**逐个候选试**、
-    命中即止（候选来源与 verify 相同：``probe_model_candidates``，带 24h 缓存）。
+    模型列表可能包含账号不可用或无响应模型，因此逐个候选探测，获得结论后停止。
     """
     data = data or {}
     if not probe_requested(data):
@@ -138,8 +123,7 @@ def quota_probe(data: dict) -> dict | None:
         verdict = quota_chat_probe(base_url, api_key, "openai", preferred_model=model)
         if verdict:
             return verdict
-    # 候选都试完仍无结论：报「实测 异常」，别静默——勾了开关却什么都不显示，用户分不清
-    # 「没开探测」和「探测失败」。
+    # 候选耗尽仍无结论时返回未知状态，区分未启用探测与探测失败。
     return quota_unknown()
 
 

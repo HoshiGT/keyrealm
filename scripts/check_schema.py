@@ -6,9 +6,9 @@
 时才会被解析。而绝大多数单元测试会把 `database` 模块整个打桩（因为要避免动真库），
 于是「SQL 本身写错了」这类问题**一通测试全绿、一打包运行就崩**。
 
-真实案例：`preset_defaults` 表曾把列名取成 `values` —— 那是 SQLite 的**保留字**，
-`CREATE TABLE ... values TEXT` 直接 `syntax error`。同批还有一处 `SELECT values FROM ...`
-在改名后漏改。两次都是靠这个脚本逮住的，而不是靠打桩的测试。
+要挡住的两类问题：把 SQLite **保留字**当列名（`CREATE TABLE ... values TEXT` 直接
+`syntax error`），以及改名漏改的残留引用（`SELECT values FROM ...`）。打桩的测试都
+查不出来，只有真连上 SQLite 才会暴露。
 
 所以：**改了表结构、加了新表、或准备打包时，先跑它**。
 它只碰临时目录，不读写 `data/` 里的真库。
@@ -50,7 +50,7 @@ def main() -> int:
     db.DATA_DIR = tmp
     db.DB_PATH = tmp / "credentials.db"
     try:
-        # 1) 建表 —— SQL 写错会在这里原样抛出，正是我们要挡住的
+        # 1) 建表 —— SQL 写错会在这里原样抛出，正是本脚本要挡住的
         db.init_db()
         conn = db.get_conn()
         tables = {r["name"] for r in conn.execute(

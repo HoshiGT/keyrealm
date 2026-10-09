@@ -88,18 +88,17 @@ _PRIMARY_WINDOW_SECONDS = 18000
 _USAGE_TIMEOUT = 6.0
 
 # ── codex 对话的模型名 ────────────────────────────────────────────────────
-# **这里不再写死任何模型名**：清单一律现取——优先官方目录端点（`_codex_models_from_api`），
+# **这里不写死任何模型名**：清单一律现取——优先官方目录端点（`_codex_models_from_api`），
 # 其次 Codex CLI 的本地缓存（`~/.codex/models_cache.json`，`_codex_models_from_cli_cache`）；
-# 两者都没有就返回空，由界面上的「模型」下拉（允许手输）兜底。
+# 两者都取不到就返回空，由界面上的「模型」下拉（允许手输）兜底。
 #
-# ⚠️ **为什么以前「看不见 gpt-6.1」**：目录端点是**按客户端版本**发的——
-# `?client_version=` 低于 `0.159.0` 时，服务端**根本不返回** `gpt-6.1-sol`
-# （2026-10-09 实测：0.157.1 → 9 条；0.159.0 → 10 条且含 gpt-6.1-sol），而该参数**必填**
-# （不带 → 400）。旧代码把版本写死成 0.157.1，等于永久自锁在旧目录 → 见 `_codex_client_version`。
+# ⚠️ **目录端点按客户端版本返回**：`?client_version=` 低于 `0.159.0` 时服务端不返回
+# `gpt-6.1-sol`（`0.157.1` → 9 条；`0.159.0` → 10 条且含 `gpt-6.1-sol`），而该参数**必填**
+# （不带 → 400）。版本写死会让客户端永久停留在旧目录 → 见 `_codex_client_version`。
 #
-# 另注：目录里的清单**不等于**端点的准入白名单——`gpt-5.5` 标 `hide` 也照样能对话，
-# `gpt-6.1-sol` 目录里没有、`/codex/responses` 却接受（同日实测）。所以「列表里没有」
-# 只影响下拉显示，不影响能否调用。
+# 另注：目录清单**不等于**端点的准入白名单——`gpt-5.5` 标 `hide` 仍可对话，
+# `gpt-6.1-sol` 不在目录里但 `/codex/responses` 接受。因此「列表里没有」只影响下拉显示，
+# 不影响能否调用。
 
 
 def _version_ge(value: str, floor: str) -> bool:
@@ -118,7 +117,7 @@ def _codex_client_version() -> str:
 
     优先用**本机 Codex 的真实版本**（`models_cache.json` 的 `client_version` →
     `version.json` 的 `latest_version`）；但**不低于** `_CODEX_MIN_CLIENT_VERSION`——
-    低于它服务端会隐去较新的模型（如实测的 gpt-6.1-sol），而本机装的 codex 旧版就会踩这个坑。
+    低于它服务端会隐去较新的模型（如 `gpt-6.1-sol`）；本机 codex 版本较旧时会命中这一条。
     该参数**必填**（不带 → 400），所以必须有兜底值。
     """
     detected = ""
@@ -137,11 +136,10 @@ def _codex_client_version() -> str:
 # `/backend-api/me` 同源、**只读**。路径与查询参数取自官方仓库 `openai/codex` 的
 # `codex-rs/codex-api/src/endpoint/models.rs`（`path() == "models"`，并追加
 # `?client_version=<ver>`）。响应形如 `{"models":[{"slug":…,"visibility":…}, …]}`。
-# **2026-10-08 实测确认（Plus 账号 + 真实 access_token）**：HTTP 200，返回 9 条
-# （6 条 `visibility=="list"`、3 条 `"hide"`）；**不带** `chatgpt-account-id` 头同样 200
-# （认证层与 `/me` 完全相同，无此头也认）。
+# 响应为 HTTP 200，形如 9 条（6 条 `visibility=="list"`、3 条 `"hide"`）；
+# **不带** `chatgpt-account-id` 头同样 200（认证层与 `/me` 完全相同，无此头也认）。
 CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models"
-# `?client_version=` 的**下界**：低于它服务端会隐去较新模型（实测 0.159.0 起才返回 gpt-6.1-sol）。
+# `?client_version=` 的**下界**：低于它服务端会隐去较新模型（`0.159.0` 起才返回 `gpt-6.1-sol`）。
 # 真实版本由 `_codex_client_version()` 现取；只有本机 codex 版本更低/读不到时才退回这个下界。
 # 它是**版本号不是模型名**，且该参数必填（不带 → 400），所以必须有兜底。
 _CODEX_MIN_CLIENT_VERSION = "0.159.1"

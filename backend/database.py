@@ -467,7 +467,7 @@ def delete_credentials(cred_ids: list[int]) -> int:
     """批量删除，单事务一次提交，返回实际删除条数。
 
     走参数化占位符（`?,?,…`）而非拼接字面值：ids 全部来自 UI 勾选，但拼字符串
-    既易错也给自己挖 SQL 注入的坑。空列表直接返回 0（`IN ()` 是语法错误）。
+    既易错也容易引入 SQL 注入。空列表直接返回 0（`IN ()` 是语法错误）。
     """
     ids = [int(i) for i in (cred_ids or [])]
     if not ids:

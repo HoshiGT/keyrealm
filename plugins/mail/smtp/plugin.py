@@ -1,7 +1,7 @@
 """通用 SMTP 邮箱验证插件（plugins/mail/ 类别下的独立子插件）。
 
 本插件自带 SMTP 连接与登录的**全部实现**；mail_common 只提供通用工具。
-新增邮箱类插件时照抄本目录（含 _safe_quit / 建连分类 / 登录判定）即可，
+新增邮箱类插件时参照本目录（含 _safe_quit / 建连分类 / 登录判定）即可，
 无需改动 mail_common.py。
 
 常见服务商参数（均需使用「授权码 / 应用专用密码」，而非网页登录密码）：
@@ -100,11 +100,11 @@ def _safe_quit(server: Optional[smtplib.SMTP]) -> None:
 
 
 # ── TLS 上下文（决定最低可协商的 TLS 版本）──────────────────
-# **踩过的坑**：部分老邮件服务器只支持 **TLS 1.1**（已被 RFC 8996 弃用），而 Python 3.10+
+# 部分老邮件服务器只支持 **TLS 1.1**（已被 RFC 8996 弃用），而 Python 3.10+
 # 的默认最低版本是 **TLS 1.2** → 服务端直接回 `TLSV1_ALERT_PROTOCOL_VERSION`，表现为
 # 「SSL/TLS 握手失败」，看着像凭据问题、其实是协议版本谈不拢。
-# 实测（Python 3.14 / OpenSSL 3.6，smtp.xaut.edu.cn:465）：只提 1.3/1.0 被拒、**1.1 成功**、
-# 默认策略（≥1.2）失败。故给出**显式开关**（凭据字段 `allow_legacy_tls`），默认不开——
+# 该类服务器上，只提 1.3/1.0 被拒、**1.1 成功**、默认策略（≥1.2）失败。
+# 故给出**显式开关**（凭据字段 `allow_legacy_tls`），默认不开——
 # 降级会让授权码走在更弱的信道上，必须由用户确认服务器可信后自行开启。
 _LEGACY_TLS_MARKERS = (
     "TLSV1_ALERT_PROTOCOL_VERSION",   # 服务端明确回「协议版本不行」
@@ -118,7 +118,7 @@ def _looks_like_legacy_tls(exc: Exception) -> bool:
     """是不是「对面是只开旧版 TLS/旧套件的老服务器」——据此才给得出可操作的提示与重试。
 
     **刻意把 `HANDSHAKE_FAILURE` 也算进来**：同一台只开 TLS 1.1 的服务器，在不同 OpenSSL
-    构建上抛的告警不一样（Linux 实测 `TLSV1_ALERT_PROTOCOL_VERSION`，Windows 构建实测
+    构建上抛的告警不一样（Linux 上是 `TLSV1_ALERT_PROTOCOL_VERSION`，Windows 构建上是
     `SSLV3_ALERT_HANDSHAKE_FAILURE`）。只认前者会导致 Windows 上**永远不重试**。
     """
     text = str(exc).upper()
@@ -133,7 +133,7 @@ def _ssl_context(legacy: bool) -> ssl.SSLContext:
     ``legacy=True`` 时把最低版本放宽到 TLS 1.0（覆盖只开 1.1 的老服务器），**并一并降低
     OpenSSL 安全级别**——只开 TLS 1.1 的老服务器提供的套件（如 `AES256-SHA`）在默认
     `SECLEVEL=2` 下可能被挡掉，服务端会回 `sslv3 alert handshake failure`。
-    这一点**跨构建不一致**：2026-10-09 实测同为「放宽版本」的上下文，Linux(OpenSSL 3.6)
+    这一点**跨构建不一致**：同为「放宽版本」的上下文，Linux(OpenSSL 3.6)
     能协商出 `AES256-SHA`，而 Windows 构建上却握手失败，故 legacy 模式统一加 `@SECLEVEL=0`。
     """
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)

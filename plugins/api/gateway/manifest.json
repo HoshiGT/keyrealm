@@ -30,9 +30,9 @@
         { "value": "linkinfo", "label": "linkinfo（appId / appSecret / productId）" },
         { "value": "eva", "label": "eva（signToken / newAppId / partnerKey / aesKey / iv）" },
         { "value": "engagelab", "label": "WhatsApp Engagelab（apiKey / apiSecret）" },
-        { "value": "ultramsg", "label": "腾讯 Ultramsg（instanceId / token）" }
+        { "value": "ultramsg", "label": "Ultramsg（instanceId / token）" }
       ],
-      "hint": "决定用哪家的只读接口校验。实测有可用只读接口的 8 家：Engagelab、Infobip、CM、laaffic、nxcloud、buka、Ultramsg（Ultramsg 只能报「未验证」）；其余 8 家没有只读接口，一律如实报「未验证」。"
+      "hint": "决定用哪家的只读接口校验。有可用只读接口的 8 家：Engagelab、Infobip、CM、laaffic、nxcloud、buka、Ultramsg（Ultramsg 只能报「未验证」）；其余 8 家没有只读接口，一律如实报「未验证」。"
     },
     {
       "key": "app_key",

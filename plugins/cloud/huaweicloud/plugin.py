@@ -250,7 +250,7 @@ def _obs_get(
 def _sdk_canonical_uri(path: str) -> str:
     """云 API 的 CanonicalURI：**路径不以 ``/`` 结尾时要补上**。
 
-    这是华为云 SDK 签名最容易踩的坑，且是服务端行为：签名漏了尾斜杠会直接
+    这是华为云 SDK 签名最容易出错的地方，且是服务端行为：签名漏了尾斜杠会直接
     401 ``verify ak sk signature fail``，回包里的 canonical_request 却带着尾斜杠。
     """
     if not path:
@@ -416,7 +416,7 @@ def _obs_probe_buckets(client, ak: str, sk: str, region: str) -> str:
 def _sts_probe(client, ak: str, sk: str, region: str) -> str:
     """探测 STS 身份接口（只读，``whoami`` 用的就是它），返回四态结论。
 
-    403 在这里**不当作「没权限」**：实测存在「IAM 用户在该区域被禁止」这类**区域级**限制，
+    403 在这里**不当作「没权限」**：存在「IAM 用户在该区域被禁止」这类**区域级**限制，
     那是区域选得不对，不是密钥缺权限，按 unknown 放行（fail-open）。
     """
     try:
@@ -462,7 +462,7 @@ def _ecs_candidates(client, ak: str, sk: str, region: str, project_id: str):
     """按「配置区域优先、必要时再换一个区域复核」的顺序产出 ``(区域, project_id)``。
 
     生成器是**惰性**的：只有第一个候选被拒、真需要复核时才会去查 ``/v3/auth/projects``
-    （多花一次只读请求）。为什么要复核：实测同一组 AK 扫全域时，个别区域会回 403
+    （多花一次只读请求）。为什么要复核：同一组 AK 扫全域时，个别区域会回 403
     ``The IAM user is forbidden in the currently selected region``（区域级限制），
     只看一个区域就断言「没有云主机权限」，会把本来能用的操作**错误地藏掉**。
     """
@@ -1203,7 +1203,7 @@ def _run_list_instances(ak: str, sk: str, params: dict, default_region: str, pro
 def _bucket_targets(bucket: str, region: str, suffix: str = "") -> list[tuple[str, str]]:
     """桶级请求的候选 ``(host, 根路径)``，**虚拟主机风格优先**。
 
-    实测（同一组 AK、14 个桶、同一端点）：8 个桶两种风格都通，另外 6 个桶用 path 风格
+    （同一组 AK、14 个桶、同一端点）：8 个桶两种风格都通，另外 6 个桶用 path 风格
     会被 OBS 直接拒掉 —— ``403 VirtualHostDomainRequired``（"Virtual host domain is
     required while accessing a specific bucket"），换虚拟主机风格立刻 200。所以主用
     虚拟主机风格。
@@ -1270,7 +1270,7 @@ def _bucket_read(client, bucket: str, region: str, ak: str, sk: str,
 def _bucket_location(client, bucket: str, base_region: str, ak: str, sk: str) -> str:
     """GetBucketLocation：拿到桶的**真实区域**。
 
-    两个实测结论决定了这里为什么能这么写：
+    两个结论决定了这里为什么能这么写：
 
     - ListBuckets 的回包**没有** ``Location`` / ``ExtranetEndpoint`` 字段（只有
       ``Name`` / ``CreationDate`` / ``BucketType``），区域只能另外问；
@@ -1372,7 +1372,7 @@ def _obs_target(params: dict, default_region: str) -> tuple[dict, str]:
     """校验并归一化 OBS 目标（桶名 / 区域），返回 ``(target, error)``。
 
     华为的 OBS 端点完全由区域决定（``obs.{区域}.myhuaweicloud.com``），所以不单列
-    Endpoint 字段 —— 少一个字段就少一处「签名的 host 与请求的 host 不一致」的坑。
+    Endpoint 字段 —— 少一个字段就少一处「签名的 host 与请求的 host 不一致」的风险。
 
     桶名与区域都做过白名单式校验，避免把接口/用户给的字符串直接拼进 URL。
     """

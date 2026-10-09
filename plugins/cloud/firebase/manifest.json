@@ -28,7 +28,7 @@
       "label": "密钥 ID",
       "type": "text",
       "required": false,
-      "hint": "选填，JSON 里的 private_key_id，只用作签名 JWT 头的 kid。实测缺它同样能换到 token，只是为了多一层可追溯性才留。"
+      "hint": "选填，JSON 里的 private_key_id，只用作签名 JWT 头的 kid。缺它同样能换到 token，留它只为多一层可追溯性。"
     },
     {
       "key": "project_id",

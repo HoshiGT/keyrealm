@@ -1,8 +1,7 @@
 """插件 SDK：框架向插件暴露的**唯一**接口层。
 
 框架把「与具体服务无关的通用能力」全部收在这里，插件只需 `import` 本模块 + 写自己的
-功能逻辑，不必再照抄一份工具代码（历史包袱：这些函数曾被复制进每个类别的
-`plugins/<类别>/<类别>_common.py`，五份逐字节相同）。
+功能逻辑，无需在每个类别目录下各留一份逐字节相同的工具代码。
 
 提供的能力：
 
@@ -108,7 +107,7 @@ _logger = logging.getLogger("plugin")
 def log(message: str) -> None:
     """插件日志 → 应用统一日志（根 logger 落盘到 data/logs/credential_vault.log）。
 
-    不要改回 print(..., file=sys.stderr)：打包成 GUI 程序后没有 stdio，
+    不要用 print(..., file=sys.stderr)：打包成 GUI 程序后没有 stdio，
     输出会被静默丢弃（在 windowed 模式下写 stderr 甚至直接抛异常），
     结果就是插件的告警与异常在系统日志里完全不可见。
     """
@@ -261,7 +260,7 @@ def first_list(payload, *keys) -> list:
 
     云厂商与中转站对「列表」的字段名与嵌套层次都极不统一
     （``{"items": [...]}`` / ``{"data": {"list": [...]}}`` / ``{"Response": {"ZoneList": [...]}}`` …），
-    写插件时逐个猜既累又容易漏。用法::
+    逐个试字段名容易漏。用法::
 
         rows = first_list(payload, "items", "list")            # 先按已知字段名找
         rows = first_list(payload)                             # 不行就让它自己找

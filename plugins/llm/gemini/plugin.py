@@ -17,7 +17,7 @@ NAME = "Google Gemini"
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 PROTOCOL = "gemini"
 
-# 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费
+# 余额不可用时的可选校验（设置页开关，默认关闭）：发送最小对话请求判断账户状态
 quota_probe = make_quota_probe(DEFAULT_BASE_URL, "gemini")
 
 
@@ -46,11 +46,9 @@ def _org_info(payload) -> Optional[dict]:
 
 
 def _google_error(payload) -> tuple[str, str]:
-    """从 Google 错误体取 (status, reason)，取不到就给空串。
+    """从 Google 错误响应中提取 ``(status, reason)``。
 
-    形如 ``{"error": {"code": 400, "message": "...", "status": "INVALID_ARGUMENT",
-    "details": [{"reason": "API_KEY_INVALID"}]}}``。
-    """
+    相关字段通常位于 ``error.status`` 与 ``error.details[].reason``。"""
     err = payload.get("error") if isinstance(payload, dict) else None
     if not isinstance(err, dict):
         return "", ""
@@ -78,10 +76,8 @@ def _probe(base_url: str, api_key: str) -> VerifyResult:
     if status == 429:
         return VerifyResult(status="valid", message="凭证有效，但触发速率限制 (HTTP 429)")
 
-    # 失败响应**不能一律按 400/403 → 无效**：同一个 400 有多种含义。
-    #   · INVALID_ARGUMENT / API_KEY_INVALID → 密钥确实无效
-    #   · FAILED_PRECONDITION / "User location is not supported" → **出口地区**不被 Gemini
-    #     支持，密钥本身没问题（换受支持地区的节点再验即可），判成无效就是假红
+    # 400/403 不统一判为无效：INVALID_ARGUMENT/API_KEY_INVALID 表示密钥无效，
+    # FAILED_PRECONDITION 或 ``User location is not supported`` 表示出口地区不受支持，凭据状态未知。
     err_status, reason = _google_error(payload)
     lowered = snippet.lower()
     if reason == "API_KEY_INVALID" or "api key not valid" in lowered or status == 401:
@@ -91,7 +87,7 @@ def _probe(base_url: str, api_key: str) -> VerifyResult:
             status="error",
             message=f"出口地区不被 Gemini 支持，未能确认凭证状态（{snippet}）",
         )
-    # 其余（403 密钥受限、5xx、未知 400）：给出 Google 的原因，不臆断为无效
+    # 其他 403、5xx 及未知 400 保留 Google 返回原因，状态设为 error。
     message = f"无法确认凭证状态 (HTTP {status})"
     if err_status or reason:
         message += f" [{reason or err_status}]"

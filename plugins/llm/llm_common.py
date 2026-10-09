@@ -42,7 +42,7 @@ def plausible_amount(value) -> bool:
 #
 # 契约：子插件可导出 ``quota_probe(data) -> Optional[dict]``，后端在「验证通过且没拿到
 # 余额/使用率」时调用它（见 backend/plugin_manager._apply_quota_probe）。返回值：
-#   None                          → 未开启 / 无结论 / 实测无异常，后端什么都不改
+#   None                          → 未开启 / 无结论 / 无异常，后端什么都不改
 #   {"account_info": {...}}       → 补充展示字段（用 quota_ok()）
 #   {"message": "..."}            → 替换状态说明（用 quota_insufficient()）
 #

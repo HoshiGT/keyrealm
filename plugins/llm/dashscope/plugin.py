@@ -12,12 +12,11 @@ NAME = "阿里云百炼 DashScope"
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 PROTOCOL = "openai_models"
 
-# 官方把 `max_tokens` 标为 **deprecated**、要求改用 `max_completion_tokens`（两家文档都写了），
-# 所以这里显式传新参数名；`chat_completion` / `chat_completion_stream` / `make_quota_probe`
-# 都支持 `token_param`，默认仍是 `max_tokens`（其它厂商照旧）。
+# 该兼容端点使用 `max_completion_tokens`；`max_tokens` 已标记为 deprecated。
+# `chat_completion`、`chat_completion_stream` 与 `make_quota_probe` 均支持 `token_param`，其它厂商保持默认值。
 TOKEN_PARAM = "max_completion_tokens"
 
-# 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费
+# 余额不可用时的可选校验（设置页开关，默认关闭）：发送最小对话请求判断账户状态
 quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai", TOKEN_PARAM)
 
 

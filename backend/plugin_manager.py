@@ -535,9 +535,9 @@ def plugin_uses_proxy(credential_type: str) -> bool:
     **默认 True**：绝大多数插件经 httpx 发请求（`make_client` 读 `VAULT_PROXY` /
     `vault_proxy_ctx` 注入的出口），「用哪个代理」是每个凭据的通用设置，理应都有。
 
-    不再用「模块里有没有 `make_client`」判定——那会漏掉**间接**发请求的插件：
-    例如 NVIDIA NIM 自己没 import `make_client`，而是经 `llm_protocols` 的
-    `probe_openai_chat` / `chat_completion` 发请求，于是被误判为「不走代理」而隐藏了选项。
+    不能用「模块里有没有 `make_client`」判定——那会漏掉**间接**发请求的插件：例如经
+    `llm_protocols` 的 `probe_openai_chat` / `chat_completion` 发请求的，会被误判为
+    「不走代理」而隐藏该选项。
 
     真正不支持 HTTP 代理的插件（走标准库 `smtplib` / 无出网请求的）在**模块级显式**声明
     `USES_PROXY = False` 即可排除，例如 `mail_smtp`、`im_wechat_ilink`。

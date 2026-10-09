@@ -3,14 +3,14 @@
 参考文档：https://docs.bigmodel.cn/api-reference
 
 智谱**不按协议分权**：同一把 key 既能调 OpenAI 兼容端点，也能调 Anthropic 兼容端点
-（2026-10-05 实测三把 key 一致；`claude-sonnet-4` 这类 Claude 模型名也由智谱做了映射）。
+（`claude-sonnet-4` 这类 Claude 模型名也由智谱做了映射）。
 因此插件只有一条路径——**OpenAI 兼容端点**，不设「接口格式」开关，也不为旧地址做特判：
 
 - 普通平台：`/api/paas/v4`（默认）
 - GLM Coding Plan：`/api/coding/paas/v4`（按需在 Base URL 里填）
 
-GLM 有 `/models`（2026-10-09 实测：无鉴权访问返回 401 → 端点存在），但 **chat 探针**能额外识别
-429 里的余额不足错误码 **1113**，所以 verify 优先走 chat 探针、拿不到模型时退回 `/models` 探针。
+GLM 有 `/models`（无鉴权访问返回 401，说明端点存在），但 **chat 探针**能额外识别
+429 里的余额不足错误码 **1113**，因此 verify 优先走 chat 探针、拿不到模型时退回 `/models` 探针。
 """
 from __future__ import annotations
 

@@ -173,7 +173,7 @@ def check_schema() -> None:
 
     建表语句写在 backend/database.py 里，只有**真连上 SQLite** 才会被解析；而单元测试
     通常把 database 模块整个打桩，于是「SQL 写错」这类问题一路测试全绿、打包后运行才崩
-    （真实案例：把 SQLite 保留字 `values` 当列名 → 建表 syntax error）。
+    （如把 SQLite 保留字 `values` 当列名 → 建表 syntax error）。
     所以放在打包前跑。
     """
     script = ROOT / "scripts" / "check_schema.py"

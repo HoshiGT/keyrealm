@@ -4,11 +4,9 @@
 鉴权：``Authorization: Bearer <token>``。
 判定：
 - 200 → valid，account_info 取 ``username``（响应形如 ``{"username": "..."}``）
-- 401 → invalid（实测乱写令牌回 401，空 body）
+- 401 → invalid（乱写令牌回 401，空 body）
 - 其它 → error（拿不准不猜）
-已确认：``/-/whoami`` 是 npm 官方 registry 的 whoami 端点（npm-whoami 命令同样
-调用它），成功响应形如 ``{"username": "..."}``；经代理实测乱写令牌回 401（空 body），
-故 401 判无效、200 判有效。
+``/-/whoami`` 是 npm 官方 registry 的 whoami 端点（npm-whoami 命令同样调用它）。
 
 参考文档：https://docs.npmjs.com/cli/v12/commands/npm-whoami
 """

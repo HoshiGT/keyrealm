@@ -287,7 +287,7 @@ def capabilities(data: dict) -> dict:
     ``run_workflow`` 只给 workflow 应用——把跑不通的按钮摆出来只会让人白点一次。
 
     **拿不准一律放行**（``available=None``，框架按「未知 → 全部可用」处理）：
-    网络抖动、自建实例版本老、回包里没有我们能读懂的 ``mode``，都算拿不准。
+    网络抖动、自建实例版本老、回包里没有能读懂的 ``mode``，都算拿不准。
     只有「基础身份接口 /info 明确拒了这把 key」才真的返回空列表。
     """
     data = data or {}

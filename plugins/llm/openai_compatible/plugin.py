@@ -1,16 +1,14 @@
 """第三方中转 API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
 
-同一类中转站的两种接口格式**合并在一个插件里**，由凭据字段 ``api_style`` 选择：
+支持两种接口格式，由凭据字段 ``api_style`` 选择：
 
 - ``openai``（默认）：``GET {base}/models``，Bearer 认证
 - ``anthropic``：``GET {base}/models``，``x-api-key`` + ``anthropic-version``
 
-两种格式的 Base URL 约定一致——**填到 ``/v1`` 为止、或直接填裸域名都可以**（如
-``https://relay.example.com/v1`` 与 ``https://relay.example.com`` 等价）；请求路径会做
+两种格式的 Base URL 可填写至 ``/v1``，也可填写不带版本路径的域名；请求路径会统一进行
 ``/v1`` 归一化（见 ``llm_protocols._anthropic_root`` 与 ``probe_anthropic_models``）。
 
-余额：one-api / new-api 类中转实现 ``/dashboard/billing/*`` 接口，best-effort 查询。
-"""
+余额：one-api / new-api 类中转实现 ``/dashboard/billing/*`` 接口，采用尽力查询。"""
 from __future__ import annotations
 
 from datetime import date
@@ -32,19 +30,15 @@ DEFAULT_BASE_URL = ""
 STYLES = ("openai", "anthropic")
 DEFAULT_STYLE = "openai"
 
-# OpenAI 协议分支的 token 参数名。官方 OpenAPI 已把 `max_tokens` 标 **deprecated**、要求改用
-# `max_completion_tokens`（原文：*"...is not compatible with o-series models"*）——中转站后端通常
-# 两者都收，发新名可兼容「上游是原生 OpenAI / 严格网关 + o 系列/新模型」的场景。
-# anthropic 协议**必须**用 `max_tokens`（官方就这么定义），本参数只对 openai 生效。
+# OpenAI 协议分支使用 `max_completion_tokens`；`max_tokens` 已标记为 deprecated，前者兼容严格网关及 o 系列模型。
+# `anthropic` 协议仍使用 `max_tokens`；本参数仅对 `openai` 分支生效。
 TOKEN_PARAM = "max_completion_tokens"
 
 
 def style(data: dict) -> str:
-    """该凭据用的接口格式（凭据字段 ``api_style``，默认 openai）。
+    """返回凭据使用的接口格式（字段 ``api_style``，默认 ``openai``）。
 
-    中转站之间差异太大——有只暴露 ``/v1/messages`` 的 Claude 专属站，光看 URL 猜不出来，
-    所以这里**只认显式字段**，不做任何地址嗅探（manifest 已把默认值写死为 openai）。
-    """
+    中转站的协议能力无法从地址可靠推断，因此仅依据显式字段选择格式。"""
     raw = str((data or {}).get("api_style") or "").strip().lower()
     return raw if raw in STYLES else DEFAULT_STYLE
 
@@ -67,15 +61,9 @@ def validate(data: dict) -> list[str]:
 
 
 def _fetch_openai_billing(base_url: str, api_key: str) -> Optional[dict]:
-    """OpenAI 兼容中转的余额（best-effort），按顺序尝试两个经典端点，命中即返回。
+    """查询中转服务余额：优先通过 ``/dashboard/billing/subscription`` 与 ``/usage`` 计算，失败后读取 ``/credit_grants``。
 
-    1. `/dashboard/billing/subscription` + `/dashboard/billing/usage`：余额 = 硬限额 − 已用。
-       **但中转站「不限额」时硬限额是 99999999.99 这类哨兵值**（one-api / new-api 的常见做法），
-       相减会得出 99999996.47 这种假余额，故哨兵值一律视作「无硬限额」而转第 2 步。
-    2. `/dashboard/billing/credit_grants`：直接给出可用额度 `total_available`。
-
-    两处都没拿到**可信且可用**的数字时返回 None——宁可不显示余额，也不显示一个荒谬的值。
-    """
+    ``hard_limit_usd`` 等哨兵值表示不限额，此时使用 ``total_available``；无法获得可信数值时返回 ``None``。"""
     if not base_url:
         return None
     root = base_url.rstrip("/")
@@ -95,11 +83,8 @@ def _fetch_openai_billing(base_url: str, api_key: str) -> Optional[dict]:
                 except (TypeError, ValueError):
                     total = 0.0
 
-        # 有可信硬限额：余额 = 限额 − 已用。
-        # **注意「已用」不是「本月已用」**：new-api 系的中转实现**忽略** start_date/end_date，
-        # `total_usage` 打的是该令牌的**终身累计**已用（见官方 `controller/channel-billing.go`）。
-        # 所以日期参数照发（对少数真按月统计的实现有用），但**别在文案里假定它是本月**；
-        # 站点重置过额度/换过套餐时，「总量 − 终身累计」会算出偏低的余额。
+        # `total_usage` 在 new-api 系实现表示令牌的终身累计用量，不一定是本月用量；
+        # 日期参数仍然传递，以兼容按月统计的实现。
         if total > 0 and plausible_amount(total):
             used = 0.0
             today = date.today()
@@ -150,9 +135,8 @@ def _verify(data: dict) -> VerifyResult:
     if style(data) == "anthropic":
         result = probe_anthropic_models(base_url, api_key, "/models")
         if result.status == "invalid":
-            # 中转站的 anthropic 风格 `/models` 实现五花八门（很多站只做了 OpenAI 风格 Bearer，
-            # 压根没有 anthropic 风格的模型端点）。404/403 **未必是凭据问题**，如实带出不确定性——
-            # 否则会把「对方没实现这个端点」误报成「凭据无效」。
+            # anthropic 风格的 `/models` 实现并不统一，部分中转站仅支持 OpenAI 风格 Bearer；
+            # 404/403 可能仅表示端点未实现，因此保留不确定性并提示改用 OpenAI 格式或直接对话验证。
             result.message = (
                 f"{result.message or '凭证无效'}；也可能该中转站未实现 anthropic 风格的 /models"
                 "（可改用 openai 格式，或忽略此项、直接用「简单对话」验证）"

@@ -71,7 +71,7 @@ python scripts/build.py --frontend
 ```
 
 > **务必用「装好依赖的那个解释器」跑打包**——构建脚本会用它来调 PyInstaller 与做依赖检查，
-> 跑错解释器会出现「刚 pip install 过却仍报缺包」。Windows 上尤其容易踩：PowerShell 里激活
+> 跑错解释器会出现「刚 pip install 过却仍报缺包」。Windows 上尤其容易遇到：PowerShell 里激活
 > `.venv` 后，`python` 走 venv，而 **`py` / `py3.14` 这类启动器不用 venv**（固定选系统 Python）。
 > 拿不准时看构建输出里的 `解释器     : …` 那一行，或直接点名
 > `.venv\Scripts\python.exe scripts/build.py --frontend`。
@@ -104,7 +104,7 @@ release/
 │   ├── llm/                   # LLM 类别目录（category.json；llm_common.py 为类别特有辅助）
 │   │   ├── openai/            # 每个服务一个独立子插件（manifest.json + plugin.py）
 │   │   ├── deepseek/
-│   │   └── …                  # 共 19 个 LLM 子插件
+│   │   └── …                  # 共 18 个 LLM 子插件
 │   ├── api/                   # API 服务类别（category.json）
 │   │   ├── firecrawl/
 │   │   ├── tavily/
@@ -159,7 +159,7 @@ release/
 
 > **构建前的建表自检**：`scripts/build.py` 会在打包前跑一次 `scripts/check_schema.py` —— 在临时库上
 > **真跑一遍建表与各表 CRUD**。建表 SQL 只有真连上 SQLite 才会被解析，而单元测试通常把 `database`
-> 模块整个打桩，所以「SQL 写错」会一路测试全绿、打包后运行才崩（真实案例：把 SQLite 保留字
+> 模块整个打桩，所以「SQL 写错」会一路测试全绿、打包后运行才崩（例如把 SQLite 保留字
 > `values` 当成列名 → 建表 `syntax error`）。改了表结构后也可以单独跑 `python scripts/check_schema.py`。
 >
 > **构建前的依赖检查**：`scripts/build.py` 一上来就按 `requirements.txt`（含 extras 展开）核对
@@ -168,9 +168,9 @@ release/
 > `import socksio` 的，构建机没装时 PyInstaller 既不报错也不打包，问题直到 exe 里用 socks5
 > 代理才暴露（`the 'socksio' package is not installed`）。
 > **`CredentialVault.spec` 自己还会再核对一遍**那几个「静态分析看不到」的依赖（socksio /
-> PySocks / telethon / python-socks），**缺一个就中止构建**——宁可不产出，也不产出一个悄悄
-> 缺功能的包（直接用 `pyinstaller CredentialVault.spec` 打包同样会停）。逃生口是环境变量
-> `CV_ALLOW_MISSING_DEPS=1`，`scripts/build.py --allow-missing-deps` 会自动替你设上，两边口径一致。
+> PySocks / telethon / python-socks），**缺一个就中止构建**，避免产出一个悄悄缺功能的包
+> （直接用 `pyinstaller CredentialVault.spec` 打包同样会停）。逃生口是环境变量
+> `CV_ALLOW_MISSING_DEPS=1`，`scripts/build.py --allow-missing-deps` 会自动设上，两边口径一致。
 >
 > **插件用到的标准库也会自动收进来**：插件由 `importlib` 运行时动态加载，`main.py` 从不
 > `import plugins`，PyInstaller 的静态分析看不到它们用到的模块。第三方库（httpx 等）后端也在用、
@@ -190,7 +190,7 @@ release/
 > 症状是 `npm run build` 报 `'vite' is not recognized as an internal or external command`（看着很像
 > 代码问题，其实是依赖问题）；用 `npm install --omit=dev` 装过也一样（`vite` 在 `devDependencies` 里
 > 被跳过）。`build.py` 会在跑构建前先查 `.bin` 里有没有可执行的 `vite`，命中就直接给出
-> 「删掉 `frontend/node_modules` 重新 `npm install`」的修法，不再把 npm 的英文报错甩给你。
+> 「删掉 `frontend/node_modules` 重新 `npm install`」的修法，不再直接抛出 npm 的英文报错。
 >
 > Windows 运行前提：需已安装 WebView2 Runtime（Windows 10/11 通常已内置）。
 
@@ -248,7 +248,7 @@ API-Key-Checker/
 │   ├── make_icon.py         # 生成应用图标（ICO/PNG/favicon）
 │   └── pack_source.py       # 源码归档脚本（生成 release/credential-vault-src.zip）
 ├── plugins/                 # 插件源码（打包时作为外部目录，不进 exe）
-│   ├── llm/                 # LLM 类别：19 个厂商子插件；llm_common.py 为类别特有辅助
+│   ├── llm/                 # LLM 类别：18 个厂商子插件；llm_common.py 为类别特有辅助
 │   ├── api/                 # API 服务类别：firecrawl / tavily / metaso / coze / dify / fofa /
 │   │                        #   google_api_credentials / gateway
 │   └── dns/ dev/ im/ cloud/ exchange/ mail/   # 另 6 个类别共 25 个子插件

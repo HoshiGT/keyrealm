@@ -1,41 +1,30 @@
 """腾讯 CodeBuddy 客户端登录态验证插件（plugins/llm/codebuddy/，自包含实现）。
 
 CodeBuddy 是腾讯的 AI 编程助手（中国站 www.codebuddy.cn / 国际站 www.codebuddy.ai）。
-这里的「凭据」不是 API Key，而是**客户端登录态**——两个 Keycloak 风格的 JWT
+本插件验证客户端登录态，而非 API Key；令牌采用 Keycloak 风格的 JWT
 （``iss`` = ``…/auth/realms/copilot``）。
 
-登录态**按字段分开填**，不要求粘贴整份登录态文件（那样既难维护、又把不必要的字段一起存了）。
-字段一一对应登录态文件里的位置：
+登录态按字段录入，避免存储完整登录态文件中的无关信息：
 
-- ``access_token``（必需）：``auth.accessToken``，本地判过期 + 联网校验都用它；
-- ``uid``（必需）：``account.uid``，联网校验请求头 ``X-User-Id`` 的值；
-- ``refresh_token``（可选）：``auth.refreshToken``，**只保存、从不使用**；
+- ``access_token``（必需）：``auth.accessToken``，用于本地过期判断与联网校验；
+- ``uid``（必需）：``account.uid``，联网请求头 ``X-User-Id`` 的值；
+- ``refresh_token``（可选）：``auth.refreshToken``，仅保存；
 - ``enterprise_id``（可选）：``account.enterpriseId``，个人账号为空；
 - ``domain``（可选）：``auth.domain``，默认 ``www.codebuddy.cn``。
 
-**``refresh_token`` 只存不用**：CodeBuddy 的刷新会**轮换**刷新令牌，属写副作用，
-本插件整条验证路径绝不调用任何刷新/轮换接口，全程只发一次只读的额度查询。
+CodeBuddy 刷新操作会轮换刷新令牌，存在写副作用；本插件绝不调用刷新或轮换接口。
+验证仅本地解析 JWT（不验签）并请求只读额度接口 ``POST /v2/billing/meter/get-user-resource``。
+该接口在 APISIX 网关层鉴权，无 token 或伪造 token 均返回 401，同时返回套餐与用量信息。
 
-验证策略（**全程只读**）：
+联网校验未得出结论时回退到本地结果，并标注「本地校验（未联网）」。
+message、account_info 与 actions 行数据不得包含令牌原文；手机号打码，uid 仅展示前 8 位。
 
-1. 本地解析 JWT（base64url 解 payload，**不验签**）取出账号信息与到期时间；
-2. 联网校验：向上游 ``POST /v2/billing/meter/get-user-resource``（套餐/额度查询，只读）。
-   该接口在网关（APISIX）层鉴权——无 token 或伪造 token 一律 401，
-   所以它既能证明登录态有效，又能顺带取回套餐名与用量用于「附加信息」；
-3. 联网失败（超时 / 无网络 / 未知响应）时退回本地结论，并在 message 里如实标注
-   「本地校验（未联网）」。
+公开 HTTP API 为本地 CLI 网关（``codebuddy --serve``，127.0.0.1，``/api/v1/*``），
+使用本地口令（Bearer / ``X-Access-Token`` / ``gateway_session`` cookie）并要求
+``X-CodeBuddy-Request: 1``；不接受 Keycloak access_token，也无 account / quota / billing 端点。
 
-**绝不回显 accessToken / refreshToken**：message、account_info、actions 的行数据里
-都只出现非敏感信息（手机号打码、uid 只取前 8 位）。
-
-**关于「官方有没有只读校验接口」（2026-10-07 逐页核对官方文档后的结论）：**
-官方**唯一**公开的 HTTP API 是 **本地 CLI 网关**（``codebuddy --serve`` 起在 127.0.0.1，
-``/api/v1/*``，见 https://www.codebuddy.cn/docs/cli/http-api），它用的是**本地生成的口令**
-（Bearer / ``X-Access-Token`` / ``gateway_session`` cookie、强制头 ``X-CodeBuddy-Request: 1``），
-**不是**本插件手里的 Keycloak access_token，且端点全集里**没有任何** account / quota / billing
-端点——所以它既校验不了本凭据、也不提供账号/额度信息。IDE 侧「账号」文档（积分 / 套餐 / 用量）
-**全是界面说明、无 REST 接口**。本插件用的 ``/v2/billing/meter/get-user-resource`` 是**私有接口、
-官方无文档**（出处为第三方协议转换器 ``IceeAn/codebuddy2api``）。**别再去找「官方只读校验接口」。**
+IDE 账号文档仅描述界面功能，未公开 REST 接口。所用额度探针为无官方文档的私有接口，
+请求契约来自第三方协议转换器 ``IceeAn/codebuddy2api``。
 
 参考文档：https://www.codebuddy.cn/docs/
 参考文档：https://www.codebuddy.cn/docs/cli/http-api
@@ -58,9 +47,8 @@ NAME = "腾讯 CodeBuddy"
 
 # ── 上游端点 ────────────────────────────────────────────
 # 登录态里的 auth.domain 是「认证域」（Keycloak realm 所在站点），
-# 而业务 API 的入口另有其站：中国站走 copilot.tencent.com，国际站走 www.codebuddy.ai
-# （来源：第三方协议转换器 IceeAn/codebuddy2api 的默认配置 CODEBUDDY_API_ENDPOINT
-#  与 CODEBUDDY_ALLOWED_API_ENDPOINTS，见 docs 记录）。
+# 业务 API 入口另有其站：中国站使用 copilot.tencent.com，国际站使用 www.codebuddy.ai。
+# 端点映射与允许的 API 入口参见第三方协议转换器 IceeAn/codebuddy2api 的配置。
 DEFAULT_ENDPOINT = "https://copilot.tencent.com"
 # 登录态里 auth.domain 的缺省值：留空按中国站处理
 DEFAULT_DOMAIN = "www.codebuddy.cn"
@@ -75,9 +63,8 @@ QUOTA_PATH = "/v2/billing/meter/get-user-resource"
 QUOTA_PRODUCT_CODE = "p_tcaca"
 QUOTA_RANGE_END = "2127-01-01 00:00:00"
 
-# 伪装成官方 IDE / CLI 的版本号（上游可能据此放行）。CLI 版本对齐 npm 官方包
-# `@tencent-ai/codebuddy-code` 的最新稳定版（2026-10-07 时为 2.161.4；旧值 2.107.0 已明显落后，
-# 版本头不匹配时腾讯侧一旦做版本门禁，表现会是难以定位的 403/400）。
+# 上游要求的 IDE / CLI 版本头。CLI 版本与 npm 官方包
+# `@tencent-ai/codebuddy-code` 的当前稳定版保持一致；版本头不匹配时可能返回 403/400。
 CLI_VERSION = "2.161.4"
 IDE_VERSION = "4.9.13"
 USER_AGENT = f"CLI/{CLI_VERSION} CodeBuddy/{CLI_VERSION}"
@@ -86,12 +73,9 @@ USER_AGENT = f"CLI/{CLI_VERSION} CodeBuddy/{CLI_VERSION}"
 # ── 本地解析 ────────────────────────────────────────────
 
 def _decode_jwt_payload(token: str) -> Optional[dict]:
-    """本地解开 JWT 的 payload（base64url，**不验签**），失败返回 None。
+    """解析 JWT payload（base64url，不验签）；非法格式返回 None。
 
-    只做格式解析：JWT 是 ``header.payload.signature``，payload 段用 base64url 编码
-    且**省略了 padding**，所以要按 4 对齐补齐 ``=`` 再解。任何异常都吞掉返回 None
-    ——调用方靠 None 走「无法判定」分支，而不是抛异常。
-    """
+    JWT payload 省略 padding，解码前按 4 字节边界补齐。"""
     if not isinstance(token, str):
         return None
     parts = token.split(".")
@@ -176,18 +160,9 @@ def _short_id(value) -> str:
 # ── 分字段读取 ──────────────────────────────────────────
 
 def _read(data: dict) -> dict:
-    """把用户**分字段**填的登录态摊平成内部结构（只做取值，不做任何判定）。
+    """将分字段登录态转换为内部结构，不执行有效性判定。
 
-    不再要求粘贴整份登录态文件：字段一一对应文件里的位置——
-
-    - ``access_token``：必需（= ``auth.accessToken``，JWT）
-    - ``uid``：必需（= ``account.uid``；联网探针请求头 ``X-User-Id`` 的值）
-    - ``refresh_token``：可选（= ``auth.refreshToken``）——**只存不用**（见模块说明）
-    - ``enterprise_id``：可选（= ``account.enterpriseId``，个人账号为空）
-    - ``domain``：可选（= ``auth.domain``），留空取 ``DEFAULT_DOMAIN``
-
-    过期判断只看 access_token 自己的 JWT ``exp``——不再收登录态里的 ``expiresAt``
-    （两者同源，多存一个字段没有意义）。
+    过期时间只取 access_token JWT 的 ``exp``；refresh_token 仅保存，不用于刷新。
     """
     data = data or {}
 
@@ -215,7 +190,7 @@ def _host_of(url: str) -> str:
 
 
 def _auth_headers(token: str, uid: str, enterprise_id: str, domain: str) -> dict:
-    """拼装上游要求的鉴权头（照抄官方 IDE 客户端的行为）。"""
+    """按上游 IDE 客户端契约组装鉴权头。"""
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
@@ -251,15 +226,10 @@ def _quota_payload() -> dict:
 
 def _probe_quota(endpoint: str, token: str, uid: str, enterprise_id: str,
                  candidates: list[str]) -> tuple[str, Optional[dict], str]:
-    """向额度接口发一次**只读**查询，兼作鉴权探针。
+    """执行一次只读额度查询并返回 ``(结论, 额度数据, 生效 domain)``。
 
-    返回 ``(结论, 额度数据, 生效的 domain)``，结论取值：
-
-    - ``"ok"``          200 且 ``code == 0`` —— 登录态有效，额度数据一并带回
-    - ``"auth_failed"`` 401 / 403 —— 网关拒绝该 token
-    - ``"unknown"``     网络异常 / 其它状态码 / 返回体结构不符 —— **不下结论**
-
-    只认这三种，避免把「429 / 5xx / 结构变化」误判成凭据失效。
+    ``ok`` 表示 HTTP 200 且业务 ``code == 0``；``auth_failed`` 表示 401/403；其余网络、
+    状态码或结构异常均为 ``unknown``，避免将 429/5xx/结构变化误判为凭据失效。
     """
     last = "unknown"
     for domain in candidates:
@@ -405,7 +375,7 @@ def _verify(data: dict) -> VerifyResult:
     refresh_exp = _normalize_epoch(refresh_claims.get("exp"))
 
     endpoint = _endpoint_for(domain)
-    # X-Domain 到底是「认证域」还是「上游 host」两家实现不一致，两个都试一遍。
+    # X-Domain 在不同端点实现中可能要求认证域或上游 host，依次尝试两种值。
     candidates = [d for d in (domain, _host_of(endpoint)) if d]
     verdict, quota, _ = _probe_quota(endpoint, access, uid, enterprise_id, candidates)
 

@@ -2,44 +2,37 @@
 
 **为什么字段是通用的**：这批服务商在同一件事上的叫法完全不同（accessKey / appKey / apiKey /
 account / clientId / productToken / instanceId …），一家一个插件既冗余又难维护，因此做成
-「服务商 + 通用标识/密钥 + 附加参数」的信封，各家命名照抄在 manifest 的 hint 里。
+「服务商 + 通用标识/密钥 + 附加参数」的信封，各家命名照实写进 manifest 的 hint 里。
 
 **只做只读校验，绝不发短信**：短信网关的常规校验手段就是「发一条短信看是否成功」，那会真的
-投递、产生费用，并可能触发风控（限速、封号）。更坑的是这批厂商普遍把**发送接口的参数校验放在
+投递、产生费用，并可能触发风控（限速、封号）。更麻烦的是这批厂商普遍把**发送接口的参数校验放在
 鉴权之前**，用发送接口探活只会拿到「参数错误」，既不能证明有效也不能证明无效。因此本插件只调
 **余额 / 模板 / 日志 / 交易**这类只读接口，且**每个判定都经过阴性对照**（乱写凭据看报文是否
 真的不同）。找不到只读接口的服务商一律给 ``unknown`` 并说明原因——**不猜、不给假结论**。
 
-各家实测结论（2026-10-06，经代理实测，均含阴性对照）：
+各家只读校验接口与判定依据（判定均以阴性对照为依据）：
 
 - **Engagelab（WhatsApp）** ``GET https://wa.api.engagelab.cc/v1/templates``
   + ``Authorization: Basic base64(apiKey:apiSecret)``
-  → 200 返回模板数组（``otp_10065_001`` 等）有效；乱写 → 401 ``{"code":2001,"message":"invalid token"}``。
-  把凭据改成自定义请求头会拿到 ``{"errcode":1002,"errmsg":"app_key doesn't provide"}``，
-  说明它认的是 Basic 头（该码用来区分「请求格式不对」与「凭据不对」）。
+  → 200 返回模板数组为有效；乱写 → 401 ``{"code":2001,"message":"invalid token"}``。
 - **Infobip** ``GET https://api.infobip.com/sms/1/logs?limit=1`` + ``Authorization: App {apiKey}``
-  → 印度那把 200 ``{"results":[]}``；香港那把 **403** ``"Unauthorized access"``（与印度把不同登记）；
-  篡改一位 → **401** ``"Invalid login details"``。即 **401 = 失效**；403 只说明**该入口**没有这个 Key 的
-  访问权限，「被服务端识别」并不等于「可用」，故按规矩报 ``error``——不判有效。
+  → 200 ``{"results":[]}`` 为有效；**401 = 失效**；403 ``"Unauthorized access"`` 只说明**该入口**
+  没有这个 Key 的访问权限，「被服务端识别」不等于「可用」，故报 ``error``。
 - **CM / cmtelecom** ``GET https://api.cm.com/v1.2/transactions/`` + ``X-CM-PRODUCTTOKEN: {productToken}``
   → 200 ``{"status":1,…}`` 有效；乱写 → 401 ``{"status":9,"message":"Authorization failed"}``。
-  （该家曾被误判为失效：用发送端点 ``gw.cmtelecom.com`` 报 ``No account found``，那是端点的报错，
-  不代表凭据失效——这正是「别用发送接口探活」的实例。）
+  发送端点 ``gw.cmtelecom.com`` 报 ``No account found`` 是端点自身的报错，不代表凭据失效。
 - **nxcloud** ``POST https://api.nxcloud.com/api/common/getBalance``（form: ``appkey`` + ``secretkey``）
-  → 两组凭据均 ``{"code":"0","balance":"0.00"/"0.01","currency":"USD"}``；
-  **乱写凭据同样回 ``code:"0"``，但 ``balance``/``currency`` 全为 ``null``**，
-  所以判别力在**字段值**而不是返回码。
+  → 判别力在**字段值**：乱写凭据同样回 ``code:"0"``，但 ``balance``/``currency`` 全为 ``null``。
 - **laaffic** ``GET https://api.laaffic.com/v3/getBalance``
   + ``Api-Key`` / ``Sign = MD5(apiKey+apiSecret+timestamp)`` / ``Timestamp``
-  → 鉴权失败时 ``{"status":"-1","reason":"Authentication error"}``；
-  鉴权通过后若源 IP 不在白名单会再被拦 ``{"status":"-2","reason":"Restricted IP access"}``
-  ——**后者说明凭据本身是对的**，故仍判有效并附注须从白名单源 IP 使用。
+  → 鉴权失败 ``{"status":"-1","reason":"Authentication error"}``；
+  ``{"status":"-2","reason":"Restricted IP access"}`` 说明凭据正确但源 IP 不在白名单，仍判有效。
 - **buka / itniotech** ``GET https://api.itniotech.com/sms/getBalance``（同样的三个头）
   → 200 ``{"status":"0","balance":"0","reason":"success"}`` 有效；
   乱写 → ``{"status":"-1","reason":"Authentication error"}``。
-- **Ultramsg** 无法校验：``api.ultramsg.com`` 对**任意**路径（含根路径）都返回
+- **Ultramsg** 无法校验：``api.ultramsg.com`` 对**任意**路径都返回
   404 ``{"error":"Your instance has been Stopped due to non-payment…"}``，假 token、假 instanceId
-  也是同一段文案，没有任何可区分的信号 ⇒ 只能报 ``unknown``。
+  同一段文案，无可区分信号 ⇒ 报 ``unknown``。
 
 仅从框架层 backend.plugin_sdk 复用通用工具。
 
@@ -110,7 +103,7 @@ NXCLOUD_BALANCE_URL = "https://api.nxcloud.com/api/common/getBalance"
 BUKA_BALANCE_URL = "https://api.itniotech.com/sms/getBalance"
 ULTRAMSG_STATUS_URL = "https://api.ultramsg.com/{instance}/instance/status"
 
-# 签名类的两个头：签名口径 MD5(标识 + 密钥 + 时间戳)，时间戳单位实测为**秒**
+# 签名类的两个头：签名口径 MD5(标识 + 密钥 + 时间戳)，时间戳单位为**秒**
 # （毫秒会拿到 {"status":"-16","reason":"Timestamp expires"}）
 SIGN_TIMESTAMP_MS = False
 
@@ -163,7 +156,7 @@ def sign_headers(key: str, secret: str) -> dict:
         "Api-Key": key,
         "Sign": hashlib.md5(f"{key}{secret}{stamp}".encode()).hexdigest(),
         "Timestamp": stamp,
-        "Content-Type": "application/json",  # 实测缺此头会被直接拒掉，判定无从谈起
+        "Content-Type": "application/json",  # 缺此头会被直接拒掉，判定无从谈起
     }
 
 
@@ -248,8 +241,8 @@ def _verify_infobip(api_key: str, vendor: str) -> VerifyResult:
             account_info={"vendor": vendor},
         )
     if response.status_code == 403 and INFOBIP_UNAUTHORIZED_MARK in detail.lower():
-        # 香港那把实测如此：该入口对这个 key 没有访问权限。阴性对照是 401 "Invalid login details"，
-        # 只能说明 key 被服务端「识别」，不能说明它「能用」——入口没权限就如实报 error，不判有效。
+        # 该入口对这个 key 没有访问权限（对照：凭据无效是 401 "Invalid login details"）。
+        # 403 只能说明 key 被服务端「识别」，不能说明它「能用」——如实报 error，不判有效。
         return VerifyResult(
             status="error",
             message=f"{label} 当前入口无此 Key 的访问权限（HTTP 403 {detail}），凭据真伪未经证实；"
@@ -440,7 +433,7 @@ def _verify_ultramsg(instance: str, token: str) -> VerifyResult:
         return VerifyResult(status="invalid", message=f"Ultramsg 凭据无效（HTTP {response.status_code} {detail}）")
     if response.status_code == 200 and ULTRAMSG_BLANKET_MARK not in detail.lower():
         return VerifyResult(status="valid", message="Ultramsg 凭据有效（实例状态接口可读）")
-    # 含实测到的「实例因欠费停止」：该域名对任意路径/实例/口令都回同一段文案，区分不出真伪
+    # 该域名对任意路径/实例/口令都回同一段「实例因欠费停止」文案，区分不出真伪
     return VerifyResult(
         status="unknown",
         message="Ultramsg 未作判定：该域名对任意路径与任意 instance/token 都返回同一段「实例因欠费停止」"

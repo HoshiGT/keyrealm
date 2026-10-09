@@ -8,7 +8,7 @@ Firebase 的「服务账号私钥」（控制台导出的 ``*-firebase-adminsdk-
 
 1. **换 token**（决定有效性）：换得到 ⇒ 密钥当前有效；Google 回 ``invalid_grant`` 且
    描述为 ``account not found`` / ``Invalid JWT Signature`` ⇒ 服务账号已删或私钥已轮换
-   ⇒ 无效（项目被删的 adminsdk 密钥就是这一种，实测回包即 ``Invalid grant: account not found``）。
+   ⇒ 无效（项目被删的 adminsdk 密钥即这种，回包为 ``Invalid grant: account not found``）。
 
 2. **探 Firebase 项目**（只作补充信息，不参与判定）：带 token 调 Firebase Management
    ``GET /v1beta1/projects/<project_id>``，回 200 就给出项目状态与 RTDB / Storage 实例名。
@@ -54,7 +54,7 @@ FIREBASE_URL = "https://firebase.googleapis.com/v1beta1/projects/{project_id}"
 # 从 Firebase 项目对象里挑出值得写进 account_info 的资源线索
 RESOURCE_KEYS = ("realtimeDatabaseInstance", "storageBucket", "hostingSite", "locationId")
 
-# 列 App 的端点：Firebase Management **没有**统一的 /apps 路由——实测
+# 列 App 的端点：Firebase Management **没有**统一的 /apps 路由——
 # ``GET /v1beta1/projects/<pid>/apps`` 直接回 404（路由不存在，而非鉴权失败），
 # 只有 webApps / androidApps / iosApps 三条各自独立的路由在。所以「应用列表」是
 # 三次只读调用合并出来的，平台名也由「调的哪条路由」决定，不依赖回包里的字段。

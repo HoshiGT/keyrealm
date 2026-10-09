@@ -1,19 +1,16 @@
 """Telegram api_id / api_hash / 会话串 验证插件（plugins/im/ 类别下的独立子插件）。
 
-**为什么不用 help.GetConfig**：实测在 MTProto 上，伪造的 api_id/api_hash 与真实的一模一样能
-拿到 ``help.GetConfig`` 回包（免登录方法只检查 initConnection 里「有没有」api_id，不校验它是否
-注册）。把一整批免登录方法（GetNearestDc / GetAppConfig / GetCountriesList / langpack.* …）逐
-个试过，真伪两者的行为完全一致，其中几个抛的 ``AuthKeyUnregisteredError`` 说的是**会话 auth_key**
-未登录，与 api_id 无关。所以免登录路径根本区分不了 api_id。
+**为什么不用 help.GetConfig**：MTProto 的免登录方法只检查 initConnection 里「有没有」api_id，不校验它
+是否注册，伪造的 api_id/api_hash 与真实回包完全一致；其中几个方法抛的 ``AuthKeyUnregisteredError`` 说的是
+**会话 auth_key** 未登录，与 api_id 无关。所以免登录路径区分不了 api_id。
 
 **唯一做服务端校验的是 auth.* 系列**，而它的副作用是「向该号码投递登录验证码」。本插件的取巧：
 
-  用 ``auth.sendCode`` 配一个**杜撰的号码**（``+999…``，不可能投递）。实测服务端的校验顺序是
+  用 ``auth.sendCode`` 配一个**杜撰的号码**（``+999…``，不可能投递）。服务端的校验顺序是
   **先 api_id/api_hash、后号码**，于是：
     真实 api_id/api_hash → ``PhoneNumberInvalidError``（号码格式非法）⇒ 有效
     伪造 api_id 或 api_hash → ``ApiIdInvalidError``                ⇒ 无效
   号码是杜撰的，因此**不可能真的发出任何验证码**，也不需要用到凭据里的手机号。
-  （这也正是交付文档 11 §九 记录的那套探针手法。）
 
 **会话串**只做本地解码：解析出 dc_id / 服务器 / auth_key 指纹，并检查结构是否成立。刻意**不**
 联网复用会话——同一个会话从另一个出口登录，有可能触发风控把会话踢掉，把好凭据验废。因此格式
@@ -21,8 +18,8 @@
 
 telethon 是可选依赖（已列入 requirements.txt，与 ``python-socks`` 分列两行）：缺席时联网校验跳过、
 只做本地解码与格式检查。``python-socks`` **不能省**：若框架配了代理而它缺席，Telethon 会**静默忽略
-代理直连**、脱离代理出口，所以此时一律中止联网校验。（别写 ``telethon[socks]``——telethon 的轮子里
-没有这个 extra，那个 extras 装不来 python-socks。）
+代理直连**、脱离代理出口，所以此时一律中止联网校验。（``telethon`` 没有 ``socks`` extra，
+写 ``telethon[socks]`` 装不到 python-socks。）
 
 仅从框架层 backend.plugin_sdk 复用通用工具。
 

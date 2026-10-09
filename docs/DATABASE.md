@@ -32,7 +32,7 @@ CREATE TABLE settings (
 
 | key | 说明 | 示例值 |
 |-----|------|--------|
-| `schema_version` | 数据库版本号 | `"6"` |
+| `schema_version` | 数据库结构版本（1.0 之前为整数 0–6，1.0 起为语义化版本） | `"1.0.0"` |
 | `salt` | PBKDF2 盐值（base64） | `"a3f2..."` |
 | `verify_token` | 主密码验证密文（base64） | `"x9k1..."` |
 | `mcp_host` | MCP Server 监听地址（仅 IP / localhost，默认 `127.0.0.1`） | `"127.0.0.1"` |
@@ -345,7 +345,9 @@ schedules (target_id → groups.id 或 NULL；credential_ids → 勾选的凭据
 
 ## 迁移策略
 
-`settings.schema_version` 记录当前版本（当前为 **6**）。应用启动时按版本号顺序执行迁移：
+`settings.schema_version` 记录当前版本（当前为 **1.0.0**）。1.0 之前该值是整数（0–6），1.0 起
+改为语义化版本字符串（读到非整数即说明是 1.0+）。下列几段只服务 1.0 之前的旧库，已冻结，
+应用内不再新增自动迁移：
 
 - **v1 → v2**：`credentials` 新增 `last_valid_at`；`plugins` 新增 `category` / `category_name`；
   凭据类型从整包命名（`llm_api_key` / `api_service`）迁移为子插件命名

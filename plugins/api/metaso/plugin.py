@@ -17,17 +17,17 @@
   - ``search``（``list``）：多维搜索，表格列 标题/链接/日期/相关度，行内「阅读」下钻到 ``read``；
   - ``read``（``form``）：网页解析（``POST /reader``），返回 markdown 正文。
 - **capabilities**：先探搜索；搜索明确不可用时再单独探一次阅读（**两者的额度可能是分开的**，
-  实测存在「搜索欠费、阅读仍可用」的 Key），按结果收敛 ``available``；原因不明一律 fail-open。
+  存在「搜索欠费、阅读仍可用」的 Key），按结果收敛 ``available``；原因不明一律 fail-open。
 
-端点、参数名与错误码均来自**真机实测**（``q`` 是参数名，`query` 会返回「系统内部错误」；
-``GET /search`` 返回 405，只支持 POST）。
+端点、参数名与错误码：``q`` 是搜索参数名（``query`` 会返回「系统内部错误」）；
+``GET /search`` 返回 405，只支持 POST。
 """
 from backend.plugin_sdk import VerifyResult, body_snippet, guarded, make_client, safe_json
 
 NAME = "秘塔 AI 搜索"
 DEFAULT_BASE_URL = "https://metaso.cn/api/v1"
 
-# 搜索范围：webpage 已实测可用；其余取自秘塔开放平台 curl 示例/社区实现的 scope 词表。
+# 搜索范围：webpage 可用；其余取自秘塔开放平台 curl 示例/社区实现的 scope 词表。
 SCOPES = ["webpage", "document", "scholar", "image", "video", "podcast"]
 
 # scope → 结果数组字段名（各来源命名不一致，取不到时再退化为「扫第一个对象列表」）
@@ -40,7 +40,7 @@ _SCOPE_RESULT_KEYS = {
     "podcast": "podcasts",
 }
 
-# 实测确认的业务错误码。errCode 一律 != 0 才算失败，见 _body_error。
+# 业务错误码（已确认）。errCode 一律 != 0 才算失败，见 _body_error。
 ERR_INVALID_KEY = 2005     # API密钥无效
 ERR_INSUFFICIENT = 3000    # 余额不足
 
@@ -72,7 +72,7 @@ def _post(client, base_url: str, path: str, api_key: str, body: dict, accept: st
 
 
 def _search_body(query: str, size, scope: str = "webpage", include_summary: bool = False) -> dict:
-    """搜索请求体。参数名是 ``q``（实测 ``query`` 会返回「系统内部错误」）。"""
+    """搜索请求体。参数名是 ``q``（``query`` 会返回「系统内部错误」）。"""
     return {"q": query, "scope": scope, "size": size,
             "includeSummary": include_summary, "includeRawContent": False}
 
@@ -167,7 +167,7 @@ def _verify_metaso(base_url: str, api_key: str) -> VerifyResult:
         payload = safe_json(resp)
 
     # 秘塔的业务错误都裹在 HTTP 200 里，所以非 200 反而是「非预期」——只认 401/403，
-    # 其余一律 _unconfirmed，不硬猜（实测未见过 402/429 这类状态码）。
+    # 其余一律 _unconfirmed，不硬猜（未见过 402/429 这类状态码）。
     if status in (401, 403):
         return VerifyResult(status="invalid", message=f"凭证无效 (HTTP {status})")
     if status != 200:
@@ -384,7 +384,7 @@ def _run_read(base_url: str, api_key: str, params: dict) -> dict:
 
 def capabilities(data: dict) -> dict:
     """先探搜索，搜索明确不可用时再单独探阅读——**搜索与阅读的额度可能是分开的**
-    （实测存在「搜索欠费、阅读仍可用」的 Key），所以要分开判断。
+    （存在「搜索欠费、阅读仍可用」的 Key），所以要分开判断。
 
     原因不明（非超时/非鉴权/非欠费的异常返回）一律 fail-open，避免一次抖动把功能全藏了。
     """
@@ -399,7 +399,7 @@ def capabilities(data: dict) -> dict:
             search_ok, code, message = _probe(client, base_url, api_key,
                                               "/search", _search_body("ping", 1))
             if search_ok:
-                # 搜索可用即认为阅读同样可用（实测未见过反例），省下一次计费调用
+                # 搜索可用即认为阅读同样可用（未见过反例），省下一次计费调用
                 return {"available": ["search", "read"]}
             if _is_invalid(code, message):
                 return {"available": [], "note": f"API Key 无效：{message or '鉴权失败'}"}

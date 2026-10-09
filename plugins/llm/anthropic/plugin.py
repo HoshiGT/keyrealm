@@ -12,7 +12,7 @@ NAME = "Anthropic"
 DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 PROTOCOL = "anthropic_models"
 
-# 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费
+# 余额不可用时的可选校验（设置页开关，默认关闭）：发送最小对话请求判断账户状态
 quota_probe = make_quota_probe(DEFAULT_BASE_URL, "anthropic")
 VERIFY_PATH = "/models"
 

@@ -153,7 +153,7 @@ def actions(data: dict) -> list[dict]:
 def list_models(data: dict, force: bool = False) -> list:
     """可选模型即本插件的**端点路由表**（文心没有 OpenAI 式的 `/models` 列表接口）。
 
-    路由表是协议要求、不是「写死的默认模型」，所以这里直接返回它的键。
+    路由表由协议定义，非默认模型配置，因此直接返回其键。
     ``force`` 对本插件无缓存效果（不联网取列表），仅为契约一致性而接受。
     """
     return list(_CHAT_ENDPOINTS)
@@ -209,28 +209,22 @@ def get_display_summary(data: dict) -> str:
     return f"{NAME} | {base_url}"
 
 
-# ── 可选：欠费探测（鉴权非通用格式，故自行实现，不走 make_quota_probe）──────
-# 文心既要用 API_KEY|SECRET_KEY 换 access_token、聊天端点又按模型分路径，通用实现拼不出来。
-# 免费档模型（ernie-speed / lite / tiny）不计费，欠费时照样能对话、看不出问题，
-# 所以自动选型只挑**付费档**。付费档**不另写名单**——从端点表现推：端点后缀与模型名
-# 相同的即免费档，其余是付费档（两个付费档都会被试到，顺序无实质影响）。
+# ── 可选：欠费探测（鉴权格式非通用，因此不使用 make_quota_probe）────────
+# 文心需使用 API_KEY|SECRET_KEY 换取 access_token，且聊天端点按模型分路径，无法直接复用通用探测。
+# 免费档模型（ernie-speed / lite / tiny）不计费，因此探测仅选择付费档。
+# 付费档由端点后缀与模型名是否一致推断，不额外维护模型名单。
 _PAID_MODELS = tuple(m for m, ep in _CHAT_ENDPOINTS.items() if ep != m)
-# 百度把「额度用尽」放在错误码里（HTTP 200 + `error_code`）。**但 17/18/19 官方全部归在
-# 「请求量 / 限流」，没有一个是欠费**（cloud.baidu.com/doc/NLP/s/Lk53we3le）：
-#   17 = 当日请求量已达上限   18 = QPS 超限   19 = 总请求量已达上限
-# 原来把 19 当欠费是**错的**——那会把用户往充值引（实际只是当天/总量被限）。
-# 官方真正表示欠费的是千帆那套**字符串**码（cloud.baidu.com/doc/qianfan/s/Pmh4sv5qa）：
-#   ChargeNotEnough（余额不足）/ NoOpenedBilling（未开通计费）/ OptInRequired（未开通协议）
+# 数值错误码 17/18/19 分别表示当日请求量、QPS、总请求量限制，不表示欠费。
+# 欠费仅识别千帆字符串错误码（ChargeNotEnough / NoOpenedBilling / OptInRequired）。
 _INSUFFICIENT_CODES: frozenset = frozenset()          # 数值码里没有欠费
 _INSUFFICIENT_TEXT_CODES = ("chargenotenough", "noopenedbilling", "optinrequired")
 
 
 def quota_probe(data: dict) -> Optional[dict]:
-    """余额未知时发一次最小对话请求，实测账户是否可用。
+    """余额未知时发起一次最小对话请求，判断账户是否可用。
 
     按 ``llm_common`` 的 ``quota_probe`` 契约返回：``None``（未开启探测）/
-    ``quota_ok()``（实测可用）/ ``quota_insufficient()``（实测欠费）/
-    ``quota_unknown()``（试过但没跑通 → 附加信息显示「实测 异常」）。
+    ``quota_ok()``（可用）/ ``quota_insufficient()``（欠费）/ ``quota_unknown()``（无法判断）。
     """
     data = data or {}
     if not probe_requested(data):
@@ -241,10 +235,10 @@ def quota_probe(data: dict) -> Optional[dict]:
     if not api_key or not base_url:
         return None
 
-    # 模型：用户指定的优先（须是本插件认识的端点），否则自动挑一个付费档
+    # 指定模型不在端点路由表中时无法探测。
     chosen = probe_model(data)
     if chosen and chosen not in _CHAT_ENDPOINTS:
-        return quota_unknown()  # 指定了不支持的模型，探测跑不起来
+        return quota_unknown()  # 指定模型不在端点路由表中，无法执行探测
     candidates = [chosen] if chosen else list(_PAID_MODELS)
     candidates = [m for m in candidates if m in _CHAT_ENDPOINTS]
     if not candidates:
@@ -276,10 +270,9 @@ def quota_probe(data: dict) -> Optional[dict]:
             return quota_ok()
         code = payload.get("error_code")
         message = str(payload.get("error_msg") or "")
-        # 数值码 17/18/19 官方都是**限流**（当日量 / QPS / 总量），不下欠费结论；
-        # 欠费只认官方的字符串码（ChargeNotEnough 等）与文案里的欠费字样。
+        # 仅欠费字符串码及相关文案触发欠费结论。
         haystack = f"{code} {message}".lower()
         if any(t in haystack for t in _INSUFFICIENT_TEXT_CODES) or is_insufficient_balance(haystack):
             return quota_insufficient()
         # 其余（模型不可用 / 限流 / 参数错误）不下欠费结论，换下一个候选
-    return quota_unknown()  # 候选试完仍无结论 → 报「实测 异常」
+    return quota_unknown()  # 候选耗尽仍无法判断时返回未知状态

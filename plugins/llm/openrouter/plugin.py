@@ -17,7 +17,7 @@ NAME = "OpenRouter"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 PROTOCOL = "openrouter"
 
-# 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费
+# 余额不可用时的可选校验（设置页开关，默认关闭）：发送最小对话请求判断账户状态
 quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai")
 AUTH_KEY_PATH = "/auth/key"
 # 余额端点（best-effort，仅认证通过后查询）
@@ -53,10 +53,7 @@ def _probe_auth_key(base_url: str, api_key: str) -> VerifyResult:
                 info["balance"] = remaining
                 info["currency"] = "USD"
             elif d.get("limit") is None:
-                # 官方文档：`limit` 为 **null 表示这把 key 无限额**（"null if unlimited"）。
-                # 这不是"拿不到数据"，而是一个**明确的事实**，所以要说出来——不然「附加信息」
-                # 那一列对最常见的普通 inference key（未设 per-key limit）永远是空的。
-                # 用 `plan` 键：前端 `ACCOUNT_INFO_LABELS` 里它的标签就是「套餐」。
+                # `limit` 为 null 表示该 key 不限额；记录为「不限额度」，以便在附加信息中明确展示。
                 info["plan"] = "不限额度"
             if isinstance(limit, (int, float)) and isinstance(usage, (int, float)) and limit > 0:
                 info["usage_rate"] = max(0.0, min(1.0, usage / limit))

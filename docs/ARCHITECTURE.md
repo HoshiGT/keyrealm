@@ -106,7 +106,13 @@ API-Key-Checker/
 
 **职责**：扫描 `plugins/` 目录、注册插件、按需加载插件模块。**放入即加载，删除目录即卸载**。
 
-**插件禁用 / 启用（插件管理）**：插件只来自 `plugins/` 一处（不再有「可添加」来源）。启用/禁用**不改动磁盘目录**，由 `plugins/.state.json`（`{"disabled": ["<credential_type>", …]}`；文件**不存在或损坏都当全部启用**）决定；`sync_plugins()` 每次扫描时把该状态文件**镜像**进 DB 的 `plugins.enabled` 列——该列**降级为只读镜像**，**不再是功能闸门**，`get_plugin_by_type()` **不按 `enabled` 过滤**。真正的闸门是 `get_module()`：插件被禁用即返回 `None`，于是它的操作 / 模型 / 能力一律为空、`run` 与 `verify_credential` 直接报「插件已禁用」，而**凭据本身仍照常显示与存取**（列表里状态显示为**派生的「插件禁用」**——由插件启用状态实时算出、不写库，重新启用即回弹；编辑表单的 `fields_schema` 仍取自 `pluginByType`（含已禁用插件），故已存值照常带出）。状态文件「先写 `.tmp` 再原子替换」。界面**不再提供**「删除插件」入口——要彻底卸载，自己删掉插件目录即可：**删目录 = 卸载，凭据保留**，插件记录与状态文件里残留的 key 由下次 `sync_plugins()` 扫描清理。
+**插件禁用 / 启用（插件管理）**：插件只来自 `plugins/` 一处（不再有「可添加」来源）。启用/禁用**不改动磁盘目录**，其状态与影响如下：
+
+- **状态来源**：`plugins/.state.json`（`{"disabled": ["<credential_type>", …]}`；文件**不存在或损坏都当全部启用**）。写入方式是「先写 `.tmp` 再原子替换」。
+- **DB 列降级为镜像**：`sync_plugins()` 每次扫描把该状态文件**镜像**进 DB 的 `plugins.enabled` 列——该列**只是只读镜像、不再是功能闸门**，`get_plugin_by_type()` **不按 `enabled` 过滤**。
+- **真正的闸门是 `get_module()`**：插件被禁用即返回 `None`，其操作 / 模型 / 能力一律为空，`run` 与 `verify_credential` 直接报「插件已禁用」；但**凭据本身仍照常显示与存取**（列表状态显示为**派生的「插件禁用」**——由插件启用状态实时算出、不写库，重新启用即回弹）。
+- **编辑表单仍带出已存值**：`fields_schema` 取自 `pluginByType`（**含已禁用插件**）。
+- **卸载**：界面不提供「删除插件」入口——删掉插件目录即可（**删目录 = 卸载，凭据保留**）；插件记录与状态文件里残留的 key 由下次 `sync_plugins()` 扫描清理。
 
 **插件目录**：`<app>/plugins/` 是唯一事实来源，采用两层结构：
 
@@ -120,7 +126,7 @@ plugins/
 │   │   ├── manifest.json
 │   │   └── plugin.py
 │   ├── deepseek/
-│   └── …                     # 共 19 个 LLM 子插件
+│   └── …                     # 共 18 个 LLM 子插件
 ├── api/                      # API 服务类别：firecrawl / tavily / metaso / fofa / coze / dify / google_api_credentials / gateway（共 8 个）
 ├── dns/                      # 域名解析：dnspod / duckdns / godaddy / cloudflare
 ├── dev/                      # 开发者平台：github / huggingface / wandb / npm
@@ -134,7 +140,7 @@ plugins/
 > HTTPS API，与 api/ 其余服务同形，故并入 api/ 而不单开类别——新建类别**不再**需要连带克隆一份
 > `*_common.py`（通用工具已上收 `backend/plugin_sdk.py`），但单开一类的归类代价仍大于收益。
 
-> 八个类别共 52 个子插件：llm 19 / api 8 / im 8 / cloud 6 / dns 4 / dev 4 / exchange 2 / mail 1。
+> 八个类别共 51 个子插件：llm 18 / api 8 / im 8 / cloud 6 / dns 4 / dev 4 / exchange 2 / mail 1。
 > 类别目录**不再强制**带共享模块——通用原语已上收 `backend/plugin_sdk.py`（框架暴露给插件的唯一接口层）；
 > 只有类别确有「类别特有」工具时才建一个（现仅 `llm/llm_common.py`、`mail/mail_common.py` 两例）。
 > **协议级模块**另立：`cloud/google_sa.py`（把服务账号的邮箱 + 私钥签成 RS256 JWT 换 token，
@@ -189,8 +195,8 @@ plugins/
 - **`kind: "list"`** 让插件用 `columns` + `rows` + `row_actions` 描述一个表格，行内按钮的 `params`
   支持 `$row.<列key>` 模板，目标 action 是 `form` 就预填、是 `list` 就下钻（前端用栈保存上一帧，返回零请求）。
 - **净化边界在 `backend/redact.py`**：`redact_deep()` 递归遍历**整个结果**
-  （`output`/`error`/`rows`/任意嵌套）把该凭据 `sensitive` 字段的明文替换掉。早先只扫顶层两个字段，
-  列表类操作一上来就会把密钥从 `rows` 里漏出去。该模块被**两处**共用以闭合整类问题：`api.py` 的
+  （`output`/`error`/`rows`/任意嵌套）把该凭据 `sensitive` 字段的明文替换掉——只扫顶层字段会让
+  列表类操作把密钥从 `rows` 里漏出去。该模块被**两处**共用以闭合整类问题：`api.py` 的
   操作路径，以及 `plugin_manager.verify_credential()` 的验证路径（其结果会被 `scheduler`
   **落日志 + 落库到 `status_detail`**）。插件自己 `[:N]` 切的片段不在此列 —— 写日志用 `mask_secret`。
 - **下载类操作**（`save_to`）：前端先弹「另存为」拿路径，路径经 `params` 交给插件，**插件自己下载**
@@ -257,7 +263,7 @@ plugins/
 （不直接掉到全局，更不报错）。第 2、3 层的合并顺序由 `preset_store.defaults_for()` 保证（插件覆盖类别）。
 
 难点在于**批量验证是并发的**：不同凭据可能要走不同出口，而插件只认进程级环境变量
-`VAULT_PROXY`，直接改环境变量会互相踩。所以引入了一条**按调用生效**的通道：
+`VAULT_PROXY`，直接改环境变量会互相干扰。所以引入了一条**按调用生效**的通道：
 
 - `backend/vault_proxy_ctx.py`（框架持有）用 `threading.local()` 存「本次调用用哪个代理」，
   两个哨兵 `UNSET`（未指定 → 回退环境变量）与 `DIRECT`（强制直连、压过所有代理变量）
@@ -320,7 +326,7 @@ plugins/
 
 **代理连通性诊断**（`backend/proxy_test.py`）：代理字符串本身看不出好坏，故做一次**对照实验**——同一批探测分别在「直连」与「走代理」下各跑一遍，再比对：① 国内站点（baidu.com）可达性 ② 国外站点（gstatic.com/generate_204）可达性 ③ 出口 IP 与归属地。综合给出 `ok / warn / fail` 结论（如「出口 IP 已切换」「经代理国内外站点均不可达」「出口 IP 与直连相同：代理可能未生效」）。
 
-两个刻意的设计：`trust_env=False` 屏蔽系统 `HTTP(S)_PROXY`/`ALL_PROXY`，否则「直连」对照组会被环境代理污染；出口 IP **只认无国内 CDN 的 HTTPS 见证源**（ipify / icanhazip / ifconfig.me / ipinfo.io）——最初首选 ip-api.com，实测它在国内有 CDN 且被规则型代理客户端判为直连，导致「挂代理」读到本机真实 IP、结论反向，故 ip-api 仅用于查归属地（IP 写在路径里，与路由无关）。六项探测并发执行，单项失败不影响其它项。
+两个刻意的设计：`trust_env=False` 屏蔽系统 `HTTP(S)_PROXY`/`ALL_PROXY`，否则「直连」对照组会被环境代理污染；出口 IP **只认无国内 CDN 的 HTTPS 见证源**（ipify / icanhazip / ifconfig.me / ipinfo.io）——ip-api.com 在国内有 CDN，会被规则型代理客户端判为直连，令「挂代理」仍读到本机真实 IP、结论反向，故它仅用于查归属地（IP 写在路径里，与路由无关）。六项探测并发执行，单项失败不影响其它项。
 
 **缺 SOCKS 依赖的处理**：httpx 走 socks 需要独立的 `socksio` 包，而它是在 httpx 内部**函数体内** `import` 的——打包时构建机没装，PyInstaller 既不报错也不打包，直到运行时用 socks5 代理才抛一句英文 `ImportError`。这条链路做成三层兜底：
 
@@ -344,7 +350,7 @@ plugins/
 
 **传输**：SSE（Server-Sent Events），默认监听 `127.0.0.1:8765`。不随应用自动启动，由用户在「MCP 设置」页手动开启；开启后窗口最小化到托盘仍持续运行。
 
-**重依赖按需导入**：`mcp` / `starlette` / `uvicorn`（连带 `pydantic`）实测在应用自身的导入链上
+**重依赖按需导入**：`mcp` / `starlette` / `uvicorn`（连带 `pydantic`）在应用自身的导入链上
 多占约 **33MB** RSS，而这套东西**只有真正启动服务时才用得到**。因此本模块顶层只留标准库与
 `backend` 内部模块，`mcp`/`uvicorn` 降级到 `TYPE_CHECKING` 仅供类型标注，实际导入下沉到
 `_build_mcp_app()`（构造工具）、`start_server()`（起 uvicorn）里；鉴权中间件 `BearerAuthMiddleware`
@@ -354,11 +360,11 @@ plugins/
 不受延迟导入影响，新增重依赖时照此办理。
 
 **监听地址可配**：`settings` 的 `mcp_host` / `mcp_port`（默认 `127.0.0.1` / `8765`）。
-`start_server(host, port)` 不再把 `127.0.0.1` 写死，也**去掉了原来的「端口被占就 +1/+2」降级**
-——端口是用户显式配的，悄悄换一个会让人对着「配了 9000 却在 9001」的界面发懵；现在占用就直接
-报错。保存设置时若服务在运行，会先停、等端口真正释放、再按新地址起；**若新端口起不来，会把
-原地址的服务起回去**并返回错误，不把用户留在「改完啥都没了」的状态。host 只接受合法 IP 或
-`localhost`（防止误把凭据服务挂到公网）。
+`start_server(host, port)` 不再把 `127.0.0.1` 写死，也**取消了「端口被占就 +1/+2」的降级**
+——端口是用户显式配的，悄悄换一个会造成「配了 9000 却在 9001」的困惑；端口占用即直接报错。
+保存设置时若服务在运行，会先停、等端口真正释放、再按新地址起；**若新端口起不来，会把原地址的
+服务起回去**并返回错误，不把用户留在「改完啥都没了」的状态。host 只接受合法 IP 或 `localhost`
+（防止误把凭据服务挂到公网）。
 
 **Token 鉴权**（必须）：
 ```
@@ -510,7 +516,7 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
 **采集范围**：插件不再用 `print(..., file=sys.stderr)` 输出——打包为 windowed 模式时
 `sys.stdout`/`sys.stderr` 为 `None`，打印会静默丢失。改为 `backend/plugin_sdk.py` 暴露的
 `log()` / `log_debug()`（内部是 `logging.getLogger("plugin")`），异常经 `backend/plugin_base.py` 的
-`call_*` 辅助函数统一 `_log.exception` 落盘（原先这些异常被静默吞掉，是插件报错不进日志的根因）。
+`call_*` 辅助函数统一 `_log.exception` 落盘（异常被静默吞掉时，插件报错就不会进日志）。
 调度器 `scheduler.verify_single_credential` 逐条记录验证结果并在批量结束时汇总一条统计。
 
 **界面**：日志是独立页面（`frontend/src/views/Logs.vue`，侧栏「日志」），不再挂在「系统设置」下。
@@ -674,6 +680,6 @@ AI Agent（Claude Desktop / Cursor）
 
 - **新凭据类型**：在 `plugins/` 下新增子插件目录（manifest.json + plugin.py），重启即自动加载，无需修改主程序
 - **新 MCP 工具**：在 `mcp_server.py` 中注册，自动出现在权限管理页
-- **新验证厂商**：新建 `plugins/llm/<厂商>/`（`manifest.json` + `plugin.py`），照抄同级子插件、自带端点与判定，
+- **新验证厂商**：新建 `plugins/llm/<厂商>/`（`manifest.json` + `plugin.py`），参照同级子插件、自带端点与判定，
   **无需修改 `backend/plugin_sdk.py` 或类别模块**；重启即加载
 - **数据库迁移**：`database.py` 中维护 `SCHEMA_VERSION`，启动时自动执行迁移脚本

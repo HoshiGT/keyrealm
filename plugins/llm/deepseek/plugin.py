@@ -16,7 +16,7 @@ NAME = "DeepSeek"
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 PROTOCOL = "openai_models"
 
-# 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费
+# 余额不可用时的可选校验（设置页开关，默认关闭）：发送最小对话请求判断账户状态
 quota_probe = make_quota_probe(DEFAULT_BASE_URL, "openai")
 # 余额端点（best-effort，仅认证通过后查询）
 BALANCE_URL = "https://api.deepseek.com/user/balance"
@@ -36,11 +36,9 @@ def validate(data: dict) -> list[str]:
 
 
 def _parse_balance(payload: dict) -> Optional[dict]:
-    """解析余额响应，返回 {"balance": float, "currency": str}。
+    """解析余额响应，返回 ``{"balance": float, "currency": str}``。
 
-    DeepSeek 的 balance_infos 可能同时含 CNY 与 USD 两项，且服务端返回顺序不稳定，
-    故优先取 CNY，其次取首个可用项（避免币种随机）。
-    """
+    ``balance_infos`` 同时包含 CNY 与 USD 时优先使用 CNY，否则使用首个可用项。"""
     infos = payload.get("balance_infos")
     if not isinstance(infos, list) or not infos:
         return None
@@ -56,9 +54,7 @@ def _parse_balance(payload: dict) -> Optional[dict]:
     if not plausible_amount(balance):
         return None
     info = {"balance": balance, "currency": chosen.get("currency", "")}
-    # 顶层 `is_available`：官方定义是「余额是否**够用**」（Whether the user's balance is
-    # sufficient for API calls）——**不是**账号状态。它比余额数字更直接地回答「还能不能调」，
-    # 由调用方据此判欠费（见 _verify）。取不到就不带这个键。
+    # `is_available` 表示余额是否足以继续调用，而非账号状态；存在时优先用于欠费判定。
     if isinstance(payload.get("is_available"), bool):
         info["is_available"] = payload["is_available"]
     return info
@@ -100,8 +96,7 @@ def _verify(data: dict) -> VerifyResult:
             if balance.get("usage_rate") is not None:
                 info["usage_rate"] = balance["usage_rate"]
             result.account_info = info
-            # 官方 `is_available=false` = 「余额不足以继续调用」，比余额数字更权威，
-            # 优先据此判欠费；没有这个字段时才退回看余额是否为负。
+            # `is_available=false` 表示余额不足以继续调用；字段缺失时再根据余额是否为负判定欠费。
             if balance.get("is_available") is False:
                 result.message = (
                     f"凭证有效，但账户余额不足（余额 {balance['balance']} {balance['currency']}）"
@@ -129,9 +124,8 @@ def list_models(data: dict, force: bool = False) -> list:
 
 
 # ── 可选操作：简单对话 ──────────────────────────────────
-# （模型不写死：运行时取 `/models` 清单首项。）官方 list-models 页现列 `deepseek-flash`（V4.1-Flash）
-# 与 `deepseek-v4-pro`；旧的 `deepseek-chat` / `deepseek-reasoner` 已不再出现——思考与否现在是
-# **同一个模型 + 参数**（`thinking={"type":"disabled"}` 或 `reasoning_effort:"none"`），不再靠换模型名区分。
+# 模型名称从运行时 `/models` 清单获取；当前清单包含 `deepseek-flash`（V4.1-Flash）和
+# `deepseek-v4-pro`。思考模式通过 `thinking={"type":"disabled"}` 或 `reasoning_effort:"none"` 控制。
 
 
 def actions(data: dict) -> list[dict]:

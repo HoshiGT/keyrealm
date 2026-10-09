@@ -2,7 +2,7 @@
 
 背景
 ----
-原先只有一个全局字符串 ``settings.verify_proxy``，所有凭据共用。现在改成：
+代理不能只靠一个全局字符串（``settings.verify_proxy``）给所有凭据共用，因此：
 
 - **`proxies` 表**维护多个代理，各自可取名字；**其它地方一律按 id 引用**，不传名字、不传 URL。
 - **全局默认**存 ``settings.global_proxy_id``（空 = 直连）。

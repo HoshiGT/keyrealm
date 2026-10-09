@@ -16,9 +16,7 @@ NAME = "月之暗面 Moonshot"
 DEFAULT_BASE_URL = "https://api.moonshot.cn/v1"
 PROTOCOL = "openai_models"
 
-# 官方把 `max_tokens` 标为 **deprecated**、要求改用 `max_completion_tokens`（platform.kimi.com 文档），
-# 所以这里显式传新参数名；`chat_completion` / `chat_completion_stream` / `make_quota_probe`
-# 都支持 `token_param`，默认仍是 `max_tokens`（其它厂商照旧）。
+# 官方已弃用 `max_tokens`，要求使用 `max_completion_tokens`（platform.kimi.com 文档）。
 TOKEN_PARAM = "max_completion_tokens"
 
 # 余额拿不到时的可选项（「设置」页开关，默认关闭）：发一次最小对话请求判断是否欠费
@@ -91,10 +89,8 @@ def _verify(data: dict) -> VerifyResult:
             if balance.get("usage_rate") is not None:
                 info["usage_rate"] = balance["usage_rate"]
             result.account_info = info
-            # 官方口径：`available_balance` **≤ 0 就无法调用推理接口**（`<=` 而不是 `<`）——
-            # 它是「可用余额」= 现金 + 代金券，所以即便 `cash_balance` 为负、只要券还够也仍可用。
-            # 官方 Warning 原文：`available_balance ≤ 0` 时调用推理 API 返回
-            # `exceeded_current_quota_error`。
+            # `available_balance <= 0` 时推理接口返回 `exceeded_current_quota_error`；
+            # 该字段包含现金与代金券，因此以可用余额判定，而非单独现金余额。
             if balance["balance"] <= 0:
                 # 欠费不算失效：凭据本身有效，仅账户余额不足
                 result.message = (
@@ -118,8 +114,8 @@ def list_models(data: dict, force: bool = False) -> list:
 
 
 # ── 可选操作：简单对话 ──────────────────────────────────
-# （模型不写死：运行时取 `/models` 清单首项。）旧值 `moonshot-v1-8k` 所属的 **`moonshot-v1`
-# 系列已于 2026-08-31 下线**、一定会 404；官方现售 kimi-k3 / kimi-k2.7-code(-highspeed) / kimi-k2.6。
+# 模型列表由 `/models` 动态获取；`moonshot-v1-8k` 所属 `moonshot-v1` 系列已停用，
+# 当前可用模型以服务端返回清单为准。
 
 
 def actions(data: dict) -> list[dict]:

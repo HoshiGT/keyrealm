@@ -13,25 +13,20 @@ from llm_common import make_quota_probe
 from llm_protocols import probe_openai_models, chat_completion, fetch_models, chat_completion_stream, resolve_chat_model
 
 NAME = "MiniMax"
-# 官方只承认两套按地区分的域名：国内 `api.minimax.cn`、国际 `api.minimax.io`，**都带 `/v1`**。
-# 老域名 `api.minimax.chat` 官方文档里查不到（实测解析到同一套后端的别名），不再作默认值。
+# 官方地区域名为国内 `api.minimax.cn` 和国际 `api.minimax.io`，Base URL 均包含 `/v1`。
+# `api.minimax.chat` 未列于当前官方文档，不作为默认地址。
 DEFAULT_BASE_URL = "https://api.minimax.cn/v1"
 PROTOCOL = "openai_models"
 
-# 官方把 `max_tokens` 标为 **deprecated**、要求改用 `max_completion_tokens`（两家文档都写了），
-# 所以这里显式传新参数名；`chat_completion` / `chat_completion_stream` / `make_quota_probe`
-# 都支持 `token_param`，默认仍是 `max_tokens`（其它厂商照旧）。
+# 官方已弃用 `max_tokens`，要求使用 `max_completion_tokens`。
 TOKEN_PARAM = "max_completion_tokens"
 
 
 def _base_url(data: dict) -> str:
-    """该凭据实际使用的 Base URL，并对「只填了裸域名」做归一。
+    """归一化凭据的 Base URL，为裸域名补充 `/v1`。
 
-    官方文档给的 Base **一定带版本段**（`…/v1`）。用户手填时很容易只写到域名，而裸域名
-    **不会报错**：`GET /models` 会 308 重定向到 `/v1/models`（httpx 默认跟随重定向），
-    所以「验证」照样通过；但 `POST /chat/completions` 没有这条重定向、直接 404 ——
-    表现为「凭据显示有效，对话和欠费探测却全用不了」，用户极难自查。这里给裸域名补上
-    `/v1` 并记一条日志，免得留下一条看着正常、实际半残的凭据。
+    裸域名下 `GET /models` 会 308 重定向到 `/v1/models`，而 `POST /chat/completions` 返回 404。
+    统一版本段可避免认证成功但对话失败。
     """
     raw = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
     if raw.rstrip("/") and not urlparse(raw).path.strip("/"):
@@ -84,9 +79,7 @@ def list_models(data: dict, force: bool = False) -> list:
 
 
 # ── 可选操作：简单对话 ──────────────────────────────────
-# （模型不写死：运行时取 `/models` 清单首项。）官方文档里 `abab6.5s-chat` 已**完全不再出现**
-# （连 legacy 页都没有），现役是 M 系列；「模型」下拉由 list_models 从 `/v1/models` 实时拉取，
-# 且允许手输覆盖。
+# 模型列表由 `/v1/models` 动态获取，避免依赖已不受支持的 `abab6.5s-chat`。
 
 
 def actions(data: dict) -> list[dict]:
