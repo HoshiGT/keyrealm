@@ -59,21 +59,34 @@ def _push_event(name: str, detail: dict):
 
 # ── 权限检查 ──────────────────────────────────────────────
 
-def _check_permission(tool_name: str, token_record: dict) -> bool:
-    """双层权限：全局开关 ∩ Token 范围"""
-    if not db.is_tool_enabled(tool_name):
-        return False
-    tools_allowed = token_record.get("tools_allowed", [])
-    if tools_allowed:  # 空列表 = 继承全局
-        return tool_name in tools_allowed
-    return True
+def _perm_denied(tool_name: str) -> Optional[dict]:
+    """无权时返回**可读的错误载荷**；有权返回 ``None``。
 
+    **刻意不抛异常**（原来是 raise PermissionError）：MCP 客户端把工具异常呈现成一句
+    「Error executing tool xxx」，**原因被吞掉**——2026-10-09 实测：用户没给这两个工具开权限，
+    屏幕上只有那一句，完全不知道该去哪开。改成**返回结构化错误**，message 才能原样送到用户眼前。
 
-def _require_perm(tool_name: str) -> None:
-    """工具内调用：校验当前请求的 Token 是否有权调用该工具，无权则抛出 PermissionError"""
+    返回类型与各工具的**声明保持一致**（dict 工具返回 dict、list 工具返回 ``[denied]``），
+    免得触发 MCP 的输出校验。
+    """
     record = _current_token_var.get()
-    if record is None or not _check_permission(tool_name, record):
-        raise PermissionError(f"权限不足：{tool_name} 未授权")
+    if record is None:
+        return {"error": "permission_denied", "tool": tool_name, "reason": "no_identity",
+                "message": f"无法确认调用身份，未执行「{tool_name}」。"}
+    if not db.is_tool_enabled(tool_name):
+        return {
+            "error": "permission_denied", "tool": tool_name, "reason": "global_disabled",
+            "message": (f"工具「{tool_name}」未授权：它在 MCP 里默认就是**关闭**的（高危工具）。"
+                        "请到 Credential Vault →「设置 → MCP 服务 → 工具权限」勾选启用后重试。"),
+        }
+    allowed = record.get("tools_allowed") or []
+    if allowed and tool_name not in allowed:
+        return {
+            "error": "permission_denied", "tool": tool_name, "reason": "token_scope",
+            "message": (f"工具「{tool_name}」未授权：当前 MCP Token 的允许范围不含它。"
+                        "请到「设置 → MCP 服务」为该 Token 勾选此工具，或改用允许范围更宽的 Token。"),
+        }
+    return None
 
 
 # ── MCP 工具定义 ──────────────────────────────────────────
@@ -95,7 +108,9 @@ def _build_mcp_app() -> MCPServer:
         search: Optional[str] = None,
     ) -> list[dict]:
         """列出凭据（不含敏感字段明文）"""
-        _require_perm("vault_list_credentials")
+        denied = _perm_denied("vault_list_credentials")
+        if denied:
+            return [denied]
         creds = db.list_credentials(group_id=group_id, credential_type=credential_type,
                                      status=status, search=search)
         return [
@@ -115,7 +130,9 @@ def _build_mcp_app() -> MCPServer:
     @mcp.tool()
     def vault_get_credential(credential_id: int) -> dict:
         """获取单条凭据详情（不含敏感字段明文）"""
-        _require_perm("vault_get_credential")
+        denied = _perm_denied("vault_get_credential")
+        if denied:
+            return denied
         c = db.get_credential(credential_id)
         if not c:
             return {"error": "not_found"}
@@ -143,7 +160,9 @@ def _build_mcp_app() -> MCPServer:
         auto_verify: bool = True,
     ) -> dict:
         """创建凭据（与界面共用同一份实现，因此同样会继承类别/插件默认设置）"""
-        _require_perm("vault_create_credential")
+        denied = _perm_denied("vault_create_credential")
+        if denied:
+            return denied
         # 不要在这里复制一份创建逻辑——否则「表单创建继承默认、MCP 创建不继承」这类
         # 不一致会悄悄出现（历史上就是复制出来的两份，改一处漏一处）。
         from . import api as _api
@@ -161,7 +180,9 @@ def _build_mcp_app() -> MCPServer:
         data: Optional[dict] = None,
     ) -> dict:
         """修改凭据"""
-        _require_perm("vault_update_credential")
+        denied = _perm_denied("vault_update_credential")
+        if denied:
+            return denied
         from .crypto import encrypt_dict
 
         key = _get_key()
@@ -206,7 +227,9 @@ def _build_mcp_app() -> MCPServer:
     @mcp.tool()
     def vault_delete_credential(credential_id: int) -> dict:
         """删除凭据"""
-        _require_perm("vault_delete_credential")
+        denied = _perm_denied("vault_delete_credential")
+        if denied:
+            return denied
         db.delete_credential(credential_id)
         _push_event("vault:credentials_changed", {})
         return {"ok": True}
@@ -215,7 +238,9 @@ def _build_mcp_app() -> MCPServer:
     @mcp.tool()
     def vault_verify_credential(credential_id: int) -> dict:
         """触发验证单条凭据"""
-        _require_perm("vault_verify_credential")
+        denied = _perm_denied("vault_verify_credential")
+        if denied:
+            return denied
         key = _get_key()
         if key is None:
             return {"error": "vault_locked"}
@@ -230,7 +255,9 @@ def _build_mcp_app() -> MCPServer:
         credential_type: Optional[str] = None,
     ) -> dict:
         """批量验证（异步执行，进度通过事件推送）"""
-        _require_perm("vault_batch_verify")
+        denied = _perm_denied("vault_batch_verify")
+        if denied:
+            return denied
         key = _get_key()
         if key is None:
             return {"error": "vault_locked"}
@@ -243,14 +270,18 @@ def _build_mcp_app() -> MCPServer:
     @mcp.tool()
     def vault_list_groups() -> list[dict]:
         """列出分组"""
-        _require_perm("vault_list_groups")
+        denied = _perm_denied("vault_list_groups")
+        if denied:
+            return [denied]
         return db.list_groups()
 
     # ── vault_create_group ────────────────────────────────
     @mcp.tool()
     def vault_create_group(name: str, description: str = "", color: str = "#409EFF") -> dict:
         """创建分组"""
-        _require_perm("vault_create_group")
+        denied = _perm_denied("vault_create_group")
+        if denied:
+            return denied
         group = db.create_group(name, description, color)
         _push_event("vault:credentials_changed", {})
         return {"ok": True, "group": group}
@@ -259,14 +290,18 @@ def _build_mcp_app() -> MCPServer:
     @mcp.tool()
     def vault_list_plugins() -> list[dict]:
         """列出全部插件（含 enabled 状态，被禁用的也在内）"""
-        _require_perm("vault_list_plugins")
+        denied = _perm_denied("vault_list_plugins")
+        if denied:
+            return [denied]
         return plugin_manager.list_installed_plugins()
 
     # ── vault_get_secret ──────────────────────────────────
     @mcp.tool()
     def vault_get_secret(credential_id: int, field: Optional[str] = None) -> dict:
         """获取解密后的敏感字段（高危操作）"""
-        _require_perm("vault_get_secret")
+        denied = _perm_denied("vault_get_secret")
+        if denied:
+            return denied
         key = _get_key()
         if key is None:
             return {"error": "vault_locked"}
@@ -298,7 +333,9 @@ def _build_mcp_app() -> MCPServer:
         - `path`：写入该文件；**省略则把备份文档放在返回值的 `document` 字段里**
           （便于直接交给 `vault_import_backup` 或由 Agent 自行保存）
         """
-        _require_perm("vault_export_backup")
+        denied = _perm_denied("vault_export_backup")
+        if denied:
+            return denied
         from . import api as _api
 
         built = _api.build_backup_doc(scope, bool(encrypted), credential_ids)
@@ -335,7 +372,9 @@ def _build_mcp_app() -> MCPServer:
         `dedupe=True` 时「同类型 + 敏感值相同」的凭据会跳过；插件未安装的条目也会跳过。
         加密备份需与当前主密码一致，否则报错。
         """
-        _require_perm("vault_import_backup")
+        denied = _perm_denied("vault_import_backup")
+        if denied:
+            return denied
         from . import api as _api
 
         if document is None and not path:

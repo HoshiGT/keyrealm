@@ -49,10 +49,20 @@ Bearer Token 由 SSE 中间件校验，失败时在建立连接前直接返回 *
 {"error": "token_expired", "message": "Token 已过期"}
 ```
 
-> **权限不足不是 HTTP 403**：它发生在工具调用内部——`_require_perm` 抛 `PermissionError`，
-> MCP 客户端收到的是一次 `isError` 的工具结果，正文形如
-> `权限不足：vault_create_credential 未授权`。「全局开关关闭」与「Token 范围不匹配」都走这
-> 一条路径，错误文本相同（不区分是哪一层拒绝的）。
+> **权限不足不是 HTTP 403**：它发生在工具调用内部。**返回的是可读的错误载荷**——刻意**不抛异常**，
+> 因为客户端会把工具异常呈现成一句「Error executing tool xxx」、**把原因吞掉**（实测：用户不知道
+> 这两个工具默认关闭，屏幕上只有那一句，无从下手）。现在正文形如：
+>
+> ```json
+> {"error": "permission_denied", "tool": "vault_create_credential", "reason": "global_disabled",
+>  "message": "工具「vault_create_credential」未授权：它在 MCP 里默认就是关闭的（高危工具）。请到
+>              Credential Vault →「设置 → MCP 服务 → 工具权限」勾选启用后重试。"}
+> ```
+>
+> `reason` 区分是哪一层拒绝：**`global_disabled`**（全局开关没开 → 去「设置 → MCP 服务 →
+> 工具权限」勾选）或 **`token_scope`**（当前 Token 的允许范围不含它 → 为该 Token 勾选或换 Token）。
+> 返回类型与各工具的声明**保持一致**（`dict` 工具返回该对象、列表工具返回 `[该对象]` 单元素数组），
+> 以免触发 MCP 的输出校验。
 
 ### Token 管理（默认存在 · 仅轮换）
 
