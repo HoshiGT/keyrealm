@@ -1,9 +1,9 @@
 {
-  "name": "字节豆包",
-  "version": "1.0.0",
-  "credential_type": "llm_doubao",
+  "name": "火山方舟",
+  "version": "1.1.0",
+  "credential_type": "llm_ark",
   "author": "Credential Vault",
-  "description": "验证 字节豆包 API Key 有效性",
+  "description": "验证火山方舟（Volcengine Ark）API Key 有效性。方舟是字节的模型托管平台，同一把 key 可调豆包 / DeepSeek / 智谱 GLM / 阿里 Qwen 等多家模型",
   "icon": "logo.png",
   "fields": [
     {
@@ -20,7 +20,7 @@
       "type": "password",
       "required": true,
       "sensitive": true,
-      "placeholder": "sk-..."
+      "placeholder": "方舟控制台生成的 API Key"
     },
     {
       "key": "probe_chat",
@@ -34,8 +34,8 @@
       "label": "探测使用的模型",
       "type": "model",
       "required": false,
-      "placeholder": "留空自动选择",
-      "hint": "留空 = 自动从该凭据的模型列表里挑一个便宜的（优先 flash / lite / mini 等）。"
+      "placeholder": "留空自动选择；接入点 ep-xxx 需手输",
+      "hint": "留空 = 自动从该凭据的模型列表里挑一个便宜的（优先 flash / lite / mini 等）。注意方舟的「推理接入点」（ep-xxxxxxxx）不会出现在列表里，需要直接手输。"
     },
     {
       "key": "notes",
