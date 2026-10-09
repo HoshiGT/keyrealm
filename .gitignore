@@ -29,6 +29,10 @@ master.key
 
 # 插件启用/禁用状态（本机运行时状态，不入库；发行包也不带它）
 plugins/.state.json*
+plugins/.model_cache.json*
+
+# 构建时生成（commit hash 注入，由 scripts/build.py 写；不入库）
+backend/_build_info.py
 
 # IDE
 .vscode/

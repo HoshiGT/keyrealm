@@ -13,13 +13,13 @@ from datetime import datetime, timezone
 from typing import Optional, Union
 
 from .paths import app_dir
+# 版本号唯一事实来源见 backend/version.py（不再在这里写常量）
+from .version import LEGACY_SCHEMA_MAX, SCHEMA_VERSION  # noqa: F401  （再导出）
 
 # 应用根目录：开发时=项目根；冻结后=exe 同级目录（保证可写、可持久化）
 BASE_DIR = app_dir()
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "credentials.db"
-
-SCHEMA_VERSION = 6
 
 _lock = threading.Lock()
 _conn: Optional[sqlite3.Connection] = None
@@ -162,10 +162,18 @@ def init_db():
 
 
 def _migrate(conn: sqlite3.Connection):
-    """按 schema_version 执行增量迁移（在建表之后调用，ALTER 均有存在性检查）。"""
+    """按 schema_version 执行增量迁移（在建表之后调用，ALTER 均有存在性检查）。
+
+    **这几段只服务 1.0 之前的旧库，已冻结。** 1.0 起，数据库结构变动一律改成
+    `scripts/` 下的一次性迁移脚本（见 backend/version.py 的版本规则），应用不再新增自动迁移。
+    """
+    # 1.0 之前 schema_version 是整数（0..6）；1.0 起是语义化版本（如 "1.0.0"）。
+    # 读到**非整数**即说明是新格式 → 旧的整数迁移早已全部执行过，直接视为已过。
     try:
         row = conn.execute("SELECT value FROM settings WHERE key='schema_version'").fetchone()
         from_version = int(row["value"]) if row else 0
+    except (TypeError, ValueError):
+        from_version = LEGACY_SCHEMA_MAX
     except Exception:
         from_version = 0
 

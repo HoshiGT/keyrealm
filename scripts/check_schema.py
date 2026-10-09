@@ -36,6 +36,7 @@ for stream in (sys.stdout, sys.stderr):
         pass
 
 from backend import database as db  # noqa: E402  (必须在 sys.path 调整之后导入)
+from backend.version import SCHEMA_VERSION  # noqa: E402
 
 # 建表脚本里应当出现的每一张表
 EXPECTED_TABLES = (
@@ -177,7 +178,7 @@ def main() -> int:
         db.init_db()
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(schedules)")}
         assert "credential_ids" in cols, cols
-        assert db.get_setting("schema_version", "") == "6", db.get_setting("schema_version", "")
+        assert db.get_setting("schema_version", "") == SCHEMA_VERSION, db.get_setting("schema_version", "")
         old = next(s for s in db.list_schedules() if s["name"] == "老计划")
         assert old["credential_ids"] == [], old
         print("✓ 老库补 credential_ids 列（v5 → v6）")

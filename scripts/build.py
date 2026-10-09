@@ -10,7 +10,8 @@ release/CredentialVault。**要生成 Windows exe，必须在 Windows 上运行�
 - 进 exe：后端代码 + frontend/dist（只读资源）。
 - 不进 exe、以外部目录放在 release/ 下：
     · plugins/  —— 插件**唯一事实来源**，用户可直接编辑（改完重启即生效）；打包源码，
-                   但**不带 `.state.json`**（启用/禁用状态是本机运行时状态，不入分发包）
+                   但**不带 `.state.json`（启用/禁用）与 `.model_cache.json`（模型清单缓存）**
+                   ——都是本机运行时状态，不入分发包
     · data/     —— 运行时自动创建（数据库、主密码校验、日志）
   release/ 因此是一个自包含、可便携分发的目录，且不被 git 追踪。
 
@@ -234,6 +235,34 @@ def build_frontend() -> None:
     _run([npm, "run", "build"], cwd=FRONTEND)
 
 
+def write_build_info() -> None:
+    """把当前 commit 短 hash 写进 `backend/_build_info.py`，供 exe 内显示「构建版本」。
+
+    冻结的 exe 里**没有 git**，所以必须在打包**之前**落盘；该文件由本脚本生成、不入库
+    （见 .gitignore）。源码运行时它不存在 → `backend/version.build_id()` 会现查 git。
+    工作区有未提交改动时追加 `-dirty`，避免拿一个「改了东西却没提交」的 exe 当发布版。
+    """
+    commit = "unknown"
+    try:
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, cwd=str(ROOT))
+        if out.returncode == 0 and out.stdout.strip():
+            commit = out.stdout.strip()
+            dirty = subprocess.run(["git", "status", "--porcelain"],
+                                   capture_output=True, text=True, cwd=str(ROOT))
+            if dirty.stdout.strip():
+                commit += "-dirty"
+    except Exception as e:  # noqa: BLE001 - 万一没装 git：标 unknown，不拦构建
+        print(f"警告：无法获取 git 版本，构建版本将标为 unknown（{e}）", file=sys.stderr)
+
+    (ROOT / "backend" / "_build_info.py").write_text(
+        '"""由 scripts/build.py 生成 —— **勿手工编辑、不入库**。"""\n'
+        f'COMMIT = "{commit}"\n',
+        encoding="utf-8",
+    )
+    print(f"构建版本   : {commit}")
+
+
 def run_pyinstaller(console: bool, allow_missing: bool = False) -> None:
     """调用当前解释器的 PyInstaller，按 spec 打包到 dist/。
 
@@ -294,7 +323,8 @@ def assemble_release() -> Path:
 
     # 外部可改插件目录：复制源码形式的 plugins/（manifest.json + plugin.py）
     # 排除 __pycache__/*.pyc，避免把构建机的字节码带进分发包；
-    # 同时排除 .state.json*（启用/禁用状态是本机运行时状态）——出厂时全部插件启用。
+    # 同时排除 .state.json*（启用/禁用状态）与 .model_cache.json*（模型清单缓存，见
+    # llm_protocols 的说明）——都是本机运行时状态，出厂时不该带。
     src_plugins = ROOT / "plugins"
     dest_plugins = RELEASE / "plugins"
     if dest_plugins.exists():
@@ -303,7 +333,8 @@ def assemble_release() -> Path:
         shutil.copytree(
             src_plugins,
             dest_plugins,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".state.json*"),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc",
+                                          ".state.json*", ".model_cache.json*"),
         )
     else:
         print("警告：未找到 plugins/，release/ 将不含内置插件", file=sys.stderr)
@@ -376,6 +407,8 @@ def main() -> None:
 
     check_environment(args.allow_missing_deps)
     check_schema()
+    # 打包前落盘 commit hash（exe 里没有 git）——必须在 run_pyinstaller 之前
+    write_build_info()
 
     if args.frontend:
         build_frontend()
