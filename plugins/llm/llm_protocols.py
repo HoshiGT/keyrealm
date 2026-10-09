@@ -13,8 +13,10 @@ plugins/llm/<厂商>/plugin.py 内。
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 import httpx
@@ -365,8 +367,8 @@ def chat_completion_stream(base_url: str, api_key: str, model: str, messages: li
 
 
 # ── 模型列表（供「简单对话」选择模型）────────────────────
-def _model_items(protocol: str, base_url: str, api_key: str) -> list:
-    """请求模型列表并返回**原始条目**（dict 列表；失败/无权限返回 []）。
+def _fetch_model_items(protocol: str, base_url: str, api_key: str) -> list:
+    """请求模型列表并返回**原始条目**（**走网络、不带缓存**；失败/无权限返回 []）。
 
     与 `fetch_models` 的差别只是**保留全部字段**：只取 id 会把扩展字段丢掉，而欠费探测
     要用 OpenRouter 的 `architecture.output_modalities`（官方字段）排除非文本输出的模型
@@ -400,6 +402,31 @@ def _model_items(protocol: str, base_url: str, api_key: str) -> list:
     return [i for i in (raw or []) if isinstance(i, dict)]
 
 
+def _model_items(protocol: str, base_url: str, api_key: str, force: bool = False) -> list:
+    """带 **24h 缓存**的模型条目读取（`force=True` 绕过缓存，供用户手动刷新）。
+
+    命中且未过期就直接返回、**不发请求**；否则取一次并回写（见文件上方缓存说明）。
+    ``api_key`` 为空时与 `_fetch_model_items` 一致直接返回 []；**空结果不落盘**——那多半是
+    临时故障/限流，固化成 24h 反而更糟。
+    """
+    if not api_key:
+        return []
+    key = _cache_key(protocol, base_url, api_key)
+    now = time.time()
+    if not force:
+        entry = _cache_read().get(key)
+        if isinstance(entry, dict) and now - float(entry.get("ts") or 0) < _MODEL_CACHE_TTL:
+            items = entry.get("items")
+            if isinstance(items, list):
+                return [i for i in items if isinstance(i, dict)]
+    items = _fetch_model_items(protocol, base_url, api_key)
+    if items:
+        cache = _cache_read()
+        cache[key] = {"ts": now, "items": items}
+        _cache_write(cache)
+    return items
+
+
 def _name_of(protocol: str, item: dict) -> str:
     """从一条模型条目里取模型名（gemini 的 `models/` 前缀要去掉）。"""
     raw = str(item.get("name") if protocol == "gemini" else item.get("id") or "")
@@ -408,16 +435,59 @@ def _name_of(protocol: str, item: dict) -> str:
     return raw
 
 
-def fetch_models(protocol: str, base_url: str, api_key: str) -> list:
+def fetch_models(protocol: str, base_url: str, api_key: str, force: bool = False) -> list:
     """获取该厂商可用模型列表（best-effort，失败/无权限返回 []）。
+
+    ``force=True`` 绕过 24h 缓存并回写——**用户的「刷新模型列表」按钮走这条**，
+    所以它同时刷新的还有欠费探测用的候选模型（两者共用同一份缓存）。
 
     protocol:
       - "openai" / "openrouter" → GET {base}/models（Bearer）→ data[].id
       - "anthropic"             → GET {base}/v1/models（x-api-key）→ data[].id
       - "gemini"                → GET {base}/models?key=… → models[].name（去掉 "models/" 前缀）
     """
-    names = {_name_of(protocol, item) for item in _model_items(protocol, base_url, api_key)}
+    names = {_name_of(protocol, item) for item in _model_items(protocol, base_url, api_key, force)}
     return sorted(n for n in names if n)
+
+
+def model_items(protocol: str, base_url: str, api_key: str, force: bool = False) -> list:
+    """模型清单的**原始条目**（带 24h 缓存；公开封装）。
+
+    供**需要读扩展字段**的自定义 `list_models` 用——例如方舟要按 `status` 剔除已关停模型。
+    只想拿模型名就用 `fetch_models`。``force=True`` 穿透缓存（用户手动刷新走这条）。
+    """
+    return _model_items(protocol, base_url, api_key, force)
+
+
+def probe_model_candidates(base_url: str, api_key: str, protocol: str = "openai",
+                           force: bool = False) -> list:
+    """探测/欠费校验用的**候选模型名**（公开封装，供像 nvidia 这类自己遍历候选的插件复用）。
+
+    返回按「像便宜对话模型」排序的候选（可能为空）；结果按 24h 缓存，
+    ``force=True`` 穿透缓存（用户手动刷新走这条）。
+    """
+    return _probe_model_candidates(base_url, api_key, protocol, force)
+
+
+def resolve_chat_model(requested: str, list_models) -> str:
+    """「简单对话」的模型解析：**不写死任何模型名**。
+
+    ① 调用方给了 model → 用它；
+    ② 否则取**运行时**模型清单首项（``list_models`` 传可调用对象，延迟求值，避免无谓联网）；
+    ③ 仍拿不到 → 返回空串，由调用方报错让用户手选（**绝不退回任何内置名**）。
+    """
+    name = str(requested or "").strip()
+    if name:
+        return name
+    try:
+        models = list_models() or []
+    except Exception:  # noqa: BLE001 - 取列表失败按「没拿到」处理
+        models = []
+    for m in models:
+        text = str(m).strip()
+        if text:
+            return text
+    return ""
 
 
 # ── 欠费探测（可选项，由应用设置开关控制）───────────────
@@ -445,8 +515,51 @@ _PROBE_MAX_CANDIDATES = 10
 # 欠费探测遇到它要改用流式再试一次，否则这批模型的探测永远是「异常」。
 _STREAM_ONLY_HINT = "only support stream"
 
+# ── 模型清单缓存（默认 24h）──────────────────────────────
+# **为什么要缓存**：`/models` 会在多条路径上被反复拉取——每次欠费探测、每次「简单对话」取默认
+# 模型、每次打开模型下拉。同一把 key 的模型清单一天内几乎不变，反复请求纯属浪费，还可能撞限流。
+# **为什么 24h**：够短——新模型上线一天内就会自动出现；够长——能把请求量压下来。
+# **怎么绕过**：用户点「刷新模型列表」走 `list_models(..., force=True)`，穿透缓存并回写，
+# 所以「手动刷新」永远拿到最新，无需另设清除入口。
+# 位置放 `plugins/` 下（与 `.state.json` 同级，同样「临时文件 + 原子替换」写）；打包时会像
+# `.state.json*` 一样排除，不进发布产物。**这份缓存只存模型名/条目，绝不存密钥明文**——
+# 键里用的是密钥的 sha256 前 10 位（不可逆）。
+_MODEL_CACHE_FILE = Path(__file__).resolve().parents[1] / ".model_cache.json"
+_MODEL_CACHE_TTL = 24 * 3600
 
-def _probe_model_candidates(base_url: str, api_key: str, protocol: str) -> list:
+
+def _cache_key(protocol: str, base_url: str, api_key: str) -> str:
+    """缓存键：协议 + Base URL + **密钥指纹**。
+
+    带指纹是因为**不同账号在同一地址下能看到的模型可能不同**（最典型是账号级目录），
+    只用 protocol+base_url 会把 A 账号的清单错给 B 账号。指纹是 sha256 前 10 位，非密钥本身。
+    """
+    fp = hashlib.sha256((api_key or "").encode("utf-8")).hexdigest()[:10]
+    return f"{protocol}|{base_url.rstrip('/')}|{fp}"
+
+
+def _cache_read() -> dict:
+    try:
+        with open(_MODEL_CACHE_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001 - 读不动就当没有缓存
+        return {}
+
+
+def _cache_write(payload: dict) -> None:
+    """原子写：先写同目录临时文件再 replace，避免并发下读到半截 JSON（同 `.state.json`）。"""
+    try:
+        _MODEL_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(str(_MODEL_CACHE_FILE) + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        tmp.replace(_MODEL_CACHE_FILE)
+    except Exception:  # noqa: BLE001 - 缓存写失败不影响主流程
+        pass
+
+
+def _probe_model_candidates(base_url: str, api_key: str, protocol: str, force: bool = False) -> list:
     """挑探测用的候选模型。
 
     先按厂商声明的输出模态排除**非文本输出**的模型（OpenRouter 的
@@ -459,7 +572,7 @@ def _probe_model_candidates(base_url: str, api_key: str, protocol: str) -> list:
 
     字段不存在时（多数厂商只回 `data[].id`）退回老办法：按名字选「便宜款」，再兜底其它模型。
     """
-    items = _model_items(protocol, base_url, api_key)
+    items = _model_items(protocol, base_url, api_key, force)
     if items and any(isinstance(i.get("architecture"), dict) for i in items):
         pool = [i for i in items
                 if "text" in ((i.get("architecture") or {}).get("output_modalities") or [])]
@@ -472,7 +585,8 @@ def _probe_model_candidates(base_url: str, api_key: str, protocol: str) -> list:
 
 
 def quota_chat_probe(base_url: str, api_key: str, protocol: str = "openai",
-                     preferred_model: str = "", token_param: str = "max_tokens") -> Optional[dict]:
+                     preferred_model: str = "", token_param: str = "max_tokens",
+                     force: bool = False) -> Optional[dict]:
     """发一次最小对话请求，判断账户是否真的可用（欠费探测）。
 
     只在「凭据有效但拿不到余额」时才有意义：``/v1/models`` 对欠费账户同样返回 200，
@@ -496,7 +610,7 @@ def quota_chat_probe(base_url: str, api_key: str, protocol: str = "openai",
     if not base_url or not api_key:
         return None
     candidates = [preferred_model] if preferred_model else _probe_model_candidates(
-        base_url, api_key, protocol
+        base_url, api_key, protocol, force
     )
     candidates = [c for c in candidates if c][:_PROBE_MAX_CANDIDATES]
     if not candidates:
@@ -623,7 +737,7 @@ def _interpret_simple(resp: httpx.Response) -> VerifyResult:
         return VerifyResult(status="valid", message="凭证有效", account_info=_extract_account_info(payload))
     if status in (401, 403):
         # **403 不一定是密钥的错**——一律判「凭证无效」是**假红**，比漏报更坑人。已核实的两个：
-        #   豆包   ：403 `AccountOverdueError` / `OperationDenied.ServiceOverdue`（账户欠费）
+        #   方舟   ：403 `AccountOverdueError` / `OperationDenied.ServiceOverdue`（账户欠费）
         #   百炼   ：403 `AllocationQuota.FreeTierOnly`（免费额度用尽，需认证并充值）
         # 先读响应体，认得出欠费就报「有效 + 账户欠费」，认不出才当无效。
         if is_insufficient_balance(body_snippet(resp)):
@@ -668,7 +782,7 @@ def _interpret_chat(resp: httpx.Response) -> VerifyResult:
         return VerifyResult(status="valid", message=f"凭证有效，但请求被拒（{code}）：{snippet}")
     if status in (401, 403):
         # **403 不一定是密钥的错**——一律判「凭证无效」是**假红**，比漏报更坑人。已核实的两个：
-        #   豆包   ：403 `AccountOverdueError` / `OperationDenied.ServiceOverdue`（账户欠费）
+        #   方舟   ：403 `AccountOverdueError` / `OperationDenied.ServiceOverdue`（账户欠费）
         #   百炼   ：403 `AllocationQuota.FreeTierOnly`（免费额度用尽，需认证并充值）
         # 先读响应体，认得出欠费就报「有效 + 账户欠费」，认不出才当无效。
         if is_insufficient_balance(body_snippet(resp)):

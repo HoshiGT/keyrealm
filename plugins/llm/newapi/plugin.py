@@ -37,7 +37,7 @@ import httpx
 
 from backend.plugin_sdk import VerifyResult, guarded, make_client, safe_json
 from llm_common import make_quota_probe, plausible_amount
-from llm_protocols import probe_openai_models, chat_completion, fetch_models, chat_completion_stream
+from llm_protocols import probe_openai_models, chat_completion, fetch_models, chat_completion_stream, resolve_chat_model
 
 NAME = "New API 中转站"
 DEFAULT_BASE_URL = ""
@@ -176,22 +176,21 @@ def verify(data: dict) -> VerifyResult:
     return _verify(data or {})
 
 
-def list_models(data: dict) -> list:
+def list_models(data: dict, force: bool = False) -> list:
     """获取该站点可用模型列表（供「简单对话」选择模型）。"""
     data = data or {}
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
-    return fetch_models("openai", base_url, (data.get("api_key") or "").strip())
+    return fetch_models("openai", base_url, (data.get("api_key") or "").strip(), force)
 
 
 # ── 可选操作：简单对话 ──────────────────────────────────
-CHAT_MODEL = ""
 
 
 def actions(data: dict) -> list[dict]:
     """声明可用操作（凭据含 API Key 时才提供简单对话）。"""
     if not (data or {}).get("api_key"):
         return []
-    return [{"id": "chat", "name": "简单对话", "kind": "chat", "model": CHAT_MODEL}]
+    return [{"id": "chat", "name": "简单对话", "kind": "chat", "model": ""}]
 
 
 def run_action(action_id: str, params: dict, data: dict) -> dict:
@@ -203,10 +202,13 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
     if not base_url:
         return {"ok": False, "error": "需要填写站点地址"}
     params = params or {}
+    model = resolve_chat_model(params.get("model"), lambda: list_models(data))
+    if not model:
+        return {"ok": False, "error": "无法确定模型：请先选择模型（自动获取模型列表失败）"}
     return chat_completion(
         base_url,
         (data.get("api_key") or "").strip(),
-        params.get("model") or CHAT_MODEL,
+        model,
         params.get("messages") or [],
         protocol="openai",
     )
@@ -221,10 +223,13 @@ def stream_action(action_id: str, params: dict, data: dict, on_delta) -> dict:
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
     if not base_url:
         return {"ok": False, "error": "需要填写站点地址"}
+    model = resolve_chat_model(params.get("model"), lambda: list_models(data))
+    if not model:
+        return {"ok": False, "error": "无法确定模型：请先选择模型（自动获取模型列表失败）"}
     return chat_completion_stream(
         base_url,
         (data.get("api_key") or "").strip(),
-        params.get("model") or CHAT_MODEL,
+        model,
         params.get("messages") or [],
         protocol="openai",
         on_delta=on_delta,

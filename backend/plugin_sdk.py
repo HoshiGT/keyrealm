@@ -42,7 +42,7 @@
 `actions(data) -> list`         可选：声明可用操作
 `run_action(id, params, data)`  可选：执行操作 → `{"ok", "output", "error"}`
 `capabilities(data) -> dict`    可选：报告当前凭据**真正能用**的操作（fail-open）
-`list_models(data) -> list`     可选：可用模型名列表
+`list_models(data, force)`      可选：可用模型名列表（force=用户手动刷新，穿透清单缓存）
 `stream_action(...)`            可选：流式执行操作（回报进度、支持取消）
 `quota_probe(data) -> dict`     可选：余额拿不到时的欠费探测
 ============================== =================================================

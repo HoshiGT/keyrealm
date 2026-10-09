@@ -52,7 +52,8 @@ from backend.plugin_sdk import (
     timeout,
 )
 from llm_common import make_quota_probe
-from llm_protocols import probe_openai_models, chat_completion, fetch_models, chat_completion_stream
+from llm_protocols import (probe_openai_models, chat_completion, fetch_models,
+                           chat_completion_stream, resolve_chat_model)
 
 NAME = "OpenAI"
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -87,28 +88,50 @@ _PRIMARY_WINDOW_SECONDS = 18000
 _USAGE_TIMEOUT = 6.0
 
 # ── codex 对话的模型名 ────────────────────────────────────────────────────
-# **优先走官方目录端点**（见 `_codex_models_from_api`），下面这份只是它拿不到时的兜底。
-# 名单以**实测到的真实账号清单**为准（2026-10-08 用一把 Plus 账号打目录端点，取
-# `visibility == "list"` 的条目）：gpt-6-astra / gpt-6-sol / gpt-6-luna /
-# gpt-5.6-sol / gpt-5.6-terra / gpt-5.6-luna（另有 3 个 `visibility=="hide"` 的被排除）。
-# **光看官方文档会挑错**：`learn.chatgpt.com/docs/models` 推荐的是 `gpt-6.1-sol`，
-# 但它**不在**这把账号的可用集里——模型清单随账号/套餐而变，所以「以端点返回的真实清单为准」，
-# 官方 doc 名只作为兜底尾巴保留。旧值（`gpt-5.1-codex-mini` 等）是凭印象编的，
-# 实测直接 400：`The 'gpt-5.1-codex-mini' model is not supported when using Codex with a
-# ChatGPT account.`；`gpt-5.2-codex`/`gpt-5.3-codex` 官方已标**登录态下 deprecated**，不放进来。
-# 界面上的「模型」下拉允许手输（allow-create）覆盖这里。
-CODEX_MODELS = [
-    "gpt-6-astra",
-    "gpt-6-sol",
-    "gpt-6-luna",
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-    "gpt-6.1-sol",
-]
-# 默认对话模型：这个操作是「**简单**对话」，按官方文档自己的建议「轻量重复任务用 Luna」，
-# 且 `gpt-6-luna` 在实测账号里确实存在 → 取它，比原来的 `gpt-6.1-sol`（该账号没有）稳。
-CODEX_CHAT_MODEL = "gpt-6-luna"
+# **这里不再写死任何模型名**：清单一律现取——优先官方目录端点（`_codex_models_from_api`），
+# 其次 Codex CLI 的本地缓存（`~/.codex/models_cache.json`，`_codex_models_from_cli_cache`）；
+# 两者都没有就返回空，由界面上的「模型」下拉（允许手输）兜底。
+#
+# ⚠️ **为什么以前「看不见 gpt-6.1」**：目录端点是**按客户端版本**发的——
+# `?client_version=` 低于 `0.159.0` 时，服务端**根本不返回** `gpt-6.1-sol`
+# （2026-10-09 实测：0.157.1 → 9 条；0.159.0 → 10 条且含 gpt-6.1-sol），而该参数**必填**
+# （不带 → 400）。旧代码把版本写死成 0.157.1，等于永久自锁在旧目录 → 见 `_codex_client_version`。
+#
+# 另注：目录里的清单**不等于**端点的准入白名单——`gpt-5.5` 标 `hide` 也照样能对话，
+# `gpt-6.1-sol` 目录里没有、`/codex/responses` 却接受（同日实测）。所以「列表里没有」
+# 只影响下拉显示，不影响能否调用。
+
+
+def _version_ge(value: str, floor: str) -> bool:
+    """``value`` 是否 >= ``floor``（点分数字比较；解析不了当 False）。"""
+    def parts(v: str) -> list:
+        try:
+            return [int(x) for x in str(v).strip().split(".") if x != ""]
+        except ValueError:
+            return []
+    a, b = parts(value), parts(floor)
+    return bool(a) and bool(b) and a >= b
+
+
+def _codex_client_version() -> str:
+    """取目录端点 `?client_version=` 要用的版本号。
+
+    优先用**本机 Codex 的真实版本**（`models_cache.json` 的 `client_version` →
+    `version.json` 的 `latest_version`）；但**不低于** `_CODEX_MIN_CLIENT_VERSION`——
+    低于它服务端会隐去较新的模型（如实测的 gpt-6.1-sol），而本机装的 codex 旧版就会踩这个坑。
+    该参数**必填**（不带 → 400），所以必须有兜底值。
+    """
+    detected = ""
+    for path, key in ((_CODEX_CLI_CACHE, "client_version"),
+                      (os.path.expanduser("~/.codex/version.json"), "latest_version")):
+        try:
+            with open(path, encoding="utf-8") as f:
+                detected = str((json.load(f) or {}).get(key) or "").strip()
+        except Exception:  # noqa: BLE001 - 读不到就试下一个来源
+            continue
+        if detected:
+            break
+    return detected if _version_ge(detected, _CODEX_MIN_CLIENT_VERSION) else _CODEX_MIN_CLIENT_VERSION
 
 # 官方**目录端点**（Codex CLI 自己走的就是这条）。它不属于公开 API，但与既有的
 # `/backend-api/me` 同源、**只读**。路径与查询参数取自官方仓库 `openai/codex` 的
@@ -118,8 +141,10 @@ CODEX_CHAT_MODEL = "gpt-6-luna"
 # （6 条 `visibility=="list"`、3 条 `"hide"`）；**不带** `chatgpt-account-id` 头同样 200
 # （认证层与 `/me` 完全相同，无此头也认）。
 CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models"
-# 供 `?client_version=` 用；官方 CLI 会报自己的版本，这里取一个已知可用的值即可
-CODEX_CLIENT_VERSION = "0.157.1"
+# `?client_version=` 的**下界**：低于它服务端会隐去较新模型（实测 0.159.0 起才返回 gpt-6.1-sol）。
+# 真实版本由 `_codex_client_version()` 现取；只有本机 codex 版本更低/读不到时才退回这个下界。
+# 它是**版本号不是模型名**，且该参数必填（不带 → 400），所以必须有兜底。
+_CODEX_MIN_CLIENT_VERSION = "0.159.1"
 # /codex/responses 的 instructions 必填且不能为空（缺了会被 400）
 CODEX_INSTRUCTIONS = "You are Codex, a coding assistant. Answer concisely."
 
@@ -176,7 +201,7 @@ def _codex_models_from_api(access_token: str, account_id: str = "") -> list:
         with make_client() as client:
             resp = client.get(
                 CODEX_MODELS_URL,
-                params={"client_version": CODEX_CLIENT_VERSION},
+                params={"client_version": _codex_client_version()},
                 headers=_chatgpt_headers(access_token, account_id),
             )
         if resp.status_code != 200:
@@ -653,28 +678,28 @@ def _verify_chatgpt(auth: dict) -> VerifyResult:
 
 # ── 模型列表（仅 API Key 模式） ───────────────────────────
 
-def list_models(data: dict) -> list:
+def list_models(data: dict, force: bool = False) -> list:
     """获取该厂商可用模型列表（供「简单对话」选择模型）。
 
-    api_key 模式打 ``/v1/models``；chatgpt 模式该端点**没有列表接口**，优先读 Codex CLI
-    自己的缓存（那是本账号真实的清单，见 `_codex_models_from_cli_cache`），读不到才用内置那份
-    （该端点名字会变，界面上「模型」下拉也允许手输覆盖）。
+    api_key 模式打 ``/v1/models``；chatgpt 模式的目录端点**按客户端版本**发清单
+    （见 `_codex_client_version`），再退到 Codex CLI 的本地缓存。**不再有内置兜底名单**——
+    两者都拿不到就返回空，由界面允许手输的「模型」下拉兜底。
+
+    ``force=True`` 是用户点「刷新模型列表」——穿透 24h 模型清单缓存（api_key 模式）。
     """
     data = data or {}
     if _is_chatgpt(data):
-        # 三级回退：官方目录端点（该账号真实清单）→ Codex CLI 的本地缓存 → 内置推荐名单
+        # 两级：官方目录端点（该账号真实清单）→ Codex CLI 的本地缓存；都空就空
         auth = _read_auth(data)
         return (
             _codex_models_from_api(auth.get("access_token", ""), _chatgpt_account_id(data))
             or _codex_models_from_cli_cache()
-            or list(CODEX_MODELS)
         )
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
-    return fetch_models("openai", base_url, (data.get("api_key") or "").strip())
+    return fetch_models("openai", base_url, (data.get("api_key") or "").strip(), force)
 
 
 # ── 可选操作：简单对话（api_key 模式） ─────────────────────
-CHAT_MODEL = "gpt-4o-mini"
 
 
 # ── 可选操作：登录态详情（chatgpt 模式，纯本地、无副作用、不联网） ──
@@ -784,7 +809,9 @@ def _codex_chat(access_token: str, account_id: str, model: str, messages: list, 
     """
     if not access_token:
         return {"ok": False, "error": "缺少 access_token", "output": ""}
-    model = str(model or "").strip() or CODEX_CHAT_MODEL
+    model = str(model or "").strip()
+    if not model:
+        return {"ok": False, "error": "缺少模型名", "output": ""}
     body = {
         "model": model,
         "instructions": CODEX_INSTRUCTIONS,  # 必填且不能为空，缺了会被 400
@@ -849,14 +876,14 @@ def _chatgpt_account_id(data: dict) -> str:
     return _account_id_from(_extract_claims(_decode_jwt_payload(auth["access_token"])))
 
 
-_CHAT_ACTION = {"id": "chat", "name": "简单对话", "kind": "chat", "model": CHAT_MODEL}
+_CHAT_ACTION = {"id": "chat", "name": "简单对话", "kind": "chat", "model": ""}
 
-# codex 模式的「简单对话」：走 chatgpt.com 的实验性端点，默认模型可被用户手输覆盖
+# codex 模式的「简单对话」：走 chatgpt.com 的实验性端点；模型运行时取目录清单首项，可被用户手输覆盖
 _CODEX_CHAT_ACTION = {
     "id": "chat",
     "name": "简单对话",
     "kind": "chat",
-    "model": CODEX_CHAT_MODEL,
+    "model": "",
     "group": "对话",
     "order": 5,
     "description": "直连 chatgpt.com 的实验性 codex 端点（SSE 流式）；模型名可手输覆盖",
@@ -964,6 +991,14 @@ def _do_refresh(data: dict) -> dict:
     return {"ok": True, "output": "；".join(parts), "updated_data": patch}
 
 
+def _resolve_model(data: dict, params: dict) -> str:
+    """解析本次「简单对话」用的模型：用户指定优先，否则取运行时模型清单首项。
+
+    **绝不退回任何写死的模型名**——拿不到就返回空串，由调用方提示用户手选。
+    """
+    return resolve_chat_model(params.get("model"), lambda: list_models(data))
+
+
 def actions(data: dict) -> list[dict]:
     """声明可用操作，按认证方式返回：
 
@@ -994,11 +1029,14 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
         if action_id == "refresh":
             return _do_refresh(data)
         if action_id == "chat":
+            model = _resolve_model(data, params)
+            if not model:
+                return {"ok": False, "error": "无法确定模型：请先选择模型（自动获取模型列表失败）"}
             auth = _read_auth(data)
             return _codex_chat(
                 auth["access_token"],
                 _chatgpt_account_id(data),
-                params.get("model") or CODEX_CHAT_MODEL,
+                model,
                 params.get("messages") or [],
             )
         if action_id != "token_info":
@@ -1014,10 +1052,13 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
     if not base_url:
         return {"ok": False, "error": "需要填写 Base URL"}
+    model = _resolve_model(data, params)
+    if not model:
+        return {"ok": False, "error": "无法确定模型：请先选择模型（自动获取模型列表失败）"}
     return chat_completion(
         base_url,
         (data.get("api_key") or "").strip(),
-        params.get("model") or CHAT_MODEL,
+        model,
         params.get("messages") or [],
         protocol="openai",
         token_param=TOKEN_PARAM,
@@ -1036,21 +1077,27 @@ def stream_action(action_id: str, params: dict, data: dict, on_delta) -> dict:
     if action_id != "chat":
         return run_action(action_id, params, data)
     if _is_chatgpt(data):
+        model = _resolve_model(data, params)
+        if not model:
+            return {"ok": False, "error": "无法确定模型：请先选择模型（自动获取模型列表失败）"}
         auth = _read_auth(data)
         return _codex_chat(
             auth["access_token"],
             _chatgpt_account_id(data),
-            params.get("model") or CODEX_CHAT_MODEL,
+            model,
             params.get("messages") or [],
             on_delta=on_delta,
         )
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
     if not base_url:
         return {"ok": False, "error": "需要填写 Base URL"}
+    model = _resolve_model(data, params)
+    if not model:
+        return {"ok": False, "error": "无法确定模型：请先选择模型（自动获取模型列表失败）"}
     return chat_completion_stream(
         base_url,
         (data.get("api_key") or "").strip(),
-        params.get("model") or CHAT_MODEL,
+        model,
         params.get("messages") or [],
         protocol="openai",
         token_param=TOKEN_PARAM,

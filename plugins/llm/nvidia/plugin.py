@@ -5,8 +5,11 @@
 （坏 key → 401/403，真 key → 200，欠费 → 402/429）。
 
 但 NVIDIA **会下线模型**，且各账号开通的模型不同（清单是过期超集：大量 410 Gone
-与 404 Not found for account），所以**不能赌单个模型名**——候选短名单逐个短超时试，
-命中即止（历史上的硬编码 model 就曾因「网关接受后永不响应」把真 key 必卡成超时）。
+与 404 Not found for account），所以**不能赌单个模型名**——候选逐个短超时试，命中即止
+（历史上的硬编码 model 就曾因「网关接受后永不响应」把真 key 必卡成超时）。
+
+候选名单**不再写死**：运行时从 ``/v1/models`` 按「像便宜对话模型」的线索现挑，
+结果按 24h 缓存（见 ``llm_protocols`` 的模型清单缓存说明）；用户点「刷新模型列表」即穿透缓存。
 
 > **哪些是实测、哪些有官方背书**（2026-10-07 逐页核对官方文档后的结论）：
 > 上面三点——「`/v1/models` 不鉴权」「清单是过期超集、下线模型返 410/404」「欠费 → 402/429」
@@ -34,24 +37,16 @@ from llm_protocols import (
     fetch_models,
     chat_completion_stream,
     quota_chat_probe,
+    probe_model_candidates,
+    resolve_chat_model,
 )
 
 NAME = "NVIDIA NIM"
 DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
 PROTOCOL = "openai_chat"
 
-# 探针候选模型（按偏好排序）：verify 与欠费探测都从这里依次试，命中即止。
-# 只列「本账号实测能 200 的通用对话模型」不够通用——不同账号开通情况不同，
-# 所以靠「多个候选 + 短超时 + 换下一个」而不是押注某一个名字。
-PROBE_MODELS = (
-    "nvidia/nemotron-3-super-120b-a12b",
-    "openai/gpt-oss-20b",
-    "meta/llama-3.2-11b-vision-instruct",
-)
 # 单个候选给的超时：多个候选累加也不能太久。卡住的模型会烧满这个值再换下一个。
 PROBE_TIMEOUT = 10.0
-
-CHAT_MODEL = PROBE_MODELS[0]
 
 
 def validate(data: dict) -> list[str]:
@@ -68,9 +63,17 @@ def validate(data: dict) -> list[str]:
 
 
 def _candidates(data: dict) -> list[str]:
-    """探针候选：凭据指定的 ``probe_model`` 优先，其后依次是内置短名单。"""
-    preferred = str((data or {}).get("probe_model") or "").strip()
-    return ([preferred] if preferred else []) + [m for m in PROBE_MODELS if m != preferred]
+    """探针候选：凭据指定的 ``probe_model`` 优先，其后是**运行时**从 ``/v1/models`` 挑的候选。
+
+    名单来自 ``probe_model_candidates``（按 24h 缓存，用户刷新即穿透）——**不再内置写死短名单**。
+    NVIDIA 的清单是过期超集，所以仍然靠「多个候选 + 短超时 + 换下一个」而不是押注某一个名字。
+    """
+    data = data or {}
+    preferred = str(data.get("probe_model") or "").strip()
+    base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
+    api_key = (data.get("api_key") or "").strip()
+    dynamic = probe_model_candidates(base_url, api_key, "openai")
+    return ([preferred] if preferred else []) + [m for m in dynamic if m != preferred]
 
 
 def _verify(data: dict) -> VerifyResult:
@@ -84,7 +87,13 @@ def _verify(data: dict) -> VerifyResult:
 
     tried: list[str] = []
     reason = ""
-    for model in _candidates(data):
+    candidates = _candidates(data)
+    if not candidates:
+        return VerifyResult(
+            status="error",
+            message=f"拿不到候选模型（{base_url} 的模型列表为空），无法验证",
+        )
+    for model in candidates:
         tried.append(model)
         try:
             result = probe_openai_chat(base_url, api_key, model, timeout=PROBE_TIMEOUT)
@@ -112,10 +121,11 @@ def verify(data: dict) -> VerifyResult:
 
 
 def quota_probe(data: dict) -> dict | None:
-    """欠费探测（凭据开关 ``probe_chat``，默认关）：复用 verify 的候选名单。
+    """欠费探测（凭据开关 ``probe_chat``，默认关）：复用 verify 那套**运行时候选**。
 
-    通用实现会「自动挑一个名字像 flash 的便宜模型」，在 NVIDIA 上正好会挑到
-    已失效/挂死的款，所以这里自己走候选名单。
+    通用实现 ``make_quota_probe`` 只会「自动挑一个名字像 flash 的便宜模型」然后**只试它一个**；
+    NVIDIA 的清单是过期超集，单一模型很容易挑到已失效/挂死的款，所以这里**逐个候选试**、
+    命中即止（候选来源与 verify 相同：``probe_model_candidates``，带 24h 缓存）。
     """
     data = data or {}
     if not probe_requested(data):
@@ -133,11 +143,14 @@ def quota_probe(data: dict) -> dict | None:
     return quota_unknown()
 
 
-def list_models(data: dict) -> list:
-    """获取该厂商可用模型列表（供「简单对话」选择模型）。"""
+def list_models(data: dict, force: bool = False) -> list:
+    """获取该厂商可用模型列表（供「简单对话」选择模型）。
+
+    ``force=True`` 是用户点「刷新模型列表」——穿透 24h 缓存。
+    """
     data = data or {}
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
-    return fetch_models("openai", base_url, (data.get("api_key") or "").strip())
+    return fetch_models("openai", base_url, (data.get("api_key") or "").strip(), force)
 
 
 # ── 可选操作：简单对话 ──────────────────────────────────
@@ -146,7 +159,7 @@ def actions(data: dict) -> list[dict]:
     """声明可用操作（凭据含 API Key 时才提供简单对话）。"""
     if not (data or {}).get("api_key"):
         return []
-    return [{"id": "chat", "name": "简单对话", "kind": "chat", "model": CHAT_MODEL}]
+    return [{"id": "chat", "name": "简单对话", "kind": "chat", "model": ""}]
 
 
 def run_action(action_id: str, params: dict, data: dict) -> dict:
@@ -158,10 +171,13 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
     if not base_url:
         return {"ok": False, "error": "需要填写 Base URL"}
     params = params or {}
+    model = resolve_chat_model(params.get("model"), lambda: list_models(data))
+    if not model:
+        return {"ok": False, "error": "无法确定模型：请先选择模型（自动获取模型列表失败）"}
     return chat_completion(
         base_url,
         (data.get("api_key") or "").strip(),
-        params.get("model") or CHAT_MODEL,
+        model,
         params.get("messages") or [],
         protocol="openai",
     )
@@ -177,10 +193,13 @@ def stream_action(action_id: str, params: dict, data: dict, on_delta) -> dict:
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
     if not base_url:
         return {"ok": False, "error": "需要填写 Base URL"}
+    model = resolve_chat_model(params.get("model"), lambda: list_models(data))
+    if not model:
+        return {"ok": False, "error": "无法确定模型：请先选择模型（自动获取模型列表失败）"}
     return chat_completion_stream(
         base_url,
         (data.get("api_key") or "").strip(),
-        params.get("model") or CHAT_MODEL,
+        model,
         params.get("messages") or [],
         protocol="openai",
         on_delta=on_delta,

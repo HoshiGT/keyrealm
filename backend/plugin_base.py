@@ -300,15 +300,22 @@ def call_run_action(module: Any, action_id: str, params: dict, data: dict) -> di
         return {"ok": False, "error": f"操作失败: {_friendly_error(e)}"}
 
 
-def call_list_models(module: Any, data: dict) -> list:
+def call_list_models(module: Any, data: dict, force: bool = False) -> list:
     """调用插件的可选 list_models(data)：返回可用模型名列表。
 
     未实现、取列表失败或异常时返回空列表（前端回退为手动输入）。
+
+    ``force`` 表示**用户手动刷新**：插件接受的话透传下去（插件据此穿透模型清单缓存），
+    没写这个参数的老插件就不传——用 `_accepts_keyword` 判，免得一个 TypeError 把好插件
+    打成「执行失败」。
     """
     if not hasattr(module, "list_models"):
         return []
     try:
-        result = module.list_models(data or {})
+        if force and _accepts_keyword(module.list_models, "force"):
+            result = module.list_models(data or {}, force=True)
+        else:
+            result = module.list_models(data or {})
         return [str(x) for x in result] if isinstance(result, list) else []
     except Exception as e:
         # 取模型列表失败会让前端对话框回退为手动输入，用户看不到原因，必须留痕

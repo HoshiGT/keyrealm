@@ -10,7 +10,7 @@ from typing import Optional
 
 from backend.plugin_sdk import VerifyResult, guarded, make_client, safe_json
 from llm_common import make_quota_probe, plausible_amount
-from llm_protocols import probe_openai_models, chat_completion, fetch_models, chat_completion_stream
+from llm_protocols import probe_openai_models, chat_completion, fetch_models, chat_completion_stream, resolve_chat_model
 
 NAME = "DeepSeek"
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
@@ -121,25 +121,24 @@ def verify(data: dict) -> VerifyResult:
     return _verify(data or {})
 
 
-def list_models(data: dict) -> list:
+def list_models(data: dict, force: bool = False) -> list:
     """获取该厂商可用模型列表（供「简单对话」选择模型）。"""
     data = data or {}
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
-    return fetch_models("openai", base_url, (data.get("api_key") or "").strip())
+    return fetch_models("openai", base_url, (data.get("api_key") or "").strip(), force)
 
 
 # ── 可选操作：简单对话 ──────────────────────────────────
-# 默认对话模型。官方 list-models 页现在只列 `deepseek-flash`（V4.1-Flash）与 `deepseek-v4-pro`，
-# 旧的 `deepseek-chat` / `deepseek-reasoner` 已不再出现——思考与否现在是**同一个模型 + 参数**
-# （`thinking={"type":"disabled"}` 或 `reasoning_effort:"none"`），不再靠换模型名区分。
-CHAT_MODEL = "deepseek-flash"
+# （模型不写死：运行时取 `/models` 清单首项。）官方 list-models 页现列 `deepseek-flash`（V4.1-Flash）
+# 与 `deepseek-v4-pro`；旧的 `deepseek-chat` / `deepseek-reasoner` 已不再出现——思考与否现在是
+# **同一个模型 + 参数**（`thinking={"type":"disabled"}` 或 `reasoning_effort:"none"`），不再靠换模型名区分。
 
 
 def actions(data: dict) -> list[dict]:
     """声明可用操作（凭据含 API Key 时才提供简单对话）。"""
     if not (data or {}).get("api_key"):
         return []
-    return [{"id": "chat", "name": "简单对话", "kind": "chat", "model": CHAT_MODEL}]
+    return [{"id": "chat", "name": "简单对话", "kind": "chat", "model": ""}]
 
 
 def run_action(action_id: str, params: dict, data: dict) -> dict:
@@ -151,10 +150,13 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
     if not base_url:
         return {"ok": False, "error": "需要填写 Base URL"}
     params = params or {}
+    model = resolve_chat_model(params.get("model"), lambda: list_models(data))
+    if not model:
+        return {"ok": False, "error": "无法确定模型：请先选择模型（自动获取模型列表失败）"}
     return chat_completion(
         base_url,
         (data.get("api_key") or "").strip(),
-        params.get("model") or CHAT_MODEL,
+        model,
         params.get("messages") or [],
         protocol="openai",
     )
@@ -170,10 +172,13 @@ def stream_action(action_id: str, params: dict, data: dict, on_delta) -> dict:
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
     if not base_url:
         return {"ok": False, "error": "需要填写 Base URL"}
+    model = resolve_chat_model(params.get("model"), lambda: list_models(data))
+    if not model:
+        return {"ok": False, "error": "无法确定模型：请先选择模型（自动获取模型列表失败）"}
     return chat_completion_stream(
         base_url,
         (data.get("api_key") or "").strip(),
-        params.get("model") or CHAT_MODEL,
+        model,
         params.get("messages") or [],
         protocol="openai",
         on_delta=on_delta,

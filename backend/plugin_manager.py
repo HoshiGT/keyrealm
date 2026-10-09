@@ -634,14 +634,17 @@ def run_plugin_action(credential_type: str, action_id: str, params: dict, data: 
         return call_run_action(module, action_id, params, data)
 
 
-def plugin_models(credential_type: str, data: dict) -> list:
-    """该插件对给定凭据可用的模型列表（可选能力）。"""
+def plugin_models(credential_type: str, data: dict, force: bool = False) -> list:
+    """该插件对给定凭据可用的模型列表（可选能力）。
+
+    ``force=True`` 表示**用户手动刷新**，透传给插件的 ``list_models``（穿透 24h 模型清单缓存）。
+    """
     module = get_module(credential_type)
     if module is None:
         return []
     with proxy_store.credential_proxy_scope(data, credential_type) as outlet:
         _log_proxy_outlet("模型列表", credential_type, outlet, data)
-        return call_list_models(module, data)
+        return call_list_models(module, data, force)
 
 
 def stream_plugin_action(credential_type: str, action_id: str, params: dict, data: dict,

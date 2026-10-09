@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from backend.plugin_sdk import VerifyResult, guarded, log
 from llm_common import make_quota_probe
-from llm_protocols import probe_openai_models, chat_completion, fetch_models, chat_completion_stream
+from llm_protocols import probe_openai_models, chat_completion, fetch_models, chat_completion_stream, resolve_chat_model
 
 NAME = "MiniMax"
 # 官方只承认两套按地区分的域名：国内 `api.minimax.cn`、国际 `api.minimax.io`，**都带 `/v1`**。
@@ -76,25 +76,24 @@ def verify(data: dict) -> VerifyResult:
     return _verify(data or {})
 
 
-def list_models(data: dict) -> list:
+def list_models(data: dict, force: bool = False) -> list:
     """获取该厂商可用模型列表（供「简单对话」选择模型）。"""
     data = data or {}
     base_url = _base_url(data)
-    return fetch_models("openai", base_url, (data.get("api_key") or "").strip())
+    return fetch_models("openai", base_url, (data.get("api_key") or "").strip(), force)
 
 
 # ── 可选操作：简单对话 ──────────────────────────────────
-# 默认对话模型。官方文档里 `abab6.5s-chat` 已经**完全不再出现**（连 legacy 页都没有），
-# 现役是 M 系列。这里只给一个能用的默认值——「模型」下拉本来就由 list_models 从
-# `/v1/models` 实时拉取，且允许手输覆盖。
-CHAT_MODEL = "MiniMax-M2.5"
+# （模型不写死：运行时取 `/models` 清单首项。）官方文档里 `abab6.5s-chat` 已**完全不再出现**
+# （连 legacy 页都没有），现役是 M 系列；「模型」下拉由 list_models 从 `/v1/models` 实时拉取，
+# 且允许手输覆盖。
 
 
 def actions(data: dict) -> list[dict]:
     """声明可用操作（凭据含 API Key 时才提供简单对话）。"""
     if not (data or {}).get("api_key"):
         return []
-    return [{"id": "chat", "name": "简单对话", "kind": "chat", "model": CHAT_MODEL}]
+    return [{"id": "chat", "name": "简单对话", "kind": "chat", "model": ""}]
 
 
 def run_action(action_id: str, params: dict, data: dict) -> dict:
@@ -106,10 +105,13 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
     if not base_url:
         return {"ok": False, "error": "需要填写 Base URL"}
     params = params or {}
+    model = resolve_chat_model(params.get("model"), lambda: list_models(data))
+    if not model:
+        return {"ok": False, "error": "无法确定模型：请先选择模型（自动获取模型列表失败）"}
     return chat_completion(
         base_url,
         (data.get("api_key") or "").strip(),
-        params.get("model") or CHAT_MODEL,
+        model,
         params.get("messages") or [],
         protocol="openai",
         token_param=TOKEN_PARAM,
@@ -126,10 +128,13 @@ def stream_action(action_id: str, params: dict, data: dict, on_delta) -> dict:
     base_url = _base_url(data)
     if not base_url:
         return {"ok": False, "error": "需要填写 Base URL"}
+    model = resolve_chat_model(params.get("model"), lambda: list_models(data))
+    if not model:
+        return {"ok": False, "error": "无法确定模型：请先选择模型（自动获取模型列表失败）"}
     return chat_completion_stream(
         base_url,
         (data.get("api_key") or "").strip(),
-        params.get("model") or CHAT_MODEL,
+        model,
         params.get("messages") or [],
         protocol="openai",
         token_param=TOKEN_PARAM,

@@ -19,7 +19,7 @@ from backend.plugin_sdk import (
     timeout,
 )
 from llm_common import probe_model, probe_requested, quota_insufficient, quota_ok, quota_unknown
-from llm_protocols import is_insufficient_balance
+from llm_protocols import is_insufficient_balance, resolve_chat_model
 
 NAME = "百度文心"
 DEFAULT_BASE_URL = "https://aip.baidubce.com"
@@ -102,8 +102,8 @@ def verify(data: dict) -> VerifyResult:
 
 
 # ── 可选操作：简单对话 ──────────────────────────────────
-CHAT_MODEL = "ernie-4.0-8k"
-# 模型 → 文心聊天端点后缀（不同模型对应不同 endpoint）
+# 模型 → 文心聊天端点后缀。**这是百度协议要求的路由表**（不同模型挂不同 endpoint 后缀，
+# 且文心没有 OpenAI 式的 `/models` 列表接口），不是「默认模型」——所以它保留。
 _CHAT_ENDPOINTS = {
     "ernie-4.0-8k": "completions_pro",
     "ernie-3.5-8k": "completions",
@@ -147,11 +147,15 @@ def actions(data: dict) -> list[dict]:
     """声明可用操作（凭据含 API Key 时才提供简单对话）。"""
     if not (data or {}).get("api_key"):
         return []
-    return [{"id": "chat", "name": "简单对话", "kind": "chat", "model": CHAT_MODEL}]
+    return [{"id": "chat", "name": "简单对话", "kind": "chat", "model": ""}]
 
 
-def list_models(data: dict) -> list:
-    """可选模型即本插件内置的端点表（文心没有 OpenAI 式的 /models 列表接口）。"""
+def list_models(data: dict, force: bool = False) -> list:
+    """可选模型即本插件的**端点路由表**（文心没有 OpenAI 式的 `/models` 列表接口）。
+
+    路由表是协议要求、不是「写死的默认模型」，所以这里直接返回它的键。
+    ``force`` 对本插件无缓存效果（不联网取列表），仅为契约一致性而接受。
+    """
     return list(_CHAT_ENDPOINTS)
 
 
@@ -162,7 +166,9 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
     data = data or {}
     params = params or {}
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
-    model = (params.get("model") or CHAT_MODEL).strip()
+    model = resolve_chat_model(params.get("model"), lambda: list_models(data)).strip()
+    if not model:
+        return {"ok": False, "error": "无法确定模型：请先选择模型（本插件模型表为空）"}
     endpoint = _CHAT_ENDPOINTS.get(model)
     if not endpoint:
         return {
@@ -206,8 +212,9 @@ def get_display_summary(data: dict) -> str:
 # ── 可选：欠费探测（鉴权非通用格式，故自行实现，不走 make_quota_probe）──────
 # 文心既要用 API_KEY|SECRET_KEY 换 access_token、聊天端点又按模型分路径，通用实现拼不出来。
 # 免费档模型（ernie-speed / lite / tiny）不计费，欠费时照样能对话、看不出问题，
-# 所以自动选型刻意只挑**付费档**（ernie-3.5-8k 最便宜，其次 4.0）。
-_PROBE_MODELS = ("ernie-3.5-8k", "ernie-4.0-8k")
+# 所以自动选型只挑**付费档**。付费档**不另写名单**——从端点表现推：端点后缀与模型名
+# 相同的即免费档，其余是付费档（两个付费档都会被试到，顺序无实质影响）。
+_PAID_MODELS = tuple(m for m, ep in _CHAT_ENDPOINTS.items() if ep != m)
 # 百度把「额度用尽」放在错误码里（HTTP 200 + `error_code`）。**但 17/18/19 官方全部归在
 # 「请求量 / 限流」，没有一个是欠费**（cloud.baidu.com/doc/NLP/s/Lk53we3le）：
 #   17 = 当日请求量已达上限   18 = QPS 超限   19 = 总请求量已达上限
@@ -238,7 +245,7 @@ def quota_probe(data: dict) -> Optional[dict]:
     chosen = probe_model(data)
     if chosen and chosen not in _CHAT_ENDPOINTS:
         return quota_unknown()  # 指定了不支持的模型，探测跑不起来
-    candidates = [chosen] if chosen else list(_PROBE_MODELS)
+    candidates = [chosen] if chosen else list(_PAID_MODELS)
     candidates = [m for m in candidates if m in _CHAT_ENDPOINTS]
     if not candidates:
         return quota_unknown()
