@@ -220,6 +220,13 @@ class VaultApi:
     def set_light_mode(self, enabled: bool):
         return api.set_light_mode(enabled)
 
+    # ── 开机自启动 ────────────────────────────────────────
+    def get_autostart(self):
+        return api.get_autostart()
+
+    def set_autostart(self, enabled: bool):
+        return api.set_autostart(enabled)
+
     # ── 验证代理 ──────────────────────────────────────────
     # ── 验证代理（注册表） ─────────────────────────────────
     def list_proxies(self):

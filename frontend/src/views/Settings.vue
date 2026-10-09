@@ -299,6 +299,41 @@ async function applyLightMode(value) {
   }
 }
 
+/* ── 开机自启动 ────────────────────────────────────── */
+// 状态以**操作系统**的自启条目为准（后端每次现读），前端不做本地记忆，
+// 免得用户手动删掉系统条目后界面还显示"已开启"。
+const autostart = ref({ supported: true, enabled: false, platform: '', target: '' })
+const autostartSaving = ref(false)
+
+async function loadAutostart() {
+  try {
+    const config = await api.getAutostart()
+    autostart.value = {
+      supported: Boolean(config.supported),
+      enabled: Boolean(config.enabled),
+      platform: config.platform || '',
+      target: config.target || '',
+    }
+  } catch (err) {
+    ElMessage.error(err.message || '加载开机自启动设置失败')
+  }
+}
+
+async function applyAutostart(value) {
+  autostartSaving.value = true
+  try {
+    const res = await api.setAutostart(value)
+    // 回读系统侧的真实结果（写入可能被系统策略改写）
+    if (res && typeof res.enabled === 'boolean') autostart.value.enabled = res.enabled
+    ElMessage.success(autostart.value.enabled ? '已开启开机自启动' : '已关闭开机自启动')
+  } catch (err) {
+    ElMessage.error(err.message || '设置开机自启动失败')
+    await loadAutostart()
+  } finally {
+    autostartSaving.value = false
+  }
+}
+
 const refreshing = ref(false)
 
 /**
@@ -313,6 +348,7 @@ async function refreshAll(showSpinner = true) {
       loadCloseAction(),
       loadAutoLock(),
       loadLightMode(),
+      loadAutostart(),
       proxyStore.fetch().catch(() => {}),
       appStore.refreshTray().catch(() => {}),
     ])
@@ -427,6 +463,32 @@ onMounted(() => refreshAll(false))
           </div>
         </div>
         <el-switch v-model="lightMode" :loading="lightModeSaving" @change="applyLightMode" />
+      </div>
+    </el-card>
+
+    <el-card shadow="never">
+      <template #header><span>启动</span></template>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">开机自启动</div>
+          <div class="setting-desc">
+            {{
+              autostart.supported
+                ? '开机后自动启动本程序。开关直接读写操作系统的自启条目，不依赖本程序自身的配置。'
+                : '当前平台不支持设置开机自启动。'
+            }}
+          </div>
+          <div v-if="autostart.supported && autostart.target" class="setting-path">
+            系统落点：{{ autostart.target }}
+          </div>
+        </div>
+        <el-switch
+          v-model="autostart.enabled"
+          :loading="autostartSaving"
+          :disabled="!autostart.supported"
+          @change="applyAutostart"
+        />
       </div>
     </el-card>
 
@@ -655,6 +717,14 @@ onMounted(() => refreshAll(false))
   color: var(--el-text-color-secondary);
   line-height: 1.6;
   max-width: 640px;
+}
+
+.setting-path {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  margin-top: 4px;
+  word-break: break-all;
 }
 
 .inline-row {

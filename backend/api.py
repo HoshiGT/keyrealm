@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional, Union
 
+from . import autostart
 from . import backup
 from . import database as db
 from . import idle_lock
@@ -1139,6 +1140,26 @@ def touch_activity() -> dict:
     """前端在一段时间内有用户操作时（节流）上报，重置空闲计时。"""
     idle_lock.touch()
     return {"ok": True}
+
+
+# ── 开机自启动 ────────────────────────────────────────────
+# 读写的是**操作系统**的自启条目（Windows 注册表 Run / Linux XDG autostart / macOS
+# LaunchAgent），**不落 settings** —— 系统侧即唯一事实来源，理由见 backend/autostart.py。
+
+def get_autostart() -> dict:
+    """返回自启开关现状与落点（供"系统设置"展示）。"""
+    return autostart.status()
+
+
+def set_autostart(enabled) -> dict:
+    """开启 / 关闭开机自启动，直接增删系统条目。"""
+    try:
+        autostart.set_enabled(bool(enabled))
+    except autostart.AutostartError as exc:
+        _log.warning("设置开机自启动失败：%s", exc)
+        return {"ok": False, "message": str(exc)}
+    # 回读系统侧，把真实结果告诉前端（而不是假定的目标值）
+    return {"ok": True, "enabled": autostart.is_enabled()}
 
 
 # ── 验证代理（注册表 + 全局默认） ───────────────────────────

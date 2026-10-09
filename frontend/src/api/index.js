@@ -243,6 +243,13 @@ export const api = {
   getLightMode: () => call('get_light_mode'),
   setLightMode: (enabled) => call('set_light_mode', enabled),
 
+  // ── 开机自启动 ──────────────────────────────────────────
+  // 读写的是操作系统自启条目（Windows 注册表 Run / macOS LaunchAgent / Linux XDG
+  // autostart），系统侧即唯一事实来源，后端不落 settings。
+  // getAutostart 返回 { supported, enabled, platform, target }。
+  getAutostart: () => call('get_autostart'),
+  setAutostart: (enabled) => call('set_autostart', enabled),
+
   // ── 验证代理（注册表，其它模块一律按 id 引用） ──────────
   listProxies: () => call('list_proxies'),
   createProxy: (name, url) => call('create_proxy', name, url),

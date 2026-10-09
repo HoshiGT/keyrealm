@@ -224,6 +224,7 @@ function createState() {
     closeAction: 'ask',
     autoLockMinutes: 0,
     lightMode: false,
+    autostartEnabled: true,
     logs: [
       { level: 'INFO', text: logLine('INFO', 'main', '应用启动（frozen=False，日志级别=INFO，数据目录=…）', minutesDate(32)) },
       { level: 'DEBUG', text: logLine('DEBUG', 'backend.scheduler', '调度器已启动，加载 2 个计划', minutesDate(32)) },
@@ -774,6 +775,23 @@ export function createMockApi() {
       await delay(40)
       state.lightMode = Boolean(enabled)
       return { ok: true, enabled: state.lightMode }
+    },
+
+    // ── 开机自启动 ────────────────────────────────────────
+    async get_autostart() {
+      await delay(40)
+      return {
+        supported: true,
+        enabled: state.autostartEnabled,
+        platform: 'mock',
+        target: 'mock://autostart/credential-vault',
+      }
+    },
+
+    async set_autostart(enabled) {
+      await delay(40)
+      state.autostartEnabled = Boolean(enabled)
+      return { ok: true, enabled: state.autostartEnabled }
     },
 
     // ── 简易操作（插件可选能力）────────────────────────────
