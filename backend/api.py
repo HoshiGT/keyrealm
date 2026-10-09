@@ -24,6 +24,7 @@ from . import proxy_store
 from . import redact
 from . import scheduler
 from . import tasks
+from . import version
 from . import tray
 from . import verify_options
 from .crypto import (
@@ -625,8 +626,25 @@ def run_credential_action(credential_id: int, action_id: str, params: Optional[d
     return result
 
 
-def list_credential_models(credential_id: int) -> list:
-    """某凭据对应插件可用的模型列表（供 LLM「简单对话」选择模型）。"""
+def get_version() -> dict:
+    """版本信息（「关于」页与启动日志用）。
+
+    ``display`` 是给界面直接显示的一行：``1.0.0 (fe15e3b)`` —— 括号里是**构建时**的
+    commit 短 hash（exe 由 scripts/build.py 注入；源码运行时现查 git）。
+    """
+    return {
+        "version": version.APP_VERSION,
+        "build": version.build_id(),
+        "schema_version": version.SCHEMA_VERSION,
+        "display": version.version_string(),
+    }
+
+
+def list_credential_models(credential_id: int, force: bool = False) -> list:
+    """某凭据对应插件可用的模型列表（供 LLM「简单对话」选择模型）。
+
+    ``force=True`` 是用户点「刷新模型列表」：穿透插件的模型清单缓存（24h）重新拉取。
+    """
     key = _get_key()
     if key is None:
         return []
@@ -637,18 +655,19 @@ def list_credential_models(credential_id: int) -> list:
         data = decrypt_dict(key, cred["data_encrypted"])
     except Exception:
         data = {}
-    return plugin_manager.plugin_models(cred["credential_type"], data)
+    return plugin_manager.plugin_models(cred["credential_type"], data, force)
 
 
-def list_draft_models(credential_type: str, data: Optional[dict] = None) -> list:
+def list_draft_models(credential_type: str, data: Optional[dict] = None, force: bool = False) -> list:
     """尚未保存的（新增/编辑表单里的）凭据可用的模型列表。
 
     与 ``list_credential_models`` 的区别是数据来自表单而非库，因此新建凭据时也能
     拿到下拉候选；失败时插件返回空数组，前端回退为自由输入。
+    ``force=True`` 同 ``list_credential_models``——用户手动刷新，穿透缓存。
     """
     if not credential_type:
         return []
-    return plugin_manager.plugin_models(credential_type, data or {})
+    return plugin_manager.plugin_models(credential_type, data or {}, force)
 
 
 def stream_credential_action(credential_id: int, action_id: str, params: Optional[dict] = None,

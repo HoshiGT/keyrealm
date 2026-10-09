@@ -1,10 +1,13 @@
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
+import { api } from '@/api'
 import { useAppStore } from '@/stores/app'
 import { useVaultStore } from '@/stores/vault'
 
-const APP_VERSION = '0.1.0'
+// 版本号与「构建版本」（commit 短 hash）都从**后端**取——前端不再写死，
+// 免得界面显示的和正在跑的 exe 对不上。格式：1.0.0 (fe15e3b)
+const versionInfo = ref({ display: '—', schemaVersion: '' })
 
 const appStore = useAppStore()
 const vaultStore = useVaultStore()
@@ -19,6 +22,12 @@ const categoryCount = computed(
 
 onMounted(() => {
   if (!vaultStore.plugins.length) vaultStore.fetchPlugins().catch(() => {})
+  api.getVersion().then((v) => {
+    versionInfo.value = {
+      display: (v && v.display) || '—',
+      schemaVersion: (v && v.schema_version) || '',
+    }
+  }).catch(() => {})
 })
 </script>
 
@@ -33,13 +42,14 @@ onMounted(() => {
         <img src="/favicon.svg" alt="Credential Vault" class="about-logo" />
         <div>
           <div class="about-name">Credential Vault</div>
-          <div class="about-sub text-muted">本地凭据保险库 · 版本 v{{ APP_VERSION }}</div>
+          <div class="about-sub text-muted">本地凭据保险库 · 版本 v{{ versionInfo.display }}</div>
         </div>
       </div>
 
       <el-descriptions :column="2" border size="small" class="about-desc">
         <el-descriptions-item label="项目名称">Credential Vault（凭据保险库）</el-descriptions-item>
-        <el-descriptions-item label="版本号">v{{ APP_VERSION }}</el-descriptions-item>
+        <el-descriptions-item label="版本号">v{{ versionInfo.display }}</el-descriptions-item>
+        <el-descriptions-item label="数据库结构版本">v{{ versionInfo.schemaVersion || '—' }}</el-descriptions-item>
         <el-descriptions-item label="运行环境">{{ runtimeLabel }}</el-descriptions-item>
         <el-descriptions-item label="当前状态">
           {{ appStore.unlocked ? '已解锁' : '已锁定' }}

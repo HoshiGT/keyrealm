@@ -54,7 +54,7 @@ const LLM_VENDORS = [
   ['openrouter', 'OpenRouter'], ['gemini', 'Google Gemini'], ['minimax', 'MiniMax'],
   ['nvidia', 'NVIDIA NIM'], ['moonshot', 'Moonshot Kimi'], ['siliconflow', 'SiliconFlow'],
   ['dashscope', '阿里云百炼'], ['huawei_maas', '华为云 MaaS'], ['glm', '智谱 GLM'],
-  ['glm_anthropic', '智谱 GLM（Anthropic 兼容）'], ['doubao', '火山引擎豆包'],
+  ['glm_anthropic', '智谱 GLM（Anthropic 兼容）'], ['ark', '火山方舟'],
   ['tongyi', '通义千问'], ['wenxin', '百度文心'],
   ['openai_compatible', 'OpenAI 兼容接口'], ['anthropic_compatible', 'Anthropic 兼容接口'],
 ]
@@ -574,6 +574,11 @@ export function createMockApi() {
     },
 
     // ── MCP ───────────────────────────────────────────────
+    async get_version() {
+      return { version: '1.0.0', build: 'mock-dev', schema_version: '1.0.0',
+        display: '1.0.0 (mock-dev)' }
+    },
+
     async get_mcp_status() {
       await delay(60)
       return {
@@ -802,7 +807,7 @@ export function createMockApi() {
       return { ok: true, output: `（Mock 回复）你说的是：「${last}」` }
     },
 
-    async list_credential_models(credentialId) {
+    async list_credential_models(credentialId, force = false) {
       await delay(200)
       const cred = state.credentials.find((c) => c.id === Number(credentialId))
       if (!cred) return []

@@ -15,7 +15,7 @@ if str(BASE_DIR) not in sys.path:
 
 import webview  # pywebview
 
-from backend import api, database as db, idle_lock, logger, mcp_server, plugin_manager, proxy as proxy_config, scheduler, single_instance, tray, verify_options
+from backend import api, database as db, idle_lock, logger, mcp_server, plugin_manager, proxy as proxy_config, scheduler, single_instance, tray, verify_options, version
 from backend import vault_proxy_ctx
 from backend.paths import app_dir, is_frozen, resource_dir
 
@@ -118,11 +118,14 @@ class VaultApi:
     def run_credential_action(self, credential_id: int, action_id: str, params=None):
         return api.run_credential_action(credential_id, action_id, params)
 
-    def list_credential_models(self, credential_id: int):
-        return api.list_credential_models(credential_id)
+    def list_credential_models(self, credential_id: int, force: bool = False):
+        return api.list_credential_models(credential_id, force)
 
-    def list_draft_models(self, credential_type: str, data=None):
-        return api.list_draft_models(credential_type, data)
+    def get_version(self):
+        return api.get_version()
+
+    def list_draft_models(self, credential_type: str, data=None, force: bool = False):
+        return api.list_draft_models(credential_type, data, force)
 
     def stream_credential_action(self, credential_id: int, action_id: str, params=None, title: str = ""):
         return api.stream_credential_action(credential_id, action_id, params, title)
@@ -174,8 +177,11 @@ class VaultApi:
         return api.create_schedule(name, trigger_type, trigger_args, target_scope, target_id,
                                    credential_ids)
 
-    def update_schedule(self, schedule_id: int, **kwargs):
-        return api.update_schedule(schedule_id, **kwargs)
+    def update_schedule(self, schedule_id: int, payload=None):
+        # 与 api.update_schedule(schedule_id, payload) 对齐：pywebview 桥只走**位置参数**，
+        # 前端是 call('update_schedule', id, payload) —— 这里若写成 **kwargs 就永远接不到第二参，
+        # 定时任务的启停/编辑会直接 TypeError。
+        return api.update_schedule(schedule_id, payload)
 
     def delete_schedule(self, schedule_id: int):
         return api.delete_schedule(schedule_id)
@@ -489,8 +495,8 @@ def main():
     # 应用持久化的验证超时（写入 VAULT_TIMEOUT 供插件读取；外部同名变量优先）
     verify_options.apply_timeout()
 
-    log.info("应用启动（frozen=%s，日志级别=%s，数据目录=%s）",
-             is_frozen(), logger.get_level(), app_dir())
+    log.info("应用启动（版本=%s，frozen=%s，日志级别=%s，数据目录=%s）",
+             version.version_string(), is_frozen(), logger.get_level(), app_dir())
 
     # 扫描 plugins/ 装载插件
     plugin_manager.sync_plugins()

@@ -171,7 +171,9 @@ export const api = {
   // 弹系统「另存为」，拿用户选的路径（下载类操作先用它换路径，再塞进 params 交给插件）
   pickSavePath: (defaultName = '', fileTypes = null) => call('pick_save_path', defaultName, fileTypes),
   runCredentialAction: (id, actionId, params) => call('run_credential_action', id, actionId, params),
-  listCredentialModels: (id) => call('list_credential_models', id),
+  listCredentialModels: (id, force = false) => call('list_credential_models', id, force),
+  // 版本信息：{version, build, schema_version, display}；display 形如 "1.0.0 (fe15e3b)"
+  getVersion: () => call('get_version'),
   listDraftModels: (credentialType, data = null) => call('list_draft_models', credentialType, data),
   streamCredentialAction: (id, actionId, params, title) =>
     call('stream_credential_action', id, actionId, params, title),

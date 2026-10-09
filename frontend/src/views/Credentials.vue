@@ -211,6 +211,8 @@ function blankActionDialog() {
     row: null,         // 由行内动作打开时，记住那一行（save_to 的文件名模板要用）
     // ── chat ──
     model: '',
+    // 该操作是否声明了 model 字段 → 决定「模型」那一行要不要**常驻**
+    modelDeclared: false,
     models: [],
     modelsLoading: false,
     streamId: null,
@@ -284,16 +286,16 @@ const MODELS_ERROR = '获取模型列表失败，请手动输入模型名'
 // 「模型列表常驻」有两层意思：按钮一直在（随时可刷新），以及重开对话框不必再等网络。
 const modelsCache = new Map()
 
-/** 拉取该凭据可用模型列表 */
-async function loadModels() {
+/** 拉取该凭据可用模型列表；`force=true` 是用户点「刷新」——穿透服务端 24h 缓存 */
+async function loadModels(force = false) {
   const dialog = actionDialog.value
   if (!dialog.credentialId || dialog.modelsLoading) return
   const cached = modelsCache.get(dialog.credentialId)
-  if (cached && !dialog.models.length) dialog.models = [...cached]
+  if (!force && cached && !dialog.models.length) dialog.models = [...cached]
   dialog.modelsLoading = true
   dialog.modelError = ''
   try {
-    const list = await api.listCredentialModels(dialog.credentialId)
+    const list = await api.listCredentialModels(dialog.credentialId, force)
     const models = Array.isArray(list) ? list : []
     if (models.length) {
       dialog.models = models
@@ -494,6 +496,7 @@ function openAction(cred, action, seed = {}, extra = {}) {
     actions: extra.actions || [action],
     row: extra.row || null,
     model: action.model || '',
+    modelDeclared: 'model' in action,
     fields,
     values,
     submitLabel: action.submit || '运行',
@@ -2250,10 +2253,12 @@ onMounted(async () => {
       <div v-if="actionDialog.description" class="action-desc">{{ actionDialog.description }}</div>
 
       <template v-if="actionDialog.kind === 'chat'">
-        <!-- 「模型」这一行只在**用得上**时出现：动作声明了默认 model（LLM 类都声明了），
-             或者 list_models 真的取到了候选。像 Dify 那种模型写死在应用编排里、
-             根本没实现 list_models 的插件，就不该显示一个空下拉 + 一句红色的「获取模型列表失败」。 -->
-        <div v-if="actionDialog.model || actionDialog.models.length" class="chat-model">
+        <!-- 「模型」这一行：**操作声明了 model 字段就常驻**，不再取决于当前值是否为空。
+             曾用 `model || models.length` 当条件——但本仓库 LLM 插件已不再写死默认模型
+             （model 为空串），一旦列表又没拉回来（网络失败 / 插件没实现 list_models），
+             整行会连「刷新模型列表」按钮一起消失，用户**连自救的入口都没有**。
+             只对**没有** model 字段的操作（模型由插件自己定，如编排类应用）才不显示。 -->
+        <div v-if="actionDialog.modelDeclared || actionDialog.models.length" class="chat-model">
           <span class="text-muted">模型</span>
           <el-select
             v-model="actionDialog.model"
@@ -2271,7 +2276,7 @@ onMounted(async () => {
           <el-button
             size="small"
             :loading="actionDialog.modelsLoading"
-            @click="loadModels"
+            @click="loadModels(true)"
           >{{ actionDialog.models.length ? '刷新模型列表' : '获取模型列表' }}</el-button>
           <span v-if="actionDialog.modelError" class="chat-model-error">
             {{ actionDialog.modelError }}
