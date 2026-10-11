@@ -13,7 +13,10 @@
 | WebView2 Runtime | — | Windows 运行前提；Windows 10/11 通常已内置 |
 
 ```bash
-git clone <仓库地址> && cd keyrealm
+```bash
+git clone https://github.com/YZBRH/keyrealm.git
+cd keyrealm
+```
 
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
