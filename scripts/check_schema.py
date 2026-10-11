@@ -66,10 +66,10 @@ def main() -> int:
         assert db.get_setting("verify_proxy") == "socks5://x:1"
 
         # 3) 代理表 CRUD
-        first = db.create_proxy("生产梯子", "socks5://1.2.3.4:1080")
+        first = db.create_proxy("示例代理", "socks5://192.0.2.5:1080")
         second = db.create_proxy("备用", "http://127.0.0.1:7890")
         assert {p["id"] for p in db.list_proxies()} == {first["id"], second["id"]}
-        assert db.get_proxy(first["id"])["name"] == "生产梯子"
+        assert db.get_proxy(first["id"])["name"] == "示例代理"
         assert db.update_proxy(first["id"], name="改过的")["name"] == "改过的"
         assert db.delete_proxy(second["id"]) is True
         print("✓ 代理表 CRUD 通过")

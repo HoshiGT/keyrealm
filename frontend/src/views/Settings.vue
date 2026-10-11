@@ -630,7 +630,7 @@ onMounted(() => refreshAll(false))
     >
       <el-form label-position="top">
         <el-form-item label="名称">
-          <el-input v-model="proxyForm.name" placeholder="例如：生产梯子 / 本机 Clash" clearable />
+          <el-input v-model="proxyForm.name" placeholder="例如：示例代理 / 本机 Clash" clearable />
         </el-form-item>
         <el-form-item label="代理地址">
           <el-input v-model="proxyForm.url" placeholder="socks5://127.0.0.1:10808" clearable />

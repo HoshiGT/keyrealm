@@ -818,11 +818,11 @@ export function createMockApi() {
       if (proxy_id && !target) return { ok: false, message: '代理不存在' }
 
       const direct = {
-        ip: { ok: true, ip: '221.11.94.12', country: '中国', region: '陕西', city: '西安', isp: '电信' },
+        ip: { ok: true, ip: '198.51.100.7', country: '中国', region: '北京', city: '北京', isp: '联通' },
         domestic: { ok: true, ms: 21 },
         foreign: { ok: false },
       }
-      const directLine = '直连出口 IP：221.11.94.12（中国 陕西 西安 · 电信），国内站点可达，国外站点不可达'
+      const directLine = '直连出口 IP：198.51.100.7（中国 北京 北京 · 联通），国内站点可达，国外站点不可达'
 
       // 全局被设为「直连」时（target 为空）与后端一致：只测直连，proxied 为 null
       if (!target) {
@@ -847,15 +847,15 @@ export function createMockApi() {
         proxy_source: proxy_id ? `proxy:${target.id}` : 'global',
         direct,
         proxied: {
-          ip: { ok: true, ip: '66.90.98.36', country: '美国', region: 'California', city: 'Los Angeles', isp: 'Zenlayer' },
+          ip: { ok: true, ip: '203.0.113.2', country: '美国', region: 'California', city: 'Los Angeles', isp: 'Zenlayer' },
           domestic: { ok: true, ms: 364 },
           foreign: { ok: true, ms: 364 },
         },
         verdict: socks
           ? { level: 'ok', headline: '代理工作正常：出口已切换，国外站点由不可达变为可达',
-              details: [directLine, '代理出口 IP：66.90.98.36（美国 California Los Angeles · Zenlayer），国内站点可达，国外站点可达'] }
+              details: [directLine, '代理出口 IP：203.0.113.2（美国 California Los Angeles · Zenlayer），国内站点可达，国外站点可达'] }
           : { level: 'warn', headline: '代理可用，但国内站点延迟明显升高',
-              details: [directLine, '代理出口 IP：66.90.98.36（美国 California Los Angeles · Zenlayer），国内站点可达，国外站点可达', '若不需访问国外站点，建议对该凭据改用直连'] },
+              details: [directLine, '代理出口 IP：203.0.113.2（美国 California Los Angeles · Zenlayer），国内站点可达，国外站点可达', '若不需访问国外站点，建议对该凭据改用直连'] },
       }
     },
 
