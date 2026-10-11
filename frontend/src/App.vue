@@ -10,11 +10,13 @@ import api, { EVENTS, onEvent } from '@/api'
 import { useAppStore } from '@/stores/app'
 import { useVaultStore } from '@/stores/vault'
 import { useMcpStore } from '@/stores/mcp'
+import { useProxyStore } from '@/stores/proxy'
 
 const router = useRouter()
 const appStore = useAppStore()
 const vaultStore = useVaultStore()
 const mcpStore = useMcpStore()
+const proxyStore = useProxyStore()
 
 const disposers = []
 
@@ -76,6 +78,10 @@ onMounted(() => {
   )
   disposers.push(
     onEvent(EVENTS.pluginsChanged, () => guard(vaultStore.fetchPlugins())),
+  )
+  // 代理注册表可能被 MCP 侧改动（新增/删除/换全局），界面里开着的设置页要跟着变。
+  disposers.push(
+    onEvent(EVENTS.proxiesChanged, () => guard(proxyStore.fetch())),
   )
   disposers.push(onEvent(EVENTS.batchStarted, (detail) => vaultStore.applyBatchStarted(detail)))
   disposers.push(onEvent(EVENTS.batchProgress, (detail) => vaultStore.applyBatchProgress(detail)))

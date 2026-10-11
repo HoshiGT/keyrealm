@@ -74,7 +74,9 @@ async function toggleServer() {
   }
 }
 
-// 高危工具：开启前需二次确认
+// 高危工具：开启前需二次确认。
+// 代理那几个也在列：**代理决定了「凭据的验证流量发到哪」**，被 Agent 改掉就等于把
+// 全部跟随全局的凭据出口交给它指定的地址（改/删全局默认还会让所有凭据静默换出口）。
 const SENSITIVE_TOOLS = new Set([
   'vault_get_secret',
   'vault_create_credential',
@@ -82,6 +84,11 @@ const SENSITIVE_TOOLS = new Set([
   'vault_delete_credential',
   'vault_export_backup',
   'vault_import_backup',
+  'vault_create_proxy',
+  'vault_update_proxy',
+  'vault_delete_proxy',
+  'vault_set_global_proxy',
+  'vault_test_proxy',
 ])
 
 async function togglePermission(toolName, enabled) {

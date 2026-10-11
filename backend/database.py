@@ -249,10 +249,19 @@ def _seed_mcp_permissions(conn: sqlite3.Connection):
         ("vault_batch_verify",      0, "批量验证"),
         ("vault_list_groups",       1, "列出分组"),
         ("vault_create_group",      0, "创建分组"),
+        ("vault_delete_group",      0, "删除分组（组内凭据保留，仅解除归属）"),
         ("vault_list_plugins",      1, "列出插件"),
         ("vault_get_secret",        0, "获取解密后的敏感字段（高危）"),
         ("vault_export_backup",     0, "导出备份（触及整库数据，高危；encrypted=false 会写出明文密钥）"),
         ("vault_import_backup",     0, "导入备份（合并入库，高危：会新增凭据、可能覆盖偏好设置）"),
+        # 验证代理管理。只读的列出默认开；其余（改动代理表）默认关。
+        # vault_test_proxy 会真的朝外发一次请求、把本机出口暴露给被代理的对端，也让用户显式开。
+        ("vault_list_proxies",      1, "列出验证代理与当前全局默认"),
+        ("vault_create_proxy",      0, "新增验证代理"),
+        ("vault_update_proxy",      0, "修改验证代理"),
+        ("vault_delete_proxy",      0, "删除验证代理"),
+        ("vault_set_global_proxy",  0, "设置全局默认代理（改为直连也会影响所有跟随全局的凭据）"),
+        ("vault_test_proxy",        0, "实测代理连通性（会真实发出一次外网请求）"),
     ]
     # 以 defaults 为准，但**只对「描述」**：
     #   · 新工具   → 插入默认 enabled + 描述；
@@ -500,7 +509,8 @@ def list_plugins(enabled_only: bool = False) -> list[dict]:
 def get_plugin_by_type(credential_type: str) -> Optional[dict]:
     # 不按 enabled 过滤：本函数是「插件是否存在」的唯一判定入口，被备份导入/预设/字段净化
     # 等一批**非插件功能**共用。禁用只是关掉功能闸门（plugin_manager.get_module），
-    # 插件元数据仍须可解析——否则禁用插件的凭据在导入时会被静默丢弃。
+    # 插件元数据仍须可解析——导入时要靠它区分「未安装」与「已禁用」两种失败原因，
+    # 并在完整/失败日志里带上正确的插件名与字段表。
     with _lock:
         row = get_conn().execute(
             "SELECT * FROM plugins WHERE credential_type=?",

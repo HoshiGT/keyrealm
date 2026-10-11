@@ -106,6 +106,8 @@ export const EVENTS = {
   credentialUpdated: 'vault:credential_updated',
   credentialsChanged: 'vault:credentials_changed',
   pluginsChanged: 'vault:plugins_changed',
+  // 代理注册表变更（本界面改动 / MCP 侧改动都会广播）。消费方按需重取列表。
+  proxiesChanged: 'vault:proxies_changed',
   actionStream: 'vault:action_stream',
   // 批量验证开始：detail 带本次要验证的凭据 id 列表，前端据此把对应行的「验证」按钮置成 loading
   batchStarted: 'vault:batch_verify_started',

@@ -1185,6 +1185,7 @@ def create_proxy(name: str, url: str) -> dict:
     if result.get("error"):
         return {"ok": False, "message": result.get("message") or "新增代理失败"}
     _log.info("已新增代理 #%s（%s）", result.get("id"), name)
+    push_event("vault:proxies_changed")
     return {"ok": True, **list_proxies()}
 
 
@@ -1194,6 +1195,7 @@ def update_proxy(proxy_id: int, name=None, url=None) -> dict:
         return {"ok": False, "message": result.get("message") or "修改代理失败"}
     _apply_global_after_change()
     _log.info("已修改代理 #%s", proxy_id)
+    push_event("vault:proxies_changed")
     return {"ok": True, **list_proxies()}
 
 
@@ -1203,6 +1205,7 @@ def delete_proxy(proxy_id: int) -> dict:
         return {"ok": False, "message": "代理不存在"}
     _apply_global_after_change()
     _log.info("已删除代理 #%s", proxy_id)
+    push_event("vault:proxies_changed")
     return {"ok": True, **list_proxies()}
 
 
@@ -1217,6 +1220,7 @@ def set_global_proxy(proxy_id=None) -> dict:
         if not result.get("ok"):
             return {"ok": False, "message": result.get("message") or "设置失败"}
         _log.info("全局代理已设为 #%s", proxy_id)
+    push_event("vault:proxies_changed")
     return {"ok": True, **list_proxies()}
 
 

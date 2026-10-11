@@ -252,8 +252,19 @@ def _build_mcp_app() -> MCPServer:
         scope: str = "all",
         group_id: Optional[int] = None,
         credential_type: Optional[str] = None,
+        credential_ids: Optional[list[int]] = None,
     ) -> dict:
-        """批量验证（异步执行，进度通过事件推送）"""
+        """批量验证（异步执行，进度通过事件推送）
+
+        三种选法，**``credential_ids`` 优先**：
+
+        - ``credential_ids``：只验证这些 id（要精确点名一批凭据时用这个）；
+        - ``scope`` + ``group_id`` / ``credential_type``：按分组或按插件类型圈一批。
+          ``scope`` 取值 ``all`` / ``group`` / ``type``，配 ``group_id`` 或 ``credential_type``。
+
+        注意 ``credential_ids`` 传了**空列表**等同于没传（会退化成按 scope 圈），
+        所以「一条也不验」要在调用方拦住。返回的 ``total`` 是本次实际会验证的条数。
+        """
         denied = _perm_denied("vault_batch_verify")
         if denied:
             return denied
@@ -261,9 +272,9 @@ def _build_mcp_app() -> MCPServer:
         if key is None:
             return {"error": "vault_locked"}
         from .scheduler import batch_verify
-        batch_verify(scope=scope, group_id=group_id, credential_type=credential_type,
-                     trigger_type="mcp")
-        return {"ok": True, "message": "批量验证已启动"}
+        total = batch_verify(scope=scope, group_id=group_id, credential_type=credential_type,
+                             credential_ids=credential_ids, trigger_type="mcp")
+        return {"ok": True, "total": total, "message": f"批量验证已启动（{total} 条）"}
 
     # ── vault_list_groups ─────────────────────────────────
     @mcp.tool()
@@ -284,6 +295,20 @@ def _build_mcp_app() -> MCPServer:
         group = db.create_group(name, description, color)
         _push_event("vault:credentials_changed", {})
         return {"ok": True, "group": group}
+
+    # ── vault_delete_group ────────────────────────────────
+    @mcp.tool()
+    def vault_delete_group(group_id: int) -> dict:
+        """删除凭据分组
+
+        **组里的凭据不会被删掉**，只是解除归属（回到「未分组」）。
+        """
+        denied = _perm_denied("vault_delete_group")
+        if denied:
+            return denied
+        db.delete_group(group_id)
+        _push_event("vault:credentials_changed", {})
+        return {"ok": True}
 
     # ── vault_list_plugins ────────────────────────────────
     @mcp.tool()
@@ -368,7 +393,14 @@ def _build_mcp_app() -> MCPServer:
         """导入备份（合并入库，高危：会新增凭据、可能覆盖偏好设置）。
 
         `document`（备份 JSON 对象）与 `path`（备份文件路径）**二选一**。
-        `dedupe=True` 时「同类型 + 敏感值相同」的凭据会跳过；插件未安装的条目也会跳过。
+        `dedupe=True` 时「同类型 + 敏感值相同」的凭据会跳过。
+
+        导入是**填充式**的：以当前插件的字段表为蓝本。插件未安装 / 已禁用、备份里含当前插件
+        不认识的字段、必填字段在备份里没有着落（且插件无默认值）的条目，都会**整条判失败**
+        且不入库 —— 返回值里的 `failed`/`failed_count` 逐条给出原因。
+
+        每次导入都会在 `data/logs/` 生成完整导入日志（敏感值已脱敏）；有失败时另生成
+        `*_failed.log`（**含明文**，供人工比对）。路径见返回值的 `log_file`/`failed_log_file`。
         加密备份需与当前主密码一致，否则报错。
         """
         denied = _perm_denied("vault_import_backup")
@@ -387,10 +419,73 @@ def _build_mcp_app() -> MCPServer:
         if not isinstance(doc, dict):
             return {"ok": False, "message": "备份内容必须是 JSON 对象"}
 
-        result = _api.apply_backup_doc(doc, dedupe=bool(dedupe))
+        result = _api.apply_backup_doc(doc, dedupe=bool(dedupe), source=path or "document")
         if result.get("ok"):
             result["source"] = path or "document"
         return result
+
+    # ── 验证代理管理 ──────────────────────────────────────
+    # 一律复用 backend/api.py 的同名实现（而不是直接捅 proxy_store）：
+    # api 那层负责写日志、改完重设全局代理的环境变量，并**回吐最新全量列表**——
+    # 调用方拿到返回值就知道改完是什么状态，不必再 list 一次。
+    # 代理 id 是 **UUID 字符串**（见 database.py 的 proxies 表注释），别当自增整数用。
+    @mcp.tool()
+    def vault_list_proxies() -> dict:
+        """列出全部验证代理 + 当前全局默认代理"""
+        denied = _perm_denied("vault_list_proxies")
+        if denied:
+            return denied
+        from . import api as _api
+        return _api.list_proxies()
+
+    @mcp.tool()
+    def vault_create_proxy(name: str, url: str) -> dict:
+        """新增一个验证代理（地址需带 scheme，如 socks5://127.0.0.1:1080）"""
+        denied = _perm_denied("vault_create_proxy")
+        if denied:
+            return denied
+        from . import api as _api
+        return _api.create_proxy(name, url)
+
+    @mcp.tool()
+    def vault_update_proxy(proxy_id: str, name: Optional[str] = None,
+                           url: Optional[str] = None) -> dict:
+        """修改代理的名称/地址（只传要改的那个）"""
+        denied = _perm_denied("vault_update_proxy")
+        if denied:
+            return denied
+        from . import api as _api
+        return _api.update_proxy(proxy_id, name, url)
+
+    @mcp.tool()
+    def vault_delete_proxy(proxy_id: str) -> dict:
+        """删除代理；若它正被设为全局默认，会自动回落到直连"""
+        denied = _perm_denied("vault_delete_proxy")
+        if denied:
+            return denied
+        from . import api as _api
+        return _api.delete_proxy(proxy_id)
+
+    @mcp.tool()
+    def vault_set_global_proxy(proxy_id: Optional[str] = None) -> dict:
+        """设置全局默认代理；不传（或传空）= 直连。
+
+        只影响「跟随全局」的凭据；单条凭据自己指定的代理不受影响。
+        """
+        denied = _perm_denied("vault_set_global_proxy")
+        if denied:
+            return denied
+        from . import api as _api
+        return _api.set_global_proxy(proxy_id)
+
+    @mcp.tool()
+    def vault_test_proxy(proxy_id: Optional[str] = None) -> dict:
+        """实测某个代理能否连通（会真的发一次外网请求）；不传 = 测当前全局生效的那个"""
+        denied = _perm_denied("vault_test_proxy")
+        if denied:
+            return denied
+        from . import api as _api
+        return _api.test_proxy_id(proxy_id)
 
     return mcp
 
