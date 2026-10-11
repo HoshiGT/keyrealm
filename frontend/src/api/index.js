@@ -252,6 +252,14 @@ export const api = {
   getAutostart: () => call('get_autostart'),
   setAutostart: (enabled) => call('set_autostart', enabled),
 
+  // ── 凭据目录树顺序 ──────────────────────────────────────
+  // 用户在「凭据目录」里拖拽调整「类别 / 插件」两层顺序后回存。存的是顺序清单而非全量快照：
+  // 未列到的条目（如新装插件）由前端按自然顺序追加到末尾，故新增插件不会让顺序失效。
+  // 传空数组表示该层恢复默认顺序。返回 { ok, categories, plugins }。
+  getTreeOrder: () => call('get_tree_order'),
+  setTreeOrder: (categories = [], plugins = []) =>
+    call('set_tree_order', categories, plugins),
+
   // ── 验证代理（注册表，其它模块一律按 id 引用） ──────────
   listProxies: () => call('list_proxies'),
   createProxy: (name, url) => call('create_proxy', name, url),

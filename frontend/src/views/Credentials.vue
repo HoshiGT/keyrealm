@@ -1160,6 +1160,97 @@ function toggleTreeCollapsed() {
   localStorage.setItem(TREE_COLLAPSED_KEY, treeCollapsed.value ? '1' : '0')
 }
 
+// ── 目录树排序：拖拽调整「类别 / 插件」两层顺序 ────────────
+// 顺序存后端 settings（键 tree_order），见 stores/vault.js 的 pluginTree / saveTreeOrder。
+// 这里只负责把「拖到谁的前面 / 后面」翻译成一份新的顺序清单。
+//
+// 两条边界：
+// - **只做同级排序**，不支持把插件拖进别的类别：那是改磁盘上的插件目录，不在本功能范围。
+// - 类别与插件不能混排：未归类的插件（无类别目录）在树里与类别节点同处一层。
+
+const isCustomTreeOrder = computed(
+  () => vaultStore.treeOrder.categories.length > 0 || vaultStore.treeOrder.plugins.length > 0,
+)
+
+const treeDragHint = '按住拖拽可调整顺序'
+
+/** 当前渲染顺序下的全部类别键（`category` 为空串表示「未归类」桶） */
+function categoryKeys() {
+  return vaultStore.pluginTree.map((cat) => cat.category)
+}
+
+/** 当前渲染顺序下的全部插件键，按类别顺序拍平。
+ *  新顺序由「把某一项移到另一项前后」推导，故必须先有一份现成的基准顺序。 */
+function flatPluginKeys() {
+  const keys = []
+  vaultStore.pluginTree.forEach((cat) => {
+    cat.children.forEach((child) => keys.push(child.credential_type))
+  })
+  return keys
+}
+
+/** 落点校验（el-tree 的 allow-drop）。type 为 prev / inner / next。 */
+function allowTreeDrop(draggingNode, dropNode, type) {
+  if (type === 'inner') return false
+  const drag = draggingNode?.data
+  const drop = dropNode?.data
+  if (!drag || !drop || drag.id === 'all' || drop.id === 'all') return false
+  const dragIsCategory = !drag.credential_type
+  if (dragIsCategory !== !drop.credential_type) return false
+  if (dragIsCategory) return true
+  // 插件只在同一父节点（同一类别，或同一个「未归类」桶）内排序
+  return draggingNode.parent?.data?.id === dropNode.parent?.data?.id
+}
+
+/** 把 dragKey 移到 dropKey 的前（after=false）或后（after=true）。
+ *  dragKey 与 dropKey 相同、或任一方不在表里时返回 null（表示无需改动）。 */
+function moveKey(list, dragKey, dropKey, after) {
+  const from = list.indexOf(dragKey)
+  if (from < 0) return null
+  const next = list.slice()
+  next.splice(from, 1)
+  const to = next.indexOf(dropKey)
+  if (to < 0) return null
+  next.splice(after ? to + 1 : to, 0, dragKey)
+  return next
+}
+
+async function onTreeDrop(draggingNode, dropNode, dropType) {
+  const drag = draggingNode?.data
+  const drop = dropNode?.data
+  if (!drag || !drop) return
+  const after = dropType === 'next'
+  const isCategory = !drag.credential_type
+  const next = isCategory
+    ? moveKey(categoryKeys(), drag.category, drop.category, after)
+    : moveKey(flatPluginKeys(), drag.credential_type, drop.credential_type, after)
+  if (!next) return
+  try {
+    if (isCategory) await vaultStore.saveTreeOrder(next, vaultStore.treeOrder.plugins)
+    else await vaultStore.saveTreeOrder(vaultStore.treeOrder.categories, next)
+  } catch (err) {
+    ElMessage.error(err?.message || '保存目录顺序失败，已恢复原顺序')
+  }
+}
+
+async function resetTreeOrder() {
+  try {
+    await ElMessageBox.confirm(
+      '将把「凭据目录」恢复为默认顺序，当前的拖拽排列会被清除。是否继续？',
+      '恢复默认顺序',
+      { type: 'warning', confirmButtonText: '恢复', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await vaultStore.resetTreeOrder()
+    ElMessage.success('已恢复默认顺序')
+  } catch (err) {
+    ElMessage.error(err?.message || '恢复默认顺序失败')
+  }
+}
+
 // ── 目录树右键菜单：禁用/启用插件（凭据保留，只是依赖插件的能力不可用）──
 const ctxMenu = ref({
   visible: false, x: 0, y: 0, name: '',
@@ -1860,6 +1951,14 @@ onMounted(async () => {
             :prefix-icon="Search"
           />
           <el-button
+            v-if="!treeCollapsed && isCustomTreeOrder"
+            text
+            size="small"
+            :icon="Refresh"
+            :title="`恢复默认顺序（${treeDragHint}）`"
+            @click="resetTreeOrder"
+          />
+          <el-button
             text
             size="small"
             :icon="treeCollapsed ? Expand : Fold"
@@ -1888,6 +1987,8 @@ onMounted(async () => {
           :props="treeProps"
           node-key="id"
           highlight-current
+          draggable
+          :allow-drop="allowTreeDrop"
           :default-expanded-keys="expandedKeys"
           :auto-expand-parent="false"
           :expand-on-click-node="false"
@@ -1895,6 +1996,7 @@ onMounted(async () => {
           @node-click="handleNodeClick"
           @node-expand="handleNodeExpand"
           @node-collapse="handleNodeCollapse"
+          @node-drop="onTreeDrop"
           @node-contextmenu="onTreeContextMenu"
         >
           <template #default="{ data }">
@@ -2630,6 +2732,19 @@ onMounted(async () => {
   gap: 6px;
   flex: 1;
   overflow: hidden;
+}
+
+/* 目录树支持拖拽排序：给可拖动的行一个抓手光标，让「这里能拖」这件事自解释。
+   注意 el-tree 把 draggable 与 data-key 都落在 `.el-tree-node` 上（不是 __content），
+   所以按属性选择、并用子选择器把光标加到内容行上。
+   根节点「全部凭据」（node-key 取到 id=all）不参与排序，单独排除，
+   免得它显示抓手却怎么拖都没反应。 */
+.tree-card :deep(.el-tree-node[draggable="true"]:not([data-key="all"]) > .el-tree-node__content) {
+  cursor: grab;
+}
+
+.tree-card :deep(.el-tree-node[draggable="true"]:not([data-key="all"]) > .el-tree-node__content:active) {
+  cursor: grabbing;
 }
 
 .tree-icon {

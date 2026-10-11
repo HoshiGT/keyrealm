@@ -25,11 +25,43 @@ const emptyBatch = () => ({
   result: null,
 })
 
+/**
+ * 按用户保存的顺序清单重排一项列表（用于目录树的类别层与插件层）。
+ *
+ * 语义与侧栏导航一致（见 AppLayout.vue 的 applyOrder）：
+ * - 清单里有的按其顺序排在**前**；
+ * - 清单里没有的（新增的插件、或用户从未拖过的类别）按**自然顺序追加到末尾**；
+ * - 清单里已不存在的键（插件被卸载 / 改名）直接忽略。
+ *
+ * 这样即使插件增删改名，已保存的顺序也不会失效，更不需要迁移脚本。
+ */
+function applyTreeOrder(items, order, keyOf) {
+  if (!Array.isArray(order) || !order.length) return items
+  const pending = new Map(items.map((item) => [keyOf(item), item]))
+  const ordered = []
+  for (const key of order) {
+    const item = pending.get(key)
+    if (item) {
+      ordered.push(item)
+      pending.delete(key)
+    }
+  }
+  for (const item of items) {
+    if (pending.has(keyOf(item))) ordered.push(item)
+  }
+  return ordered
+}
+
 export const useVaultStore = defineStore('vault', {
   state: () => ({
     credentials: [],
     groups: [],
     plugins: [],
+    // 目录树的自定义顺序（类别 / 插件两层）。存的是**顺序清单**而非全量快照：没被列到的
+    // 条目按自然顺序追加到末尾，因此新增插件不会让已存顺序失效。空数组 = 该层用默认顺序。
+    treeOrder: { categories: [], plugins: [] },
+    // 顺序只需在本会话首次拉到插件列表时取一次；用户拖拽后是本地改 + 回存，不必反复拉。
+    treeOrderLoaded: false,
     loadingCredentials: false,
     filters: emptyFilters(),
     batch: emptyBatch(),
@@ -104,8 +136,11 @@ export const useVaultStore = defineStore('vault', {
           count: plugin.credential_count || 0,
         })
       })
-      return Object.values(categories).map((cat) => ({
+      return applyTreeOrder(Object.values(categories), state.treeOrder.categories,
+        (cat) => cat.category).map((cat) => ({
         ...cat,
+        children: applyTreeOrder(cat.children, state.treeOrder.plugins,
+          (child) => child.credential_type),
         count: cat.children.reduce((sum, child) => sum + child.count, 0),
         types: cat.children.map((child) => child.credential_type),
       }))
@@ -120,6 +155,9 @@ export const useVaultStore = defineStore('vault', {
       this.credentials = []
       this.groups = []
       this.plugins = []
+      this.treeOrder = { categories: [], plugins: [] }
+      // 锁库后设置可能在别处被改（例如从备份恢复），解锁时重新同步一次
+      this.treeOrderLoaded = false
       this.filters = emptyFilters()
       this.batch = emptyBatch()
     },
@@ -234,7 +272,51 @@ export const useVaultStore = defineStore('vault', {
         ...plugin,
         enabled: !!plugin.enabled,
       }))
+      // 目录树顺序只需本会话拉一次；拿到插件列表后立刻同步，保证树首次渲染就是用户排的顺序。
+      if (!this.treeOrderLoaded) await this.fetchTreeOrder()
       return this.plugins
+    },
+
+    /** 拉取用户自定义的目录树顺序（失败不抛：顺序拉不到就按默认顺序展示，不应挡住界面） */
+    async fetchTreeOrder() {
+      try {
+        const result = await api.getTreeOrder()
+        this.treeOrder = {
+          categories: Array.isArray(result?.categories) ? result.categories : [],
+          plugins: Array.isArray(result?.plugins) ? result.plugins : [],
+        }
+        this.treeOrderLoaded = true
+      } catch {
+        this.treeOrder = { categories: [], plugins: [] }
+        this.treeOrderLoaded = true
+      }
+      return this.treeOrder
+    },
+
+    /** 保存目录树顺序。先本地生效（拖拽后界面立刻按新序渲染），再回存；回存失败则整体回退。 */
+    async saveTreeOrder(categories, plugins) {
+      const previous = this.treeOrder
+      const next = {
+        categories: (categories || []).map(String),
+        plugins: (plugins || []).map(String),
+      }
+      this.treeOrder = next
+      try {
+        const result = await api.setTreeOrder(next.categories, next.plugins)
+        this.treeOrder = {
+          categories: Array.isArray(result?.categories) ? result.categories : next.categories,
+          plugins: Array.isArray(result?.plugins) ? result.plugins : next.plugins,
+        }
+      } catch (err) {
+        this.treeOrder = previous
+        throw err
+      }
+      return this.treeOrder
+    },
+
+    /** 恢复目录树默认顺序（清掉两层清单） */
+    async resetTreeOrder() {
+      return await this.saveTreeOrder([], [])
     },
 
     /** 启用/禁用插件；随后刷新插件列表（凭据行的置灰由 pluginByType 派生，无需重拉凭据） */

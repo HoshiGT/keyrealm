@@ -1162,6 +1162,76 @@ def set_autostart(enabled) -> dict:
     return {"ok": True, "enabled": autostart.is_enabled()}
 
 
+# ── 凭据目录树顺序 ────────────────────────────────────────
+# 用户可在「凭据目录」里拖拽调整「类别」与「插件」两层的先后顺序，顺序以 JSON 存 settings
+# 表键 tree_order，形如 {"categories": ["llm", ...], "plugins": ["llm_deepseek", ...]}。
+#
+# 存的是**顺序清单**而不是全量快照：没被列到的类别 / 插件（例如新装进来的插件）由前端按
+# 自然顺序追加到末尾。这样新增或改名插件都不会让已存顺序失效，也不需要迁移脚本。
+# 顺序只影响展示，不影响任何筛选、验证或存储行为。
+
+TREE_ORDER_KEY = "tree_order"
+_TREE_ORDER_MAX = 500  # 顺序清单的长度上限（远超真实插件数，纯属防御性上限）
+
+
+def _clean_order_list(value) -> list:
+    """把前端传来的顺序数组规整为去重后的字符串列表（保序）。
+
+    空字符串是**合法**条目：目录树里「没有类别的插件」自成一个桶，其键就是空串，
+    它同样可以被拖到任意位置。仅丢弃非字符串/数字的杂项。
+    """
+    if not isinstance(value, (list, tuple)):
+        return []
+    seen: set = set()
+    result: list = []
+    for item in value:
+        if not isinstance(item, (str, int)):
+            continue
+        key = str(item).strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(key)
+        if len(result) >= _TREE_ORDER_MAX:
+            break
+    return result
+
+
+def get_tree_order() -> dict:
+    """返回用户自定义的目录树顺序（未设置过时两层都为空列表，前端按默认顺序展示）。"""
+    raw = (db.get_setting(TREE_ORDER_KEY, "") or "").strip()
+    if not raw:
+        return {"ok": True, "categories": [], "plugins": []}
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        # 存储值损坏（例如用户手改过库）时按「未设置」处理，不阻塞界面
+        _log.warning("目录树顺序存储值无法解析，已按默认顺序处理")
+        return {"ok": True, "categories": [], "plugins": []}
+    if not isinstance(parsed, dict):
+        return {"ok": True, "categories": [], "plugins": []}
+    return {
+        "ok": True,
+        "categories": _clean_order_list(parsed.get("categories")),
+        "plugins": _clean_order_list(parsed.get("plugins")),
+    }
+
+
+def set_tree_order(categories=None, plugins=None) -> dict:
+    """持久化目录树顺序。传空数组即表示该层恢复默认（自然）顺序。"""
+    payload = {
+        "categories": _clean_order_list(categories),
+        "plugins": _clean_order_list(plugins),
+    }
+    db.set_setting(TREE_ORDER_KEY, json.dumps(payload, ensure_ascii=False))
+    _log.info(
+        "目录树顺序已更新：%d 个类别 / %d 个插件",
+        len(payload["categories"]),
+        len(payload["plugins"]),
+    )
+    return {"ok": True, **payload}
+
+
 # ── 验证代理（注册表 + 全局默认） ───────────────────────────
 # 一律按 id 引用；取名字只用于展示。每条凭据用哪个代理由凭据自己的字段决定，见 proxy_store。
 

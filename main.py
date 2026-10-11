@@ -227,6 +227,13 @@ class VaultApi:
     def set_autostart(self, enabled: bool):
         return api.set_autostart(enabled)
 
+    # ── 凭据目录树顺序 ────────────────────────────────────
+    def get_tree_order(self):
+        return api.get_tree_order()
+
+    def set_tree_order(self, categories=None, plugins=None):
+        return api.set_tree_order(categories, plugins)
+
     # ── 验证代理 ──────────────────────────────────────────
     # ── 验证代理（注册表） ─────────────────────────────────
     def list_proxies(self):
