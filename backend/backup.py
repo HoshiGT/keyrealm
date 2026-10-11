@@ -3,19 +3,31 @@
 - **加密导出**：敏感字段直接沿用库中密文（`data_encrypted`），全程不落明文，
   但只能用**同一主密码**导入。
 - **明文导出**：敏感字段以明文写入文件（敏感，慎用），可在任意主密码的库上导入。
-- **导入**：自动识别 `encrypted` 字段；加密备份需与当前主密码匹配，解密后以当前
-  主密钥重新加密写库。未安装插件的凭据会被跳过（不导入"孤儿"）；**插件被禁用不算未安装**，
-  其凭据照常导入——因为 `get_plugin_by_type()` 不按 `enabled` 过滤（`enabled` 只是
-  `plugins/.state.json` 的只读镜像，不是功能闸门）。
+
+导入是**填充式**的：以当前库（本质是各插件的 `fields_schema`）为蓝本，把备份条目里的值
+往这个蓝本里填。因此条目要满足三条才导得进去（不满足即整条判失败，见下）：
+
+1. 插件**存在且启用**——缺插件或插件被禁用都不导（禁用即功能闸门关闭，导进去也用不了）；
+2. 备份里的字段**都能在当前插件里找到**——多出未知字段说明两边同构性已经不成立，
+   与其猜它的含义，不如让用户自己看一眼；
+3. 插件的**必填字段在备份里有着落**——备份里没有、且插件也没给默认值的必填项，
+   填进去就是一条注定验证失败的凭据。反之，插件新增的**选填**字段一律留空，
+   这正是「库扩增后新列留空」的落点。
+
+判定失败的条目不会被写入，但会逐条记下原因，并落到 `data/logs/` 下两份文件：
+完整导入日志（含成功条目，敏感值脱敏）与导入失败日志（仅失败条目，**含明文**，供人工比对）。
 """
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 from . import database as db
-from .crypto import decrypt_dict, encrypt_dict
+from . import plugin_manager
+from .crypto import decrypt_dict, encrypt_dict, mask_secret
+from .logger import LOG_DIR
 
 FORMAT = "credential-vault-backup"
 VERSION = 1
@@ -23,6 +35,9 @@ VERSION = 1
 # 仅备份/恢复这几项与主密码、与本机环境无关的偏好设置
 # （salt / verify_token 不备份；mcp_host / mcp_port 是本机监听配置，换台机器未必可用，不跟随备份）
 _PREF_KEYS = ("verify_proxy", "global_proxy_id", "log_level", "close_action", "auto_lock_minutes")
+
+# 返回给界面的失败条数上限（日志文件里是全量；IPC 载荷没必要跟着条目数一起涨）
+_MAX_REPORTED_FAILURES = 200
 
 
 def _iso() -> str:
@@ -36,8 +51,180 @@ def _sensitive_keys(credential_type: str) -> set:
     return {f["key"] for f in record.get("fields_schema", []) if f.get("sensitive")}
 
 
-def _sensitive_values(credential_type: str, data: dict) -> tuple:
-    return tuple(sorted(str(data[k]) for k in _sensitive_keys(credential_type) if data.get(k)))
+def _dedupe_key(credential_type: str, data: dict) -> tuple:
+    """一条凭据的「身份」，用于重复判定。
+
+    默认取**敏感字段的值**——敏感值相同基本就等同于同一把钥匙。但敏感值为空的情况很常见
+    （插件压根没有敏感字段，或这条凭据没填任何敏感字段），此时敏感身份是空集：要么所有条目
+    都算重复（会丢数据），要么都不算（导入两次就翻一倍）。所以**拿不到敏感身份就退化为整条
+    记录做身份**——完全相同才算重复，这正是「重复导入同一份备份不出双份」需要的语义。
+    """
+    sens = _sensitive_keys(credential_type)
+    key = tuple(sorted(f"{k}={data[k]}" for k in sens if data.get(k)))
+    if key:
+        return key
+    return tuple(sorted(f"{k}={data[k]}" for k in data if data.get(k)))
+
+
+def _field_visible(field: dict, values: dict) -> bool:
+    """字段此刻该不该显示（manifest 的 ``show_if`` 条件显隐）。
+
+    与前端 `frontend/src/utils/format.js` 的 `fieldVisible` 逐字同义——两边判据若不一致，
+    会出现「表单里必填的字段导入时却不算数」这种对不上的怪事。
+    条件形如 ``{"kind": "app"}`` 或 ``{"auth_mode": ["api_key", "chatgpt"]}``。
+    """
+    cond = field.get("show_if")
+    if not isinstance(cond, dict) or not cond:
+        return True
+    for key, want in cond.items():
+        allowed = want if isinstance(want, list) else [want]
+        if not any(str(values.get(key, "") or "") == str(v) for v in allowed):
+            return False
+    return True
+
+
+def _prepare_entry(schema: list, data: dict) -> tuple:
+    """按当前插件的字段表规整一条备份数据，返回 ``(effective, errors)``。
+
+    - 备份里有、字段表里没有的键 → 记错误（未知字段）；
+    - 字段表里有、备份里没有的键 → 留空；**必填项**若带 default 则用 default 补上
+      （插件后加的「模式选择」这类字段就是这种形态：备份里没有，但默认值让它依然可用）；
+    - 补完默认值后再逐个核对必填项，仍为空的就是错误。
+
+    ``effective`` 即使存在错误也照常返回，供失败日志把「原样 + 补过的默认值」一并打印。
+    """
+    keys = {f.get("key") for f in schema if f.get("key")}
+    errors: list[str] = []
+
+    unknown = sorted(k for k in data if k not in keys)
+    if unknown:
+        errors.append("备份中的字段在当前插件中不存在：" + "、".join(unknown))
+
+    effective = dict(data)
+    # 两遍：先按字段表顺序补默认值（后面的字段可能依赖前面刚补上的值判 show_if），
+    # 再统一核对必填。字段表通常一次就够，第二遍是给「条件字段也带默认值」留的余量。
+    for _ in range(2):
+        for f in schema:
+            key = f.get("key")
+            if not key or not f.get("required") or f.get("default") is None:
+                continue
+            if str(effective.get(key, "") or "").strip():
+                continue
+            if not _field_visible(f, effective):
+                continue
+            effective[key] = f["default"]
+
+    missing = [
+        f.get("label") or f.get("key")
+        for f in schema
+        if f.get("required")
+        and _field_visible(f, effective)
+        and not str(effective.get(f.get("key"), "") or "").strip()
+    ]
+    if missing:
+        errors.append("缺少必填字段：" + "、".join(str(m) for m in missing))
+
+    return effective, errors
+
+
+def _fname_stamp() -> str:
+    return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def _mask_value(value: Any) -> str:
+    """完整日志里的字段值：敏感值走脱敏，其余照原样（它们本就以明文存在 data_plain 里）。"""
+    return mask_secret(str(value))
+
+
+def _write_import_logs(records: list[dict], *, encrypted: bool, source: str,
+                       counts: dict) -> tuple:
+    """写出完整导入日志与（有失败时的）失败日志，返回 ``(log_path, failed_log_path)``。
+
+    日志是**普通文本文件**（与运行日志同目录），不用 logging：它是一次性的、条目化的审计记录，
+    混进滚动日志只会把两者都搅浑。失败日志含明文，故以 0600 权限落盘。
+    """
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = _fname_stamp()
+    log_path = LOG_DIR / f"import_{stamp}.log"
+    failed_path = LOG_DIR / f"import_{stamp}_failed.log"
+
+    head = [
+        "Credential Vault 备份导入日志",
+        f"时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"源文件：{source or '（未记录）'}",
+        f"备份加密：{'是' if encrypted else '否'}",
+        f"条目总数：{counts['total']}　成功：{counts['imported']}　"
+        f"重复跳过：{counts['duplicate']}　失败：{counts['failed']}",
+        "",
+        "说明：本日志中**敏感字段已脱敏**（保留首尾少量字符用于辨识）。",
+        "      需要明文比对请查看同目录下的导入失败日志。",
+        "",
+        "=" * 78,
+        "",
+    ]
+    body = [_render_record(rec, masked=True) for rec in records]
+    log_path.write_text("\n".join(head + body) + "\n", encoding="utf-8")
+    _restrict(log_path)
+
+    if not counts["failed"]:
+        return str(log_path), None
+
+    failed_head = [
+        "Credential Vault 备份导入失败日志",
+        f"时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"源文件：{source or '（未记录）'}",
+        f"失败条数：{counts['failed']}",
+        "",
+        "⚠ 本文件包含**未脱敏的凭据明文**，仅用于人工比对与手动处理，请勿外传，用后请删除。",
+        "",
+        "=" * 78,
+        "",
+    ]
+    failed_body = [_render_record(rec, masked=False) for rec in records if rec["status"] == "failed"]
+    failed_path.write_text("\n".join(failed_head + failed_body) + "\n", encoding="utf-8")
+    _restrict(failed_path)
+    return str(log_path), str(failed_path)
+
+
+def _restrict(path) -> None:
+    """尽力把日志文件权限收成仅属主可读写（Windows 上 chmod 基本无效，忽略即可）。"""
+    try:
+        os.chmod(path, 0o600)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _render_record(rec: dict, *, masked: bool) -> str:
+    lines = [f"[{rec['index']}] {rec['name'] or '（无名称）'}"
+             f"　类型：{rec['credential_type'] or '（缺失）'}"
+             f"　分组：{rec['group'] or '（未分组）'}"]
+    lines.append(f"    结果：{_STATUS_TEXT.get(rec['status'], rec['status'])}")
+    for reason in rec.get("reasons") or []:
+        lines.append(f"    - {reason}")
+    data = rec.get("data") or {}
+    known_sensitive: Optional[set] = rec.get("sensitive")
+    if data:
+        lines.append("    字段：")
+        for key in sorted(data):
+            value = data[key]
+            # 完整日志要脱敏；但「哪些字段算敏感」来自插件字段表——插件没装上就没有字段表，
+            # 这时**一律脱敏**（拿不准就不要落明文，这正是失败日志存在的理由）。
+            if masked and (known_sensitive is None or key in known_sensitive):
+                shown = _mask_value(value)
+            else:
+                shown = str(value)
+            lines.append(f"      {key} = {shown}")
+    else:
+        lines.append("    字段：（无）")
+    lines.append("")
+    return "\n".join(lines)
+
+
+_STATUS_TEXT = {
+    "imported": "已导入",
+    "duplicate": "重复，已跳过",
+    "failed": "导入失败",
+}
 
 
 def build_backup(
@@ -106,8 +293,13 @@ def build_backup(
     return doc
 
 
-def import_backup(key: bytes, doc: dict, dedupe: bool = True) -> dict:
-    """把备份文档导入当前库。加密备份需与当前主密码匹配。"""
+def import_backup(key: bytes, doc: dict, dedupe: bool = True, source: str = "") -> dict:
+    """把备份文档**填充式**导入当前库，返回统计与逐条失败原因。
+
+    ``source`` 只用于日志抬头（记一下这份备份是从哪个文件来的），不影响导入逻辑。
+    加密备份需与当前主密码匹配——不匹配时直接抛 ``ValueError`` 中止整个导入，
+    因为那说明用户拿错了密码/文件，逐条报失败没有意义。
+    """
     if not isinstance(doc, dict) or doc.get("format") != FORMAT:
         raise ValueError("不是有效的 Credential Vault 备份文件")
 
@@ -163,20 +355,35 @@ def import_backup(key: bytes, doc: dict, dedupe: bool = True) -> dict:
             except Exception:
                 continue
             existing.setdefault(cred["credential_type"], set()).add(
-                _sensitive_values(cred["credential_type"], data)
+                _dedupe_key(cred["credential_type"], data)
             )
 
-    imported = skipped_plugin = skipped_dup = 0
-    for row in entries:
-        ct = row.get("credential_type") or ""
-        if not db.get_plugin_by_type(ct):
-            skipped_plugin += 1
-            continue
+    imported = skipped_plugin = skipped_dup = failed = 0
+    records: list[dict] = []
 
+    for idx, row in enumerate(entries, start=1):
+        if not isinstance(row, dict):
+            continue
+        ct = str(row.get("credential_type") or "")
+        rec: dict[str, Any] = {
+            "index": idx,
+            "name": str(row.get("name") or ""),
+            "credential_type": ct,
+            "group": str(row.get("group") or ""),
+            "status": "failed",
+            "reasons": [],
+            "data": {},
+            # None = 该条目还没走到字段表（插件缺失/禁用），此时脱敏按「全都敏感」处理
+            "sensitive": None,
+        }
+        records.append(rec)
+
+        # 取明文：加密备份用主密码解。解不开说明密码不对，整体中止。
         if encrypted:
             blob = row.get("data_encrypted")
             if not blob:
-                skipped_plugin += 1
+                rec["reasons"].append("备份条目缺少加密数据（data_encrypted）")
+                failed += 1
                 continue
             try:
                 data = decrypt_dict(key, blob)
@@ -184,22 +391,46 @@ def import_backup(key: bytes, doc: dict, dedupe: bool = True) -> dict:
                 raise ValueError("备份是加密的，且与当前主密码不匹配，无法导入")
         else:
             data = row.get("data") or {}
+        rec["data"] = data
 
-        values = _sensitive_values(ct, data)
+        # 填充式导入的蓝本 = 当前插件。插件不认识这条凭据，就无从谈「往哪儿填」。
+        plugin = db.get_plugin_by_type(ct)
+        if not plugin:
+            rec["reasons"].append(f"插件未安装：{ct}")
+            skipped_plugin += 1
+            failed += 1
+            continue
+        if not plugin_manager.is_plugin_enabled(ct):
+            rec["reasons"].append(f"插件已禁用：{plugin.get('name') or ct}（{ct}）")
+            skipped_plugin += 1
+            failed += 1
+            continue
+
+        schema = plugin.get("fields_schema") or []
+        rec["sensitive"] = {f["key"] for f in schema if f.get("sensitive")}
+        effective, errors = _prepare_entry(schema, data)
+        rec["data"] = effective
+        if errors:
+            rec["reasons"].extend(errors)
+            failed += 1
+            continue
+
+        values = _dedupe_key(ct, effective)
         if dedupe and values and values in existing.get(ct, set()):
+            rec["status"] = "duplicate"
             skipped_dup += 1
             continue
 
-        sensitive = _sensitive_keys(ct)
         db.create_credential(
             name=row.get("name") or "（导入）",
             credential_type=ct,
-            data_encrypted=encrypt_dict(key, data),
-            data_plain={k: v for k, v in data.items() if k not in sensitive},
+            data_encrypted=encrypt_dict(key, effective),
+            data_plain={k: v for k, v in effective.items() if k not in rec["sensitive"]},
             group_id=name_to_id.get(row.get("group") or ""),
         )
         if dedupe and values:
             existing.setdefault(ct, set()).add(values)
+        rec["status"] = "imported"
         imported += 1
 
     # 3) 偏好设置（仅整库范围）
@@ -209,14 +440,41 @@ def import_backup(key: bytes, doc: dict, dedupe: bool = True) -> dict:
                 # global_proxy_id 是 UUID，跨库稳定，原样写入即可
                 db.set_setting(k, str(doc["prefs"][k]))
 
+    # 4) 落两份日志（无论成败都写完整日志；有失败才多写一份含明文的）
+    counts = {
+        "total": len(records),
+        "imported": imported,
+        "duplicate": skipped_dup,
+        "failed": failed,
+    }
+    try:
+        log_file, failed_log_file = _write_import_logs(
+            records, encrypted=encrypted, source=source, counts=counts
+        )
+    except Exception as exc:  # noqa: BLE001 - 日志写不出来不该让已入库的数据「白导」
+        log_file, failed_log_file = "", ""
+        counts["log_error"] = f"导入日志写入失败：{exc}"
+
+    failed_items = [
+        {"name": r["name"], "credential_type": r["credential_type"], "reason": "；".join(r["reasons"])}
+        for r in records
+        if r["status"] == "failed"
+    ]
+
     return {
         "ok": True,
         "encrypted": encrypted,
         "imported": imported,
+        # 保持旧键名与旧含义（因插件缺失而没导进去的条数），现在把「插件已禁用」也算进来
         "skipped_plugin": skipped_plugin,
         "skipped_duplicate": skipped_dup,
+        "failed_count": failed,
+        "failed": failed_items[:_MAX_REPORTED_FAILURES],
+        "failed_truncated": max(0, len(failed_items) - _MAX_REPORTED_FAILURES),
         "created_groups": created_groups,
         "created_proxies": created_proxies,
+        "log_file": log_file,
+        "failed_log_file": failed_log_file,
     }
 
 

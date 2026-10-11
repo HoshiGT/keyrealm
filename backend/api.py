@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -1406,13 +1409,16 @@ def build_backup_doc(scope: str = "all", encrypted: bool = True,
     return {"ok": True, "document": doc}
 
 
-def apply_backup_doc(doc: dict, dedupe: bool = True) -> dict:
-    """把备份文档并入当前库（不弹对话框）——GUI 导入与 MCP 工具共用。"""
+def apply_backup_doc(doc: dict, dedupe: bool = True, source: str = "") -> dict:
+    """把备份文档并入当前库（不弹对话框）——GUI 导入与 MCP 工具共用。
+
+    ``source`` 只写进导入日志抬头，标明这份备份的来源文件。
+    """
     key = _get_key()
     if key is None:
         return {"error": "vault_locked"}
     try:
-        result = backup.import_backup(key, doc, dedupe=dedupe)
+        result = backup.import_backup(key, doc, dedupe=dedupe, source=source)
     except ValueError as e:
         return {"ok": False, "message": str(e)}
 
@@ -1420,7 +1426,9 @@ def apply_backup_doc(doc: dict, dedupe: bool = True) -> dict:
     proxy_config.apply_proxy(proxy_store.global_url() or "")
     push_event("vault:credentials_changed")
     push_event("vault:plugins_changed")
-    _log.info("已导入备份：导入 %d 条", result["imported"])
+    _log.info("已导入备份：成功 %d 条，失败 %d 条，重复跳过 %d 条（日志：%s）",
+              result["imported"], result.get("failed_count", 0),
+              result.get("skipped_duplicate", 0), result.get("log_file") or "未生成")
     return result
 
 
@@ -1474,7 +1482,7 @@ def import_backup() -> dict:
     except Exception as e:
         return {"ok": False, "message": f"读取失败: {e}"}
 
-    result = apply_backup_doc(doc)
+    result = apply_backup_doc(doc, source=path)
     if result.get("ok"):
         result["path"] = path
     return result
@@ -1526,3 +1534,29 @@ def clear_logs() -> dict:
     logger.clear_logs()
     _log.info("日志已清空")
     return {"ok": True, "message": "日志已清空"}
+
+
+def open_log_file(name: str) -> dict:
+    """用系统默认程序打开 `data/logs/` 下的日志文件（导入失败日志的「打开」按钮用）。
+
+    只接受**单个文件名**：这些文件的名字由后端生成、前端只是原样回传，没有任何理由
+    允许路径分隔符——挡住了拼接穿越，也就不必再谈白名单。
+    """
+    name = (name or "").strip()
+    if not name or os.path.basename(name) != name or name in (".", ".."):
+        return {"ok": False, "message": "非法的日志文件名"}
+    path = logger.LOG_DIR / name
+    if not path.is_file():
+        return {"ok": False, "message": f"日志文件不存在：{name}"}
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(path))  # type: ignore[attr-defined]  # 仅 Windows 存在
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+    except Exception as e:  # noqa: BLE001 - 打不开是环境问题，如实回报即可
+        _log.warning("打开日志文件失败 %s: %s", name, e)
+        return {"ok": False, "message": f"打开失败：{e}"}
+    _log.info("已用系统默认程序打开日志文件 %s", name)
+    return {"ok": True, "path": str(path)}

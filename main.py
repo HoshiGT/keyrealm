@@ -287,6 +287,9 @@ class VaultApi:
     def clear_logs(self):
         return api.clear_logs()
 
+    def open_log_file(self, name: str):
+        return api.open_log_file(name)
+
 
 # ── 窗口与托盘 ────────────────────────────────────────────
 
