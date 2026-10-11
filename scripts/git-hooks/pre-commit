@@ -1,0 +1,84 @@
+#!/bin/sh
+#
+# 提交前对齐「开发模式 Mock」的生成产物（插件目录 / 插件图标）。
+#
+# 背景：frontend/src/api/mockPlugins.js 与 pluginIcons.js 是由
+# scripts/gen_mock_assets.py 从 plugins/ 现扫生成的（见 docs/FRONTEND.md 的
+# 「开发模式的内存 Mock」）。手写时代它们漂得很厉害——漏插件、编造插件、类别放错。
+# 这条钩子让「改了插件却忘了重跑脚本」在提交前就被抹平：**重新生成并自动暂存**。
+#
+# 只在这两种文件出现在本次提交里时才干活，平时不拖慢提交：
+#   - plugins/ 下的任何改动（新增/删除/改 manifest 或 logo）
+#   - 生成脚本自身
+#
+# 设计取舍：
+#   - 生成产物是**机器所有**（文件头写着「勿手工编辑」），所以自动 git add 是安全的，
+#     与 prettier / gofmt 那类「自动修复型」钩子同一套路，且会打印改了什么。
+#   - 环境不全（没有 .venv / 没装 Pillow）时**只警告、不放行也不拦**——宁可漏一次，
+#     也不要把「本来是好的提交」卡死在一个 dev-only 产物上。
+#
+set -u
+
+GEN_SCRIPT="scripts/gen_mock_assets.py"
+GEN_FILE_1="frontend/src/api/mockPlugins.js"
+GEN_FILE_2="frontend/src/api/pluginIcons.js"
+
+# ── 1. 本次提交动到相关文件了吗？没有就直接放过 ──────────────
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+if [ -z "$STAGED" ]; then
+    exit 0
+fi
+RELEVANT=$(printf '%s\n' "$STAGED" | grep -E '^plugins/|^'"$GEN_SCRIPT"'$' || true)
+if [ -z "$RELEVANT" ]; then
+    exit 0
+fi
+
+# ── 2. 找一个能跑生成脚本的解释器（跨平台：POSIX 与 Windows venv 布局）──
+PY=""
+for cand in ".venv/bin/python" ".venv/Scripts/python.exe" "python3" "python"; do
+    if [ -x "$cand" ]; then
+        PY="$cand"
+        break
+    fi
+    if command -v "$cand" >/dev/null 2>&1; then
+        PY="$cand"
+        break
+    fi
+done
+if [ -z "$PY" ]; then
+    echo "[pre-commit] 未找到 Python，跳过开发模式 Mock 产物校验。" >&2
+    echo "             改了插件请手动跑：$GEN_SCRIPT" >&2
+    exit 0
+fi
+
+# ── 3. 重新生成；跑不起来只警告，不拦提交 ────────────────────
+if ! "$PY" "$GEN_SCRIPT" >/dev/null; then
+    echo "[pre-commit] 生成脚本执行失败（多半是缺依赖，如 Pillow），已跳过产物校验。" >&2
+    echo "             请手动跑一次：$PY $GEN_SCRIPT" >&2
+    exit 0
+fi
+
+# ── 4. 产物有变化就暂存进来（生成产物归机器所有，自动入本次提交）──
+# 只处理**已被 git 跟踪**的文件：新文件不替用户决定要不要入库，只提示。
+CHANGED=$(git diff --name-only -- "$GEN_FILE_1" "$GEN_FILE_2")
+STAGED_OUT=""
+HINT=""
+for f in $CHANGED; do
+    if git ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then
+        git add -- "$f"
+        STAGED_OUT="$STAGED_OUT $f"
+    else
+        HINT="$HINT $f"
+    fi
+done
+
+if [ -n "$STAGED_OUT" ]; then
+    echo "[pre-commit] 插件目录有变化，已重新生成并暂存开发模式 Mock 产物："
+    printf '             %s\n' $STAGED_OUT
+fi
+if [ -n "$HINT" ]; then
+    echo "[pre-commit] 以下产物已重新生成但尚未纳入版本控制，请自行决定是否提交：" >&2
+    printf '             %s\n' $HINT >&2
+fi
+
+exit 0

@@ -9,6 +9,7 @@
  */
 
 import { PLUGIN_ICON_IMAGES } from './pluginIcons'
+import { MOCK_PLUGINS } from './mockPlugins'
 
 const MOCK_PASSWORD = 'demo1234'
 const LATENCY = 120
@@ -48,125 +49,10 @@ function maskSecret(value) {
   return `${text.slice(0, 6)}…${text.slice(-4)}`
 }
 
-// ── Mock 子插件定义（与 plugins/<类别>/<服务>/ 目录结构一致）─────────────
-const LLM_VENDORS = [
-  ['openai', 'OpenAI'], ['anthropic', 'Anthropic'], ['deepseek', 'DeepSeek'],
-  ['openrouter', 'OpenRouter'], ['gemini', 'Google Gemini'], ['minimax', 'MiniMax'],
-  ['nvidia', 'NVIDIA NIM'], ['moonshot', 'Moonshot Kimi'], ['siliconflow', 'SiliconFlow'],
-  ['dashscope', '阿里云百炼'], ['huawei_maas', '华为云 MaaS'], ['glm', '智谱 GLM'],
-  ['glm_anthropic', '智谱 GLM（Anthropic 兼容）'], ['ark', '火山方舟'],
-  ['tongyi', '通义千问'], ['wenxin', '百度文心'],
-  ['openai_compatible', 'OpenAI 兼容接口'], ['anthropic_compatible', 'Anthropic 兼容接口'],
-]
-const API_SERVICES = [
-  ['firecrawl', 'Firecrawl'], ['tavily', 'Tavily'], ['coze', 'Coze'],
-]
-
-// 其余类别子插件：[类别, 类别名, 类别图标, 服务目录, 显示名, 图标, 是否支持批量验证]
-const EXTRA_PLUGINS = [
-  ['dns', '域名解析', '🌐', 'dnspod', 'DNSPod', '🅳', true],
-  ['dns', '域名解析', '🌐', 'duckdns', 'DuckDNS', '🦆', false],
-  ['dns', '域名解析', '🌐', 'godaddy', 'GoDaddy', '🛒', true],
-  ['dev', '开发者平台', '🧰', 'github', 'GitHub', '🐙', true],
-  ['dev', '开发者平台', '🧰', 'huggingface', 'HuggingFace', '🤗', true],
-  ['dev', '开发者平台', '🧰', 'wandb', 'Weights & Biases', '📊', true],
-  ['im', '即时通讯', '💬', 'feishu', '飞书', '🕊️', true],
-  ['im', '即时通讯', '💬', 'dingtalk', '钉钉', '📌', true],
-  ['im', '即时通讯', '💬', 'telegram', 'Telegram', '✈️', true],
-  ['im', '即时通讯', '💬', 'discord', 'Discord', '🎮', true],
-  ['im', '即时通讯', '💬', 'qq_bot', 'QQ 频道机器人', '🐧', true],
-  ['im', '即时通讯', '💬', 'wechat_ilink', '微信 iLink Bot', '📲', false],
-  ['cloud', '云服务商', '☁️', 'aliyun', '阿里云', '☁️', true],
-  ['cloud', '云服务商', '☁️', 'tencentcloud', '腾讯云', '🐧', true],
-  ['cloud', '云服务商', '☁️', 'cloudflare', 'Cloudflare', '🛡️', true],
-  ['exchange', '交易所', '📈', 'ht', '华泰证券（涨乐）', '📈', false],
-  ['exchange', '交易所', '📈', 'okx', 'OKX', '📉', true],
-  ['exchange', '交易所', '📈', 'binance', 'Binance', '🟡', true],
-  ['mail', '邮箱', '✉️', 'smtp', '通用 SMTP', '✉️', true],
-]
-
-function makeFieldsSchema(isCompatible) {
-  return [
-    { key: 'base_url', label: 'Base URL', type: 'url', required: !!isCompatible, sensitive: false, default: null, placeholder: 'https://api.example.com/v1', options: null },
-    { key: 'api_key', label: 'API Key', type: 'password', required: true, sensitive: true, default: null, placeholder: 'sk-...', options: null },
-    { key: 'notes', label: '备注', type: 'textarea', required: false, sensitive: false, default: null, placeholder: '用途说明', options: null },
-  ]
-}
-
-function buildPlugins() {
-  const plugins = []
-  let id = 0
-  for (const [vendor, name] of LLM_VENDORS) {
-    id += 1
-    plugins.push({
-      id,
-      name,
-      version: '1.0.0',
-      author: 'Credential Vault',
-      description: `${name} API Key 管理与验证`,
-      credential_type: `llm_${vendor}`,
-      icon: PLUGIN_ICON_IMAGES[vendor] ? 'logo.png' : '🤖',
-      icon_image: PLUGIN_ICON_IMAGES[vendor] || null,
-      icon_lift: false,
-      category: 'llm',
-      category_name: 'LLM 模型',
-      category_icon: '🤖',
-      rel_path: `llm/${vendor}`,
-      batch_verify: true,
-      has_actions: true,      enabled: true,
-      installed_at: daysAgo(30),
-      credential_count: 0,
-      fields_schema: makeFieldsSchema(vendor.endsWith('_compatible')),
-    })
-  }
-  for (const [service, name] of API_SERVICES) {
-    id += 1
-    plugins.push({
-      id,
-      name,
-      version: '1.0.0',
-      author: 'Credential Vault',
-      description: `${name} API Key 管理与验证`,
-      credential_type: `api_${service}`,
-      icon: PLUGIN_ICON_IMAGES[service] ? 'logo.png' : '🔌',
-      icon_image: PLUGIN_ICON_IMAGES[service] || null,
-      icon_lift: false,
-      category: 'api',
-      category_name: 'API 服务',
-      category_icon: '🔌',
-      rel_path: `api/${service}`,
-      batch_verify: true,      enabled: true,
-      installed_at: daysAgo(30),
-      credential_count: 0,
-      fields_schema: makeFieldsSchema(false),
-    })
-  }
-  for (const [cat, catName, catIcon, service, name, icon, batch] of EXTRA_PLUGINS) {
-    id += 1
-    plugins.push({
-      id,
-      name,
-      version: '1.0.0',
-      author: 'Credential Vault',
-      description: `${name} 凭据管理与验证`,
-      credential_type: `${cat}_${service}`,
-      icon,
-      icon_image: null,
-      icon_lift: false,
-      category: cat,
-      category_name: catName,
-      category_icon: catIcon,
-      rel_path: `${cat}/${service}`,
-      batch_verify: batch,
-      has_actions: service === 'smtp',      enabled: true,
-      installed_at: daysAgo(30),
-      credential_count: 0,
-      fields_schema: makeFieldsSchema(false),
-    })
-  }
-  return plugins
-}
-
+// ── 插件目录 ────────────────────────────────────────────
+// 数据不再手写：`mockPlugins.js` / `pluginIcons.js` 由 `scripts/gen_mock_assets.py`
+// 从 plugins/ 目录现扫生成（与真实目录逐条一致，加插件后重跑即可）。
+// 两份拆开是为了不把图标 data URL 在产物里重复存一遍。
 function createState() {
   const groups = [
     { id: 1, name: '工作项目', description: '2026 年 Q4 核心项目', color: '#409EFF', sort_order: 0, created_at: daysAgo(30), credential_count: 3 },
@@ -174,7 +60,13 @@ function createState() {
     { id: 3, name: '基础设施', description: '云资源访问密钥', color: '#E6A23C', sort_order: 2, created_at: daysAgo(12), credential_count: 1 },
   ]
 
-  const plugins = buildPlugins()
+  // 与后端 `list_plugins()` 同形：图标 data URL 从 PLUGIN_ICON_IMAGES 现拼
+  // （emoji 图标的插件在该表里没有条目 → icon_image 为 null，前端回退显示 emoji）。
+  const plugins = MOCK_PLUGINS.map((p) => ({
+    ...p,
+    icon_image: PLUGIN_ICON_IMAGES[p.credential_type] || null,
+    installed_at: daysAgo(30),   // 产物里不写时间戳，避免每次生成都产生 diff
+  }))
 
   const credentials = [
     { id: 1, name: 'OpenAI 生产账号', credential_type: 'llm_openai', group_id: 1, data_plain: { base_url: 'https://api.openai.com/v1', notes: '生产环境主账号' }, secret: 'sk-proj-demo-aaaaaaaaaaaaaaaa', status: 'valid', status_detail: { message: '验证通过', account_info: { balance: 2.419652, currency: 'USD', usage_rate: 0.5160696 }, duration_ms: 320 }, last_verified_at: minutesAgo(2), last_valid_at: minutesAgo(2), created_at: daysAgo(30), updated_at: minutesAgo(2) },
@@ -186,18 +78,28 @@ function createState() {
     { id: 7, name: 'SMTP - QQ 邮箱', credential_type: 'mail_smtp', group_id: null, data_plain: { host: 'smtp.qq.com', port: 465, ssl: true, username: 'demo@qq.com' }, secret: 'authcode-demo', status: 'valid', status_detail: { message: '凭证有效：SMTP 登录成功', account_info: { server: 'smtp.qq.com', port: 465 }, duration_ms: 300 }, last_verified_at: minutesAgo(30), last_valid_at: minutesAgo(30), created_at: daysAgo(2), updated_at: minutesAgo(30) },
   ]
 
+  // 与后端 `_seed_mcp_permissions` 同表同序（SQL 按 tool_name 排序），共 20 个工具。
   const mcpPermissions = [
+    { tool_name: 'vault_batch_verify', enabled: false, description: '批量验证（可按 credential_ids 点名）' },
+    { tool_name: 'vault_create_credential', enabled: false, description: '创建凭据' },
+    { tool_name: 'vault_create_group', enabled: false, description: '创建分组' },
+    { tool_name: 'vault_create_proxy', enabled: false, description: '新增验证代理' },
+    { tool_name: 'vault_delete_credential', enabled: false, description: '删除凭据' },
+    { tool_name: 'vault_delete_group', enabled: false, description: '删除分组（组内凭据保留，仅解除归属）' },
+    { tool_name: 'vault_delete_proxy', enabled: false, description: '删除验证代理' },
+    { tool_name: 'vault_export_backup', enabled: false, description: '导出备份' },
+    { tool_name: 'vault_get_credential', enabled: false, description: '获取凭据详情' },
+    { tool_name: 'vault_get_secret', enabled: false, description: '获取解密后的敏感字段（高危）' },
+    { tool_name: 'vault_import_backup', enabled: false, description: '导入备份' },
     { tool_name: 'vault_list_credentials', enabled: true, description: '列出凭据' },
-    { tool_name: 'vault_verify_credential', enabled: true, description: '触发验证' },
     { tool_name: 'vault_list_groups', enabled: true, description: '列出分组' },
     { tool_name: 'vault_list_plugins', enabled: true, description: '列出插件' },
-    { tool_name: 'vault_get_credential', enabled: false, description: '获取凭据详情' },
-    { tool_name: 'vault_create_credential', enabled: false, description: '创建凭据' },
+    { tool_name: 'vault_list_proxies', enabled: true, description: '列出验证代理与当前全局默认' },
+    { tool_name: 'vault_set_global_proxy', enabled: false, description: '设置全局默认代理' },
+    { tool_name: 'vault_test_proxy', enabled: false, description: '实测代理连通性' },
     { tool_name: 'vault_update_credential', enabled: false, description: '修改凭据' },
-    { tool_name: 'vault_delete_credential', enabled: false, description: '删除凭据' },
-    { tool_name: 'vault_batch_verify', enabled: false, description: '批量验证' },
-    { tool_name: 'vault_create_group', enabled: false, description: '创建分组' },
-    { tool_name: 'vault_get_secret', enabled: false, description: '获取明文密钥（高危）' },
+    { tool_name: 'vault_update_proxy', enabled: false, description: '修改验证代理' },
+    { tool_name: 'vault_verify_credential', enabled: true, description: '触发验证' },
   ]
 
   return {
@@ -225,10 +127,17 @@ function createState() {
     autoLockMinutes: 0,
     lightMode: false,
     autostartEnabled: true,
+    treeOrder: { categories: [], plugins: [] },
+    // 代理注册表。id 是 **UUID 字符串**（与后端一致，其它模块一律按 id 引用），不是自增整数。
+    proxies: [
+      { id: 'a1eb5c2ac79c42af96011e770b7d78ca', name: '本地 v2rayN', url: 'socks5://127.0.0.1:10808', scheme: 'socks5', sort_order: 0, created_at: daysAgo(20) },
+      { id: '3f7c1d90b25e4a6c8d0f2b7a91c3e5d4', name: '公司网关', url: 'http://10.0.0.8:7890', scheme: 'http', sort_order: 1, created_at: daysAgo(8) },
+    ],
+    globalProxyId: 'a1eb5c2ac79c42af96011e770b7d78ca',
     logs: [
       { level: 'INFO', text: logLine('INFO', 'main', '应用启动（frozen=False，日志级别=INFO，数据目录=…）', minutesDate(32)) },
       { level: 'DEBUG', text: logLine('DEBUG', 'backend.scheduler', '调度器已启动，加载 2 个计划', minutesDate(32)) },
-      { level: 'INFO', text: logLine('INFO', 'backend.plugin_manager', '扫描到 40 个子插件（7 个类别）', minutesDate(30)) },
+      { level: 'INFO', text: logLine('INFO', 'backend.plugin_manager', `扫描到 ${plugins.length} 个子插件（${new Set(plugins.map((p) => p.category)).size} 个类别）`, minutesDate(30)) },
       { level: 'WARNING', text: logLine('WARNING', 'backend.api', '事件推送失败 vault:mcp_status: window not ready', minutesDate(14)) },
       { level: 'ERROR', text: logLine('ERROR', 'backend.scheduler', '加载计划失败 id=2: 触发器参数无效', minutesDate(6)) },
     ],
@@ -240,6 +149,36 @@ export function createMockApi() {
   const state = createState()
 
   const nextId = () => ++state.sequence
+
+  // ── 代理辅助 ────────────────────────────────────────────
+  // 与 backend/proxy_store.py 同规则：必须带 scheme，且只认这五种；
+  // id 用 32 位十六进制串（对齐后端的 `uuid4().hex`，不是自增整数）。
+  const PROXY_SCHEMES = ['http', 'https', 'socks4', 'socks5', 'socks5h']
+  const proxyScheme = (url) => {
+    const m = /^([a-z0-9]+):\/\//i.exec(String(url || '').trim())
+    return m ? m[1].toLowerCase() : ''
+  }
+  const proxyUrlError = (url) => {
+    const raw = String(url || '').trim()
+    if (!raw) return '代理地址不能为空'
+    return PROXY_SCHEMES.includes(proxyScheme(raw)) ? '' : `代理地址不合法：${raw}`
+  }
+  const randomProxyId = () => {
+    let out = ''
+    while (out.length < 32) out += Math.floor(Math.random() * 0x10000).toString(16).padStart(4, '0')
+    return out.slice(0, 32)
+  }
+  /** 等价于后端 `api.list_proxies()` 的返回：全量列表 + 当前全局默认。 */
+  const proxySnapshot = () => {
+    const globalId = state.globalProxyId
+    const global = state.proxies.find((p) => p.id === globalId)
+    return {
+      ok: true,
+      items: state.proxies.map((p) => ({ ...p })),
+      global_id: globalId ?? null,
+      global_url: global ? global.url : '',
+    }
+  }
 
   const groupName = (groupId) => {
     const group = state.groups.find((item) => item.id === groupId)
@@ -794,6 +733,132 @@ export function createMockApi() {
       return { ok: true, enabled: state.autostartEnabled }
     },
 
+    // ── 凭据目录树顺序 ────────────────────────────────────
+    async get_tree_order() {
+      await delay(40)
+      return { ok: true, ...state.treeOrder }
+    },
+
+    async set_tree_order(categories = [], plugins = []) {
+      await delay(40)
+      state.treeOrder = {
+        categories: Array.isArray(categories) ? categories.map(String) : [],
+        plugins: Array.isArray(plugins) ? plugins.map(String) : [],
+      }
+      return { ok: true, ...state.treeOrder }
+    },
+
+    // ── 验证代理 ──────────────────────────────────────────
+    // 与后端 proxy_store 同契约：id 是 UUID 字符串；`_proxySnapshot()` 就是
+    // `api.list_proxies()` 的返回形状（改完直接回吐最新全量列表，调用方不必再 list 一次）。
+    async list_proxies() {
+      await delay(40)
+      return proxySnapshot()
+    },
+
+    async create_proxy(name, url) {
+      await delay(60)
+      const bad = proxyUrlError(url)
+      if (bad) return { ok: false, message: bad }
+      state.proxies.push({
+        id: randomProxyId(),
+        name: String(name || '').trim() || '未命名代理',
+        url: String(url).trim(),
+        scheme: proxyScheme(url),
+        sort_order: state.proxies.length,
+        created_at: iso(),
+      })
+      emit('vault:proxies_changed')
+      return proxySnapshot()
+    },
+
+    async update_proxy(proxy_id, name = null, url = null) {
+      await delay(60)
+      const item = state.proxies.find((p) => p.id === proxy_id)
+      if (!item) return { ok: false, message: '代理不存在' }
+      if (url !== null) {
+        const bad = proxyUrlError(url)
+        if (bad) return { ok: false, message: bad }
+        item.url = String(url).trim()
+        item.scheme = proxyScheme(url)
+      }
+      if (name !== null) item.name = String(name).trim() || item.name
+      emit('vault:proxies_changed')
+      return proxySnapshot()
+    },
+
+    async delete_proxy(proxy_id) {
+      await delay(60)
+      const idx = state.proxies.findIndex((p) => p.id === proxy_id)
+      if (idx < 0) return { ok: false, message: '代理不存在' }
+      state.proxies.splice(idx, 1)
+      // 删掉的正是全局默认那一条 → 自动回落到直连，不留悬空引用
+      if (state.globalProxyId === proxy_id) state.globalProxyId = null
+      emit('vault:proxies_changed')
+      return proxySnapshot()
+    },
+
+    async set_global_proxy(proxy_id = null) {
+      await delay(60)
+      // null / 0 / 空串 = 直连（与后端同一套「空值即直连」的判定）
+      const direct = proxy_id === null || proxy_id === undefined || proxy_id === '' || proxy_id === 0 || proxy_id === '0'
+      if (!direct && !state.proxies.some((p) => p.id === proxy_id)) {
+        return { ok: false, message: '代理不存在' }
+      }
+      state.globalProxyId = direct ? null : proxy_id
+      emit('vault:proxies_changed')
+      return proxySnapshot()
+    },
+
+    async test_proxy_id(proxy_id = null) {
+      await delay(900)   // 真实实现要在直连 / 代理两种模式下各跑一轮探测，慢一点更贴合
+      const target = proxy_id
+        ? state.proxies.find((p) => p.id === proxy_id)
+        : state.proxies.find((p) => p.id === state.globalProxyId)
+      if (proxy_id && !target) return { ok: false, message: '代理不存在' }
+
+      const direct = {
+        ip: { ok: true, ip: '221.11.94.12', country: '中国', region: '陕西', city: '西安', isp: '电信' },
+        domestic: { ok: true, ms: 21 },
+        foreign: { ok: false },
+      }
+      const directLine = '直连出口 IP：221.11.94.12（中国 陕西 西安 · 电信），国内站点可达，国外站点不可达'
+
+      // 全局被设为「直连」时（target 为空）与后端一致：只测直连，proxied 为 null
+      if (!target) {
+        return {
+          ok: true,
+          proxy: '',
+          proxy_source: 'global',
+          direct,
+          proxied: null,
+          verdict: {
+            level: 'warn',
+            headline: '未配置代理，仅测试了直连',
+            details: [directLine, '未配置代理，本次仅测试直连。填入代理地址（如 socks5://127.0.0.1:10808）后可测试代理效果。'],
+          },
+        }
+      }
+
+      const socks = target.scheme === 'socks5'
+      return {
+        ok: true,
+        proxy: target.url,
+        proxy_source: proxy_id ? `proxy:${target.id}` : 'global',
+        direct,
+        proxied: {
+          ip: { ok: true, ip: '66.90.98.36', country: '美国', region: 'California', city: 'Los Angeles', isp: 'Zenlayer' },
+          domestic: { ok: true, ms: 364 },
+          foreign: { ok: true, ms: 364 },
+        },
+        verdict: socks
+          ? { level: 'ok', headline: '代理工作正常：出口已切换，国外站点由不可达变为可达',
+              details: [directLine, '代理出口 IP：66.90.98.36（美国 California Los Angeles · Zenlayer），国内站点可达，国外站点可达'] }
+          : { level: 'warn', headline: '代理可用，但国内站点延迟明显升高',
+              details: [directLine, '代理出口 IP：66.90.98.36（美国 California Los Angeles · Zenlayer），国内站点可达，国外站点可达', '若不需访问国外站点，建议对该凭据改用直连'] },
+      }
+    },
+
     // ── 简易操作（插件可选能力）────────────────────────────
     async list_credential_actions(credentialId) {
       await delay(60)
@@ -865,7 +930,9 @@ export function createMockApi() {
       requireUnlocked()
       return {
         ok: true, encrypted: false, imported: 0,
-        skipped_plugin: 0, skipped_duplicate: 0, created_groups: 0,
+        skipped_plugin: 0, skipped_duplicate: 0, failed_count: 0, failed: [],
+        created_groups: 0,
+        log_file: 'import-20260101-000000.log', failed_log_file: '',
         path: '/mock/credential-vault-backup.json',
       }
     },
@@ -874,6 +941,12 @@ export function createMockApi() {
     async get_log_config() {
       await delay(40)
       return { level: state.logLevel, levels: clone(LOG_LEVELS), log_file: MOCK_LOG_FILE }
+    },
+
+    // mock 里没有真的「用系统程序打开文件」这回事，回个成功保持按钮可用即可
+    async open_log_file(name) {
+      await delay(60)
+      return { ok: true, path: `/mock/logs/${name}` }
     },
 
     async set_log_level(level) {
