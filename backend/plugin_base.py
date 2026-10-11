@@ -140,6 +140,26 @@ def load_manifest(manifest_path: Path) -> PluginManifest:
     return PluginManifest.from_dict(data)
 
 
+def _helper_from_other_plugin(origin: str, own_dir: Path, category_dir: Path) -> bool:
+    """``origin`` 这个文件是不是来自**另一个插件目录**（同名辅助模块串味的判据）。
+
+    直接躺在类别目录下的共享模块（``plugins/llm/llm_common.py``、``plugins/cloud/google_sa.py``）
+    是各插件有意复用的，不算串味；只有落进**别的插件目录**（该目录下有 ``plugin.py``）才算。
+    越界判断沿祖先链往上走，走到自己目录或类别目录就停 —— 所以插件目录比类别目录深几层
+    都不影响（``plugins/llm/shared/util.py`` 这类嵌套共享目录也不会被误判）。
+    """
+    try:
+        parent = Path(origin).resolve().parent
+    except Exception:  # noqa: BLE001 - 解析失败按「不是」处理，宁可不动全局状态
+        return False
+    for ancestor in [parent, *parent.parents]:
+        if ancestor == own_dir or ancestor == category_dir:
+            return False
+        if (ancestor / "plugin.py").is_file():
+            return True
+    return False
+
+
 def load_plugin_module(plugin_path: Path, credential_type: str) -> Any:
     """
     动态加载插件模块
@@ -163,6 +183,33 @@ def load_plugin_module(plugin_path: Path, credential_type: str) -> Any:
     extra_paths = [str(plugin_path), str(plugin_path.parent)]
     added = [p for p in extra_paths if p not in sys.path]
     sys.path[:0] = added
+
+    # 插件目录下的私有模块是以**裸名**导入的（`import signer`），走的是全局 sys.modules。
+    # 两个插件各带一份同名模块时（cloud/*/signer.py 就是这种），先加载的那份会一直霸占这个名字，
+    # 后加载的插件 `from signer import X` 拿到的是**别人的实现**——算法不同也不报错，
+    # 只会算出看不懂的错误码。故执行本插件前，把「来自别的插件目录」的同名模块从 sys.modules
+    # 摘掉，让它 import 自己目录里那份；执行完若本插件没真用上，再把摘掉的那份原样还回去。
+    own_dir = plugin_path.resolve()
+    category_dir = plugin_path.parent.resolve()
+    shadowed: dict[str, Any] = {}
+    for py in sorted(plugin_path.glob("*.py")):
+        name = py.stem
+        if name == "plugin" or name.startswith("_"):
+            continue
+        prev = sys.modules.get(name)
+        if prev is None:
+            continue
+        origin = getattr(prev, "__file__", None)
+        if not origin or not _helper_from_other_plugin(origin, own_dir, category_dir):
+            continue
+        shadowed[name] = prev
+        del sys.modules[name]
+        _log.warning(
+            "插件 %s 的辅助模块 %s 与已加载的同名模块冲突（后者来自 %s），本次已摘掉它；"
+            "请把该辅助模块改成不会被其他插件占用的名字",
+            credential_type, name, origin,
+        )
+
     try:
         spec.loader.exec_module(module)
     finally:
@@ -171,6 +218,10 @@ def load_plugin_module(plugin_path: Path, credential_type: str) -> Any:
                 sys.path.remove(p)
             except ValueError:
                 pass
+        # 本插件没有真正引入这个名字 → 把原来那份还回去，别殃及已加载的插件
+        for name, prev in shadowed.items():
+            if name not in sys.modules:
+                sys.modules[name] = prev
 
     if not hasattr(module, "verify"):
         raise AttributeError(f"插件 {credential_type} 缺少必要函数 verify(data)")

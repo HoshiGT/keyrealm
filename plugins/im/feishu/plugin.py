@@ -39,7 +39,7 @@ from backend.plugin_sdk import (
 )
 
 SERVICE = "feishu"
-NAME = "飞书应用"
+NAME = "飞书"
 REQUIRED = (("app_id", "App ID"), ("app_secret", "App Secret"))
 DISPLAY_FIELD = "app_id"
 
