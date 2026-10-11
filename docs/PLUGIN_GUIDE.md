@@ -55,7 +55,9 @@ plugins/
 │   ├── discord/
 │   ├── qq_bot/
 │   ├── wechat_ilink/
-│   └── telegram_apihash/
+│   ├── telegram_apihash/
+│   ├── wechat_mp/              # 微信公众号（AppID + AppSecret）
+│   └── wechat_miniprogram/     # 微信小程序（AppID + AppSecret）
 ├── cloud/                      # 类别目录（云服务商）
 │   ├── category.json
 │   ├── google_sa.py            # 协议级工具：服务账号 JWT 换 token（gcp / firebase 共用）
@@ -64,7 +66,16 @@ plugins/
 │   ├── aws/
 │   ├── gcp/
 │   ├── huaweicloud/
-│   └── firebase/
+│   ├── firebase/
+│   ├── jdcloud/                # 京东云（签名器 jdcloud_signer.py）
+│   ├── ucloud/                 # UCloud（签名器 ucloud_signer.py）
+│   ├── baiducloud/             # 百度智能云 BCE（签名器 bce_signer.py）
+│   ├── volcengine/             # 火山引擎（签名器 volc_signer.py）
+│   └── ctyun/                  # 天翼云 EOP（签名器 eop_signer.py）
+├── map/                        # 类别目录（地图）
+│   ├── category.json
+│   ├── amap/                   # 高德地图 Web 服务 Key
+│   └── baidu/                  # 百度地图服务端 AK（+ 可选私钥 SK）
 ├── exchange/                   # 类别目录（交易所）
 │   ├── category.json
 │   ├── okx/
@@ -88,6 +99,14 @@ plugins/
   共享模块（`llm_common.py` 等）只是被各子插件 `import` 的普通 Python 文件。
   **通用工具已上收框架层的 `backend/plugin_sdk.py`**（结果类型、HTTP 客户端、代理、超时、
   解析/兜底辅助等），类别模块只保留**本类别特有**的内容；具体验证逻辑在各子插件内。
+- **插件私有的辅助模块必须带厂商前缀命名，别用通用名**（如写 `bce_signer.py`，
+  不要写 `signer.py`）。框架加载插件时会把**插件自身目录与它的类别父目录**临时插进
+  `sys.path`，同类别下多个插件各带一份**同名**模块时，`sys.modules` 里先加载的那份会一直
+  霸占该名字，后加载的插件会拿到**别人的实现**——算法不同也不报错，只会算出看不懂的错误码
+  （如签名恒失败）。名字唯一后这类冲突从根上消失，框架也不会再打「辅助模块与已加载的
+  同名模块冲突」的警告。**并且要按显式文件路径加载**（`importlib.util.spec_from_file_location`
+  + 基于 `__file__` 的绝对路径）而不是裸 `import`：框架会临时注入插件目录，但直接 `exec`
+  插件文件的调用方（如 `tests/`）只注入到类别目录，裸 `import` 在那里会失败。
 - 名称以 `_` 或 `.` 开头的目录会被跳过（可用于临时禁用）。
 
 ### 1.1 启用 / 禁用：`plugins/.state.json`
@@ -200,10 +219,12 @@ plugins/
 > **插件 logo 的来源与许可**：内置插件的品牌图标是**随包分发**的第三方商标图形，取自
 > [Simple Icons](https://simpleicons.org/)（CC0-1.0）、Iconify 的 `thesvg` 集合（MIT）、
 > **App Store 官方图标**（中文区 `itunes.apple.com/search?country=cn`，取 `artworkUrl512` 的高分辨率版；
-> 扣子 / 飞书 / 企业微信等中文服务多由此取源）、以及厂商官网 / 官方仓库的原始素材
+> 扣子 / 飞书 / 企业微信等中文服务多由此取源）、**厂商官方品牌包**（如微信的 `wechat.design` 品牌资源 zip，
+> 公众号 / 小程序图标即由此取源）、以及厂商官网 / 官方仓库的原始素材
 > （官网 `<link rel="icon">` 的 favicon，或官网静态资源目录里的原始 SVG/PNG——如 W&B 取自
 > `site.wandb.ai` 的 favicon、腾讯 QQ 取自 `static-res.qq.com` 的 `qq-logo.png`、
-> Hugging Face 取自官网仓库的彩色版 `huggingface_logo-noborder.svg`）；
+> Hugging Face 取自官网仓库的彩色版 `huggingface_logo-noborder.svg`、
+> 京东云 / UCloud / 百度智能云 / 火山引擎 / 天翼云取自各自官网静态资源里的原始矢量）；
 > 商标归各自权利人所有，此处仅用于标识对应服务。
 >
 > 选图有四条硬要求（渲染位只有 **16px**（凭据树选择器）与 **22px**（插件管理）两种，见
@@ -215,10 +236,12 @@ plugins/
 > 3. **不留烤死的白底 / 白边**——深色主题下白底会变成一块白砖（白底烤进位图即 100% 不透明，
 >    如 `wecom`），白边则是低分辨率圆角砖硬缩放留下的晕（如 `feishu`，源图仅 48px）。若源图只有
 >    「彩色图形 + 白底」，不能直接按亮度设 alpha（那会把图形内部也判成半透明、整块发灰），要按合成
->    模型 `observed = ink·a + 255(1−a)` **解出 a 再把墨色反解回来**（现成实现见 `tmp/logosrc/cutout.py`；
->    图标本身的深色可见度另由 `backend/icon_ink.py` 判定）。
-> 4. **位图长边压在 128px 以内**——渲染位最大 22px，640×640 纯属浪费（20 张 640² 缩到 128² 后，
->    冷启动分析总耗时从 232 ms 降至 66 ms）。位图一律缩到 **128×128**（LANCZOS，保 alpha）；
+>    模型 `observed = ink·a + 255(1−a)` **解出 a 再把墨色反解回来**，并**把墨色向透明邻域外扩一圈**
+>    （alpha 不动）——否则缩到 16px 时透明区的黑 RGB 会被插值污染，在深色底上留一圈深灰边
+>    （图标本身的深色可见度另由 `backend/icon_ink.py` 判定）。
+> 4. **位图长边压在 128px 以内**——渲染位最大 22px，640×640 纯属浪费（当初 20 张 640² 缩到 128² 后，
+>    冷启动分析总耗时从 232 ms 降至 66 ms；**当前 60 插件 / 58 张 logo 实测约 76 ms**）。
+>    位图一律缩到 **128×128**（LANCZOS，保 alpha）；
 >    例外是原生就小的图（如 `qq_bot` 官方 favicon 只有 62×62 且无更高清源，原样保留，不做假放大）。
 
 ### 字段输入约定（新增插件必守）
@@ -996,14 +1019,24 @@ gateway（短信网关 / 接码服务商，
 
 **dev/ 类别（4 个）**：github（令牌）、huggingface、wandb（Weights & Biases）、npm（npm 访问令牌）。
 
-**im/ 类别（8 个）**：feishu（飞书）、dingtalk（钉钉）、wecom（企业微信）、telegram（Bot）、discord（Webhook）、
-qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）、telegram_apihash（Telegram API ID / Hash）。
+**im/ 类别（10 个）**：feishu（飞书）、dingtalk（钉钉）、wecom（企业微信）、telegram（Bot）、discord（Webhook）、
+qq_bot（QQ 频道机器人）、wechat_ilink（微信 iLink Bot）、telegram_apihash（Telegram API ID / Hash）、
+wechat_mp（微信公众号）、wechat_miniprogram（微信小程序）。
 其中 **dingtalk 与 wecom 是「应用 / Webhook 双形态」**插件：`kind` 下拉选 `app`（自建应用）或
 `webhook`（群机器人），字段用 `show_if` 按 `kind` 显隐；`kind` 缺省回落 `app`，故旧的 `im_dingtalk`
 凭据不受影响（原独立的通用 `im_webhook` 插件已按厂商拆入这两个插件）。
+**wechat_mp / wechat_miniprogram 同为 `AppID + AppSecret` 两件套**，校验都走
+`cgi-bin/token` 换 access_token（只读；顺带取关注者列表 / 小程序基础信息与接口配额），二者据
+拿到的是公众号还是小程序的凭据分别独立成插件——同 AppID 在两种主体下不通用。
 
-**cloud/ 类别（6 个）**：aliyun（阿里云 AK/SK）、tencentcloud（腾讯云 SecretId/Key）、aws（AWS Access Key）、
-gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Firebase 管理密钥）。
+**cloud/ 类别（11 个）**：aliyun（阿里云 AK/SK）、tencentcloud（腾讯云 SecretId/Key）、aws（AWS Access Key）、
+gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Firebase 管理密钥）、
+jdcloud（京东云 AK/SK）、ucloud（UCloud PublicKey/PrivateKey）、baiducloud（百度智能云 BCE AK/SK）、
+volcengine（火山引擎 AK/SK）、ctyun（天翼云 AK/SK）。
+国内五家（京东云 / UCloud / 百度智能云 / 火山引擎 / 天翼云）**一律只用只读接口做校验**
+（IAM 列举 / GetRegion / DescribeRegions / 资源池列表），且各自提供一组只读查询操作
+（身份、地域、可用区、云主机等）；`region` / `region_id` 为选填默认地域，只影响查询与部分端点选择，
+**校验本身不依赖它**。
 服务账号这类凭据按「一行一项」收 **邮箱 + 私钥**，另两个字段选填（密钥 ID 只当 JWT 头的 `kid`、
 项目 ID 只喂额外探测），**不接收整段 JSON**——见 §2「字段输入约定」。
 `google_sa.py` 是协议级共享模块：gcp 与 firebase 都要把邮箱 + 私钥签成 RS256 JWT 换 access_token，
@@ -1012,6 +1045,12 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
 `client_email` + `private_key` 也能通过。
 （Cloudflare 已移到 `dns/` —— 它本质是域名解析类。）
 
+**map/ 类别（2 个）**：amap（高德地图 Web 服务 Key）、
+baidu（百度地图服务端 AK，选填私钥 SK —— AK 开了 **SN 校验**时补上 SK 由插件自动签名）。
+两家都只需一个 Key（百度多一个可选 SK），校验都用 **IP 定位接口**（`/v3/ip` / `/location/ip`）——
+无需额外参数、也不消耗配额型服务，顺带回填所在省市。
+把 Key 放进 **URL 查询串**是这两家的接口形制，故异常文本必须走 §3.1.7 的输出净化。
+
 **exchange/ 类别（2 个）**：okx、binance。
 
 **mail/ 类别（1 个）**：smtp（通用 SMTP，覆盖 Gmail / QQ / 163 / 126 等）。TLS **默认最低 1.2**——
@@ -1019,11 +1058,15 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
 勾选凭据里的「**允许旧版 TLS**」（`allow_legacy_tls`，默认关）即可；降级会让授权码走在更弱的信道上，
 所以默认不开、须用户确认服务器可信后自行开启。SMTP 与 IMAP 两条路径共用这个开关。
 
-> 说明：标记 `batch_verify: false`（只能手动单个验证）的有三个：`duckdns` 的校验本身是写操作
-> （先写入 `1.1.1.1` 确认生效再还原原值）；`telegram_apihash` 与 `api/gateway` 则是判定常为
-> 「未验证」（前者要登录态、后者多数厂商没有只读接口），批量跑会把人工判定的状态刷成「未验证」。
+> 说明：标记 `batch_verify: false`（只能手动单个验证）的共**五个**：
+> `dns/duckdns` 的校验本身是写操作（先写入 `1.1.1.1` 确认生效再还原原值）；
+> `im/telegram_apihash` 与 `api/gateway`（`credential_type` 仍为历史的 `sms_gateway`）则是判定常为
+> 「未验证」（前者要登录态、后者多数厂商没有只读接口），批量跑会把人工判定的状态刷成「未验证」；
+> `im/wechat_mp` 与 `im/wechat_miniprogram` 是因为 **access_token 是账号级的**——
+> 批量并发取 token 会互相作废、还可能打断同一账号下其它正在运行的系统
+> （插件本身走 `stable_token` + `force_refresh=false`，只在账号当前没有可用 token 时才新签发）。
 
-> 本节共 **51 个**，即 `plugins/` 下的**全部**插件，**默认全部启用**。想临时停用某个用
+> 本节共 **60 个**，即 `plugins/` 下的**全部**插件，**默认全部启用**。想临时停用某个用
 > 「插件管理」里的**禁用**即可（状态记在 `plugins/.state.json`，见 §1.1），无需删除目录——
 > 禁用后其功能选项在界面置灰、批量验证自动跳过，其凭据**状态显示为「插件禁用」（派生，重新启用
 > 即回弹）、且不许再给它添加凭据**，而编辑 / 删除与已有数据照常保留。
@@ -1038,9 +1081,14 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
 - **llm**：18 个厂商 —— 简单对话（`chat`，流式）；其中 **openai** 另有「认证方式」下拉，
   选「ChatGPT 登录态（Codex）」时除「简单对话」外还提供「登录态详情」（`token_info`，只读解析本地
   JWT，**不回显任何令牌**）；`codebuddy` 是纯登录态类凭据，同样只有 `token_info`。
-  > 登录态**按字段分开填**（`access_token` 必需；`id_token` / `refresh_token` 可选），
-  > 不要求粘贴整份 `~/.codex/auth.json`——既不便于维护，也会把不必要的字段一起存下来。
-  > 联网头 `chatgpt-account-id` 不单列字段，一律从 access_token 的 JWT claim 兜底。
+  > 登录态**按字段分开填**（`access_token` 必需；`id_token` / `refresh_token` / `account_id` /
+  > `last_refresh` 可选），不要求粘贴整份 `~/.codex/auth.json`——既不便于维护，也会把不必要的字段一起存下来。
+  > 字段名与 auth.json 对齐：`account_id` 取 `tokens.account_id`、`last_refresh` 取顶层同名项。
+  > 联网头 `chatgpt-account-id` **以 `account_id` 字段为准**，留空才回落 access_token 的 JWT claim，
+  > 两处都取不到就不带这个头。**实测（2026-10，个人 Pro 账号）该头不被校验**：`/me`、`/wham/usage`、
+  > `/codex/models`、`/codex/responses` 在「带对 / 带错 / 不带」三种取值下表现**完全一致**——
+  > 它的实际用途是**多组织 / 工作区账号下指定用哪个工作区**。`last_refresh` 纯展示（「登录态详情」里
+  > 显示这份登录态有多旧），用户手动刷新成功后由插件写成本次时间。
   > 字段按模式显隐（`show_if`）：选 API Key 时只看到 API Key 那组，选 ChatGPT 登录态时只看到登录态那组。
   > **只读校验绝不换令牌**（`GET /v1/models`、`GET /backend-api/me` 与 best-effort 的
   > `GET /backend-api/wham/usage` 都是只读；后者读付费套餐的额度窗，取不到就不显示「使用率」一行）。
@@ -1077,8 +1125,7 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
   - duckdns —— 当前解析（`list`：A / TXT 两行）→ 行内「修改」下钻到「更新解析」（`write`），
     另有「清除 TXT」（`write`）。DuckDNS 没有域名列表接口（一个 token 对应自有子域名），
     查询经 Cloudflare DoH；更新/清除走其 `update` 接口
-- **cloud**：aliyun / tencentcloud / aws / huaweicloud **四家同构** ——
-  `whoami`（身份 + **探测到的权限**）· `list_regions`（**地域列表**，含中文名；华为用**内置静态表**，
+- **cloud**：aliyun / tencentcloud / aws / huaweicloud **四家同构** ——  `whoami`（身份 + **探测到的权限**）· `list_regions`（**地域列表**，含中文名；华为用**内置静态表**，
   因为它的区域列表接口要 token）→ 行内「实例」下钻 `list_instances`（云主机，`region` 可预填可手填）·
   `list_buckets`（**对象存储**桶列表）→ 行内「预览」下钻 `list_objects`（**区分文件夹前缀与文件**，
   可继续进入前缀）；文件行「下载」（`save_to` 单对象）、文件夹行「打包下载」（`download_prefix`，
@@ -1100,9 +1147,27 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
   > 没填则**只读**查 `GET /v3/auth/projects` 推断，无副作用）；腾讯云按区域拼即可。
   > **华为 OBS 的 `ListBuckets` 与地域无关**（任何地域的 endpoint 都返回全部区域的桶，
   > 返回字段里也**没有** `ExtranetEndpoint`），所以桶的地域直接取 `Location`、端点在插件里自拼。
+  >
+  > **国内五家新云（京东云 / UCloud / 百度智能云 / 火山引擎 / 天翼云）各自一组只读查询**，
+  > **不套用上面四家的同构结构**（各家的 IAM / 地域 / 主机模型都不一样）：
+  > - jdcloud —— 查看调用者身份 · AccessKey 列表 · 地域与可用区 · 云主机实例列表 · 云硬盘列表
+  > - ucloud —— 账号信息 · 地域列表 · 项目列表 · 云主机列表 · 弹性 IP 列表 · 防火墙列表
+  > - baiducloud —— IAM 子用户 / 用户组 / 角色 / 权限策略列表 · BOS 存储桶列表 → 行内「浏览」下钻 BOS 对象
+  > - volcengine —— 账号信息 · 地域列表 · 可用区列表 · 云服务器列表 · 镜像列表
+  > - ctyun —— 地域（资源池）列表
+  >
+  > 五家都用**只读**接口做校验（IAM 列举 / GetRegion / DescribeRegions / 资源池列表），
+  > `region` / `region_id` 为选填默认地域、只影响查询与部分端点选择，**校验本身不依赖它**。
+  > 写新云插件时**不要**凭印象重写签名——各家的签名器自成一份模块，细节见本节末尾附录。
+- **map**：amap（高德）—— 地理编码 · 逆地理编码 · 行政区划 · 实况天气 · 预报天气 · IP 定位 · 距离测量；
+  baidu（百度）—— 地理编码 · 逆地理编码 · 地点检索 · IP 定位 · 实况天气 · 预报天气。
+  两家都是**纯只读查询**（校验走 IP 定位接口，见 §5 清单）。百度若 AK 开了 **SN 校验**，
+  在凭据里补上**私钥 SK** 即可，插件自动按官方规则签名。
 - **dev**：github —— 账号信息（含 `X-OAuth-Scopes` 权限）· **仓库列表 → 行内「打包下载」（`save_to`，弹另存为）**
   与行内「详情」下钻；huggingface / wandb —— 查看账号信息
 - **im**：feishu —— 应用信息与权限 · 机器人信息 · 用户详情（按 `open_id` 或邮箱）· 群组 · 知识库 · 云文档；
+  wechat_mp（公众号）—— 获取调用凭据 · 关注者列表 · 接口调用配额；
+  wechat_miniprogram（小程序）—— 获取调用凭据 · 小程序基础信息 · 接口调用配额；
   telegram（机器人信息、发送消息（写））· discord（Webhook 信息）·
   wechat_ilink —— 拉取消息（`list`，短轮询）→ 行内「下载」下钻到附件下载（图片 / 语音 / 文件 / 视频，
   CDN 密文本地 AES 解密后经 `save_to` 写盘）
@@ -1120,12 +1185,13 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
   > 且**尽力而为、失败放过**（服务器 CAPABILITY 里没有 `ID` 就跳过，发送异常一律吞掉——不引入新失败点）。
   > 在 163 与 126 邮箱上验证过：不发 `ID` 必现该错，发出后正常打开 INBOX。
 
-> 以上按**声明了操作（`actions()`）**的插件列举。`api/google_api_credentials`（原 `api/app_secret`）、
-> `cloud/gcp`、`im/telegram_apihash`、`im/wecom`、`im/dingtalk`（后两者拆分自原 `im/webhook`）、
-> `api/gateway` 目前只做凭据验证，未声明任何「操作」。
-> （`cloud/aws`、`cloud/huaweicloud`、`cloud/firebase`、`api/dify` 已补上操作，见上文。）
+> 以上按**声明了操作（`actions()`）**的插件列举。以下 9 个**未定义 `actions()`**、
+> 目前只做凭据验证：`api/fofa`、`api/gateway`、`api/google_api_credentials`（原 `api/app_secret`）、
+> `cloud/gcp`、`dev/npm`、`im/dingtalk`、`im/qq_bot`、`im/telegram_apihash`、`im/wecom`
+> （dingtalk / wecom 拆分自原 `im/webhook`）。
 
-> **按权限显隐**：aliyun / tencentcloud / aws / huaweicloud / firebase / dify / feishu / github 实现了
+> **按权限显隐**：aliyun / tencentcloud / aws / huaweicloud / firebase / dify / feishu / github
+> **以及新增的 jdcloud / ucloud / baiducloud / volcengine / ctyun** 实现了
 > `capabilities()`，没权限的操作不会出现在菜单里；
 > 一个都没有时给出说明。**探测失败一律 fail-open**（全都展示）——只有上游**明确**说「密钥无效」才判定为无可用操作。
 > （示例：一把**只有 S3 权限**的 AWS key，云主机与区域列表两项被隐藏，`note` 写明
@@ -1144,6 +1210,33 @@ gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Fireba
   `stringToSign = "sha1\n" + signTime + "\n" + sha1(httpString) + "\n"`，`signature = HMAC-SHA1(signKey, stringToSign)`。
 - 两家的响应都是 **XML**（用 `response.text` + `xml.etree.ElementTree`，用 `tag.rsplit('}', 1)[-1]` 绕开 namespace），
   **不要**用 `safe_json`。
+
+#### 附：新增五家国内云的签名器（各自插件目录内的独立模块）
+
+京东云 / UCloud / 百度智能云 / 火山引擎 / 天翼云都**没有**现成可用的签名库，
+各自有一份**独立辅助模块**（`jdcloud_signer.py` / `ucloud_signer.py` / `bce_signer.py` /
+`volc_signer.py` / `eop_signer.py`），均**经官方 SDK 源码逐字校准并留了固定向量**，
+不是一个 `plugin.py` 里的内联函数。写新云插件时**不要**凭印象重写签名——这些算法与
+AWS SigV4 只是「神似」，细节处处不同：
+
+- **火山引擎 SignerV4**：`Authorization` 前缀是 **`HMAC-SHA256`**（**不是** `AWS4-HMAC-SHA256`）；
+  `kDate = HMAC-SHA256(SK, date)` 用**原始 SK**、**不加** `"AWS4"` 前缀；头名精确为
+  `X-Date` / `X-Content-Sha256`。注意这是 **OpenAPI 网关**的签名，与「火山方舟 Ark / 豆包」
+  （`ark.cn-beijing.volces.com`，直接 `Authorization: Bearer <API Key>`）**完全不是一回事**。
+- **京东云 JDCLOUD3-HMAC-SHA256**：与 SigV4 同形，两套版本（JDCLOUD2 / JDCLOUD3）**只差版本串**；
+  请求**不带** `regionId` 时 scope 里填 `jdcloud-api`；**AK 不存在时返回 403**（不是 401）。
+- **百度智能云 BCE V1**：`CanonicalHeaders` **含 `content-length`**，而 httpx 对无 body 的 GET
+  不会自动补这个头——**空 body 的 `Content-Length: 0` 必须真的发出去**，漏了就是恒定签名失败。
+- **天翼云 EOP**：没有官方 Python SDK（官方 `ctyun-it` 组织只给 Go SDK 与 Terraform Provider，
+  以 Go 源码校准）；`eop-date` 用**北京时区**；成功码是 **`statusCode == 800`**（不是 HTTP 200）；
+  网关域名形如 `*-global.ctapi.ctyun.cn`；鉴权错误码 **10002 / 10003**。
+- **UCloud**：签名**先于** Action 名校验——拿假密钥试不出 Action 名对不对（返 `RetCode=171`）；
+  值编码**不做 URL 转义**，末尾拼 `PrivateKey` 再 hex。
+
+> **停靠点：`401` / `403` 要分层判**。签名器**不要**把 401/403 一律叫 `bad_cred`——
+> 对于「AK 根本不存在」「策略拒绝」这类，服务端也回 401/403，与本插件签名算错**不可区分**。
+> 只有**明确证据**（如响应体里的具体错误码指名凭据无效）才判 `invalid`，否则判 `restricted`，
+> 免得把有效但权限受限的凭据误报成失效。见 `docs/PLUGIN_GUIDE.md` 判定口径与各插件 docstring。
 
 ---
 ---

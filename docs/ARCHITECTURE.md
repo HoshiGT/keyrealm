@@ -130,8 +130,9 @@ plugins/
 ├── api/                      # API 服务类别：firecrawl / tavily / metaso / fofa / coze / dify / google_api_credentials / gateway（共 8 个）
 ├── dns/                      # 域名解析：dnspod / duckdns / godaddy / cloudflare
 ├── dev/                      # 开发者平台：github / huggingface / wandb / npm
-├── im/                       # 即时通讯：feishu / dingtalk / wecom / telegram / telegram_apihash / discord / qq_bot / wechat_ilink（dingtalk、wecom 为「应用 / Webhook 双形态」）
-├── cloud/                    # 云服务商：aliyun / tencentcloud / aws / gcp / huaweicloud / firebase（另含 google_sa.py 协议级共享模块）
+├── im/                       # 即时通讯：feishu / dingtalk / wecom / telegram / telegram_apihash / discord / qq_bot / wechat_ilink / wechat_mp / wechat_miniprogram（dingtalk、wecom 为「应用 / Webhook 双形态」）
+├── cloud/                    # 云服务商：aliyun / tencentcloud / aws / gcp / huaweicloud / firebase / jdcloud / ucloud / baiducloud / volcengine / ctyun（另含 google_sa.py 协议级共享模块）
+├── map/                      # 地图：amap（高德）/ baidu（百度）
 ├── exchange/                 # 交易所：okx / binance
 └── mail/                     # 邮箱：smtp（通用 SMTP，覆盖 Gmail/QQ/163/126）
 ```
@@ -140,7 +141,7 @@ plugins/
 > HTTPS API，与 api/ 其余服务同形，故并入 api/ 而不单开类别——新建类别**不再**需要连带克隆一份
 > `*_common.py`（通用工具已上收 `backend/plugin_sdk.py`），但单开一类的归类代价仍大于收益。
 
-> 八个类别共 51 个子插件：llm 18 / api 8 / im 8 / cloud 6 / dns 4 / dev 4 / exchange 2 / mail 1。
+> 九个类别共 60 个子插件：llm 18 / api 8 / im 10 / cloud 11 / dns 4 / dev 4 / map 2 / exchange 2 / mail 1。
 > 类别目录**不再强制**带共享模块——通用原语已上收 `backend/plugin_sdk.py`（框架暴露给插件的唯一接口层）；
 > 只有类别确有「类别特有」工具时才建一个（现仅 `llm/llm_common.py`、`mail/mail_common.py` 两例）。
 > **协议级模块**另立：`cloud/google_sa.py`（把服务账号的邮箱 + 私钥签成 RS256 JWT 换 token，
@@ -338,7 +339,11 @@ plugins/
 
 判定与文案集中在 `backend/proxy.py`：`needs_socks()` / `socks_available()` / `SOCKS_HINT`（单一事实来源，三层共用）。
 
-**备份 / 恢复**：`backend/backup.py` 负责构建/导入备份文档（JSON）。加密备份的敏感字段直接沿用库中密文，只能用同一主密码导入；明文备份可跨主密码导入（以当前主密钥重新加密写库）。导入按「类型 + 敏感值」去重，并跳过插件未安装的条目；文件读写通过 pywebview 的原生文件对话框（`api._file_dialog`，优先用 `webview.FileDialog` 枚举——旧的模块级 `SAVE_DIALOG`/`OPEN_DIALOG` 常量会打印弃用警告）。
+**备份 / 恢复**：`backend/backup.py` 负责构建/导入备份文档（JSON）。加密备份的敏感字段直接沿用库中密文，只能用同一主密码导入；明文备份可跨主密码导入（以当前主密钥重新加密写库）。文件读写通过 pywebview 的原生文件对话框（`api._file_dialog`，优先用 `webview.FileDialog` 枚举——旧的模块级 `SAVE_DIALOG`/`OPEN_DIALOG` 常量会打印弃用警告）。
+
+**导入是填充式的**：以当前库（本质是各插件的 `fields_schema`）为蓝本，把备份条目里的值往这个蓝本里填，**不删也不覆盖既有数据**。一条要满足三条才导得进去，否则**整条判失败、不写库**：① 插件**存在且启用**；② 备份里的字段**都能在当前插件里找到**（多出未知字段 = 两边同构性已不成立）；③ 插件的**必填字段在备份里有着落**（备份没有、插件也没默认值 → 填进去必是一条注定验证失败的凭据）。插件新增的**选填**字段一律留空——这正是「库扩增后新列留空」的落点。去重仍按「同类型 + 敏感值相同」跳过（`dedupe=true`）。
+
+判定失败的条目逐条记下原因，并落到 `data/logs/` 下**两份普通文本文件**（与运行日志同目录，但不用 `logging`：这是一次性、条目化的审计记录，混进滚动日志会把两者都搅浑）：完整导入日志（含成功条目，敏感值脱敏）与**导入失败日志**（仅失败条目，**保留明文**，供人工比对补录，故以 `0600` 权限落盘）。返回给界面的失败条数有上限（日志文件里是全量）。
 
 导出有两个**互不重叠**的维度：`scope` 决定是否附带**分组与偏好设置**（`all` 带、`credentials` 不带），`credential_ids` 决定**导出哪些凭据**（`None` = 全部，给定列表 = 只导这些；不影响 scope 语义）。因此「全部 + 勾选若干」与「仅凭据 + 勾选若干」的差别仍然只是分组/偏好设置那部分，文档里写入 `credential_ids` 便于回溯。前端「备份」页把两者做成两组控件（范围单选 + 凭据目录树勾选，勾选器是共享组件 `components/CredentialTreePicker.vue`——「系统设置 → 定时计划 → 指定凭据」用的是同一个）。
 
@@ -397,9 +402,10 @@ MCP 全局只保留**一个活跃 Token**，且**默认即存在**（无则自�
 
 调用需同时通过全局开关与 Token 范围（当前默认继承全局，等价于只受全局开关约束）。
 任一层的拒绝形态不同：Token 缺失/无效/过期由 SSE 中间件返回 **401 JSON**
-（`missing_token` / `invalid_token` / `token_expired`）；**工具权限**不足则由工具内
-`_require_perm` 抛 `PermissionError`，客户端收到的是 `isError` 的工具结果
-（正文 `权限不足：<tool> 未授权`），而不是 `permission_denied` 之类的 JSON 体。
+（`missing_token` / `invalid_token` / `token_expired`）；**工具权限**不足则由工具返回一份
+**结构化错误载荷**（`_perm_denied`，字段 `error="permission_denied"` + `reason` +
+可照做处理的 `message`），**不抛异常**——异常正文会被客户端压成一句「Error executing
+tool xxx」，把「该去哪开权限」这个关键信息吞掉。
 
 详见 [MCP_API.md](MCP_API.md)。
 
@@ -533,10 +539,15 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
 
 - **纯状态模块**：只做任务的增删改查 + 取消标志，不认 webview、不认数据库。推送由 `api.py`
   注入（`tasks.set_notifier(push_event)`）——既避免循环依赖，也让本模块能脱离应用单独测试。
-- **不持久化**：任务是运行期状态，进程重启即失效（重启后也没有线程在跑了）。已结束的只保留
-  最近 `_MAX_FINISHED = 50` 条，免得长时间运行越攒越多。
-- **状态**：`running` / `done` / `failed` / `canceled`，外加 `cancel_requested`（已点取消、
-  正在等插件停下）。
+- **持久化到文件**（`data/tasks.json`，与日志同目录，**不进数据库**）：进程重启后仍在，用户回来
+  能翻到「上次那个下载到底成没成」。重启时**所有 `running` 一律改判 `interrupted`**——线程随
+  进程没了，继续显示「进行中」是骗人，但也没失败（用户没做错什么），故单列一档。写盘时机：
+  状态**变迁**（新建 / 结束 / 取消 / 清理）立刻落盘；高频的 `progress()` 按 `_SAVE_INTERVAL = 2s`
+  节流。先写 `.tmp` 再 `replace` 原子替换，避免半个 JSON 让下次启动解析失败。已结束的只保留
+  最近 `_MAX_FINISHED = 50` 条。之所以不进库：任务不参与查询与关联，进库白搭一次 schema 变动 +
+  迁移脚本，且锁库时反而读不到。
+- **状态**：`running` / `done` / `failed` / `canceled` / `interrupted`，外加 `cancel_requested`
+  （已点取消、正在等插件停下）。
 
 **取消是协作式的**：`cancel()` 只置一个 `threading.Event`，真正停下靠**插件**在下载循环里查
 `should_cancel()`（框架把它按关键字传给 `stream_action`，与 `on_progress` 同一套「签名里有才传」的

@@ -309,12 +309,19 @@ claude mcp add credential-vault \
 {
   "scope": "all",          // "all" | "group" | "type"
   "group_id": null,        // scope=group 时必填
-  "credential_type": null  // scope=type 时必填
+  "credential_type": null, // scope=type 时必填
+  "credential_ids": null   // 点名一批 id 来验（**优先于 scope**）
 }
 
-// 出参：仅表示已启动，不回传条数（总数以下发的进度事件为准）
-{"ok": true, "message": "批量验证已启动"}
+// 出参：只表示已启动，total 是**本次实际会验证的条数**（已排除跳过项）
+{"ok": true, "total": 5, "message": "批量验证已启动（5 条）"}
 ```
+
+`credential_ids` 与 `scope` 的关系：
+
+- 传了**非空** `credential_ids` → 只按这份名单取，`scope` / `group_id` / `credential_type` 一并忽略；
+- 传 **`[]`（空数组）等同于没传** → 退化成按 `scope` 圈选（不传 scope 即全量）。
+  所以「一条也不验」必须在调用方自己拦住，别指望传空数组来表达。
 
 ---
 
@@ -345,6 +352,22 @@ claude mcp add credential-vault \
 // 出参：group 为新建的分组记录
 {"ok": true, "group": {"id": 3, "name": "新项目", "description": "2026年Q4项目", "color": "#E6A23C", "...": "..."}}
 ```
+
+---
+
+#### `vault_delete_group`
+**默认权限：❌ 关闭（需授权）**
+
+```json
+// 入参
+{"group_id": 3}
+
+// 出参
+{"ok": true}
+```
+
+**组里的凭据不会被删掉**：外键是 `ON DELETE SET NULL`，删组只是把成员解除归属
+（回到「未分组」）。要连凭据一起清掉，得自己先 `vault_list_credentials` 再逐条删。
 
 ---
 
@@ -385,6 +408,101 @@ claude mcp add credential-vault \
 ```
 
 > 调用时会先做一次插件目录扫描（`sync_plugins()`），使新放入 `plugins/` 的插件即时可见。
+
+---
+
+## 验证代理管理
+
+与界面上的「设置 → 验证代理」共用同一套实现（`backend/api.py` → `proxy_store`）。
+除只读的列出外**全部默认关闭**：代理决定「凭据的验证流量发到哪」，被 Agent 改掉
+等于把跟随全局的凭据出口交给它指定的地址。
+
+> **代理 id 是 UUID 字符串**（如 `6e4aa440aaa74ca6bee0f267a83770db`），不是自增整数
+> ——备份导入要跨库保持引用稳定，所以刻意不用 rowid。参数类型声明为 `str`。
+
+#### `vault_list_proxies`
+**默认权限：✅ 开启**
+
+```json
+// 出参
+{
+  "ok": true,
+  "items": [
+    {"id": "6e4aa440aaa74ca6bee0f267a83770db", "name": "本地", "url": "socks5://127.0.0.1:1080",
+     "scheme": "socks5", "sort_order": 0, "created_at": "2026-10-05T08:00:00Z"}
+  ],
+  "global_id": null,          // 当前全局默认；null = 直连
+  "global_url": ""
+}
+```
+
+#### `vault_create_proxy`
+**默认权限：❌ 关闭（需授权）**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `name` | str | 代理名（不能为空） |
+| `url` | str | 地址，**必须带 scheme**（`http` / `https` / `socks4` / `socks5` / `socks5h`） |
+
+```json
+// 出参：与 vault_list_proxies 同构（改完直接把最新全量列表回吐，不必再 list 一次）
+{"ok": true, "items": [{"id": "6e4a...", "...": "..."}], "global_id": null, "global_url": ""}
+
+// 地址不合法
+{"ok": false, "message": "代理地址不合法：127.0.0.1:1080"}
+```
+
+#### `vault_update_proxy`
+**默认权限：❌ 关闭（需授权）**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `proxy_id` | str | 要改的代理 id |
+| `name` | str \| 省略 | 只改名字；省略 = 不动 |
+| `url` | str \| 省略 | 只改地址；省略 = 不动 |
+
+出参同 `vault_create_proxy`；id 不存在时 `{"ok": false, "message": "代理不存在"}`。
+
+#### `vault_delete_proxy`
+**默认权限：❌ 关闭（需授权）**
+
+`{"proxy_id": "6e4a..."}` → `{"ok": true, "items": [], "global_id": null, "global_url": ""}`
+
+> 删掉的正是**全局默认**那一条时，全局自动回落到直连（不留悬空引用）；
+> 引用它的凭据会在下次解析时回退到全局。
+
+#### `vault_set_global_proxy`
+**默认权限：❌ 关闭（需授权）**
+
+`{"proxy_id": "6e4a..."}` 设为全局；**不传或传 `null` / `0` / `""` = 直连**。
+
+只影响「跟随全局」的凭据——单条凭据在 `data._proxy_mode` 里自己指定了代理的不受此影响。
+出参同 `vault_create_proxy`。
+
+#### `vault_test_proxy`
+**默认权限：❌ 关闭（需授权；它会真的发出一次外网请求）**
+
+`{"proxy_id": "6e4a..."}`，不传则测当前全局生效的那个。
+
+做的是**对照实验**：同一套探测分别在「直连」与「走代理」两种模式下各跑一遍，
+比较国内外站点可达性与出口 IP，再给结论。
+
+```json
+// 出参（节选）
+{
+  "ok": true,                                  // true = 测试跑完了，不代表代理可用
+  "proxy": "http://127.0.0.1:1",
+  "proxy_source": "proxy:6e4a...",             // 或 "global"
+  "direct":  {"domestic": {"ok": true, "ms": 120}, "foreign": {"ok": false}, "ip": {"ok": true, "ip": "1.2.3.4"}},
+  "proxied": {"domestic": {"ok": false}, "foreign": {"ok": false}, "ip": {"ok": false}},
+  "verdict": {"level": "fail",                 // ok / warn / fail
+              "headline": "代理不可用：经代理国内外站点均不可达",
+              "details": ["直连出口 IP：...", "请确认 ... 已启动、端口与协议正确"]}
+}
+
+// id 不存在时短路，不发任何请求
+{"ok": false, "message": "代理不存在"}
+```
 
 ---
 
@@ -455,9 +573,14 @@ claude mcp add credential-vault \
 
 | 权限级别 | 工具 | 默认 |
 |----------|------|------|
-| 只读 | `vault_list_credentials`, `vault_verify_credential`, `vault_list_groups`, `vault_list_plugins` | ✅ 开启 |
-| 写操作 | `vault_get_credential`, `vault_create_*`, `vault_update_*`, `vault_delete_*`, `vault_batch_verify` | ❌ 关闭 |
+| 只读 | `vault_list_credentials`, `vault_verify_credential`, `vault_list_groups`, `vault_list_plugins`, `vault_list_proxies` | ✅ 开启 |
+| 写操作 | `vault_get_credential`, `vault_create_*`, `vault_update_*`, `vault_delete_*`, `vault_batch_verify`, `vault_set_global_proxy`, `vault_test_proxy` | ❌ 关闭 |
 | 高危 | `vault_get_secret`, `vault_export_backup`, `vault_import_backup` | ❌ 关闭 |
+
+> 界面上的「⚠️ 二次确认」名单（前端 `SENSITIVE_TOOLS`）比上表的高危行更宽：除
+> `vault_get_secret` / `vault_export_backup` / `vault_import_backup` 外，还包括三个改动
+> 凭据的工具，以及五个代理工具（`vault_create/update/delete_proxy`、`vault_set_global_proxy`、
+> `vault_test_proxy`）——**代理决定「凭据的验证流量发到哪」**，改动即等于改变凭据出口。
 
 > **二次确认只在界面**：在 MCP 设置页**开启**高危 / 写操作工具时会弹确认框（清单见
 > `docs/FRONTEND.md`）。它约束的是「用户开不开这个开关」，与 Agent 的调用无关——Agent 调用
@@ -469,14 +592,30 @@ claude mcp add credential-vault \
 
 - **Token 层（HTTP 401）**：连接建立前即被 SSE 中间件拒绝，返回 JSON，见上文
   「鉴权失败响应」的 `missing_token` / `invalid_token` / `token_expired`。
-- **工具权限层**：`_require_perm` 在工具内部抛 `PermissionError`，客户端收到的是一次
-  `isError` 的**工具结果**（非 401/403），正文形如：
+- **工具权限层**：工具**不抛异常**，而是原样返回一份**结构化错误载荷**。
+  刻意如此——MCP 客户端会把异常正文压成一句「Error executing tool xxx」，**原因被吞掉**，
+  用户只看到那句、不知道该去哪开权限；返回结构化结果，`message` 才能原样送到用户眼前。
 
-```
-权限不足：vault_create_credential 未授权
+```json
+{
+  "error": "permission_denied",
+  "tool": "vault_create_credential",
+  "reason": "global_disabled",
+  "message": "工具「vault_create_credential」未授权：它在 MCP 里默认就是**关闭**的（高危工具）。请到 Credential Vault →「设置 → MCP 服务 → 工具权限」勾选启用后重试。"
+}
 ```
 
-> 全局开关关闭与 Token 范围不匹配都走这条路径，错误文本相同，不区分是哪一层拒绝的。
+`reason` 区分是哪一层拒绝的：
+
+| reason | 含义 |
+|--------|------|
+| `no_identity` | 认不出调用身份（Token 记录没传到工具层）；正常经 HTTP 调用不会出现 |
+| `global_disabled` | 全局开关没开（`mcp_permissions.enabled=0`）；Token 范围授了也没用 |
+| `token_scope` | 全局开着，但当前 Token 的 `tools_allowed` 不含它 |
+
+注意这种拒绝**既不是**协议层错误，**也不是** `is_error=true` 的工具结果——它就是一次
+「调用成功」，正文里说明没执行。声明返回数组的工具（如 `vault_list_credentials`）会把这份
+载荷包成 `[载荷]`，以匹配其声明的输出类型。
 
 ---
 

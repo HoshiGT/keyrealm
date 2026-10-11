@@ -46,6 +46,11 @@ CREATE TABLE settings (
 | `close_action` | 关闭主窗口行为（ask / quit / background） | `"ask"` |
 | `auto_lock_minutes` | 空闲自动锁定的分钟数（0 = 关闭；仅允许 0/1/5/10/15/30/60，其余按 0 处理） | `"0"` |
 | `light_mode` | 轻量模式（"1" = 最小化到托盘时释放界面文档；其余值一律按关闭处理） | `"0"` |
+| `tree_order` | 凭据目录树的顺序清单（JSON：`{"categories": [...], "plugins": [...]}`）。只存**用户排过序的**那部分，未列到的（如新装插件）由前端按自然顺序追加到末尾 | `{"categories":["llm"],"plugins":["llm_deepseek"]}` |
+
+> **刻意不入库的设置**：开机自启动。它的唯一事实来源是操作系统自启条目
+> （Windows 注册表 Run / macOS LaunchAgent / Linux XDG autostart），`api.get_autostart()`
+> 每次都去问系统；库里再存一份副本只会两边不一致。
 
 ---
 
@@ -228,7 +233,7 @@ CREATE TABLE mcp_permissions (
 );
 ```
 
-**初始工具列表**（共 13 个）：
+**初始工具列表**（共 20 个）：
 
 | tool_name | 默认 | 说明 |
 |-----------|------|------|
@@ -238,13 +243,20 @@ CREATE TABLE mcp_permissions (
 | `vault_update_credential` | ❌ 关 | 修改凭据 |
 | `vault_delete_credential` | ❌ 关 | 删除凭据 |
 | `vault_verify_credential` | ✅ 开 | 触发验证 |
-| `vault_batch_verify` | ❌ 关 | 批量验证 |
+| `vault_batch_verify` | ❌ 关 | 批量验证（可按 `credential_ids` 点名） |
 | `vault_list_groups` | ✅ 开 | 列出分组 |
 | `vault_create_group` | ❌ 关 | 创建分组 |
+| `vault_delete_group` | ❌ 关 | 删除分组（组内凭据保留，仅解除归属） |
 | `vault_list_plugins` | ✅ 开 | 列出插件 |
 | `vault_get_secret` | ❌ 关 | 获取解密后的敏感字段（高危） |
 | `vault_export_backup` | ❌ 关 | 导出备份（高危；`encrypted=false` 会把密钥明文写出） |
 | `vault_import_backup` | ❌ 关 | 导入备份（高危：会合并凭据、可能覆盖偏好设置） |
+| `vault_list_proxies` | ✅ 开 | 列出验证代理与当前全局默认 |
+| `vault_create_proxy` | ❌ 关 | 新增验证代理 |
+| `vault_update_proxy` | ❌ 关 | 修改验证代理 |
+| `vault_delete_proxy` | ❌ 关 | 删除验证代理 |
+| `vault_set_global_proxy` | ❌ 关 | 设置全局默认代理（改为直连也会影响所有跟随全局的凭据） |
+| `vault_test_proxy` | ❌ 关 | 实测代理连通性（会真实发出一次外网请求） |
 
 > **启动时的同步规则**（`database._seed_mcp_permissions`）：每次启动按上表校准本表 ——
 > 新工具插入、已下线的工具删除；**已存在工具的 `description` 会同步为源码默认值**

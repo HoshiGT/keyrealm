@@ -231,7 +231,7 @@ EP 自己给这类列的规则是 `background: inherit`——继承所在行的�
 `plugin_manager.icon_needs_lift()` 把结果随 `list_plugins()` 下发为 `icon_lift`；
 前端只给置了该标志的 `<img>` 加 `.icon-lift`，`base.css` 的白板规则也据此限定。
 **没有**在前端硬编码「哪几个标是黑的」——新装一个黑标插件同样自动纳入判定，不必改前端。
-冷启动一次性分析约 66 ms（51 个插件 / 50 张 logo，31 张位图已从 640² 缩到 ≤256²、多数 128²），
+冷启动一次性分析约 76 ms（60 个插件 / 58 张 logo，34 张位图已从 640² 缩到 ≤256²、多数 128²），
 之后按 `credential_type` 命中缓存（约 0.03 ms），缓存只在 `sync_plugins()` 时清空。
 
 **3. 解锁页徽标外那圈旋转描边始终不可见。** 它原本是 `conic-gradient` 配 `radial-gradient`
@@ -268,8 +268,46 @@ window.addEventListener('vault:credential_updated', (e) => {
 })
 ```
 
-> **开发模式**：Vite dev server（:5173）+ pywebview 连接 localhost  
+> **开发模式**：Vite dev server（:5173）+ pywebview 连接 localhost
 > **生产模式**：`npm run build` → `frontend/dist/` → pywebview 加载本地文件
+
+### 开发模式的内存 Mock（`src/api/mock.js`）
+
+没有 pywebview 的普通浏览器里跑 `npm run dev` 时，`installDevBridge()` 会把一个**纯内存后端**
+装到 `window.pywebview.api` 上（主密码 `demo1234`），让所有页面与交互都能走通。
+三条必须守住的约束：
+
+- **方法名与签名必须和主进程一致**：mock 直接冒充 pywebview 桥，所以它的键是**后端 IPC 名**
+  （`list_proxies` / `set_tree_order` / `test_proxy_id` …，不是 `index.js` 里的驼峰包装名），
+  参数顺序也要与 `main.py` 的 `VaultApi` 逐一对齐——桥接只走位置参数，错位不会报错、只会拿到错值。
+- **返回值要贴合后端语义**：同样受 `call()` 的 `unwrap()` 约束（`{ok:false}` / `{error:…}` 被当失败抛出）；
+  空值语义也要一致，例如代理 id 是 **32 位十六进制串**、`set_global_proxy(null)` = 直连、
+  全局为直连时 `test_proxy_id()` 只测直连（`proxied` 为 `null`）。
+- **插件目录不许手写**：`MOCK_PLUGINS` / `PLUGIN_ICON_IMAGES` 两份产物由
+  **`scripts/gen_mock_assets.py`** 从 `plugins/` 现扫生成（含类别名/图标/字段表/`batch_verify`/
+  `has_actions`/`icon_lift`），**加了插件就重跑一次脚本**：
+
+  ```bash
+  .venv/bin/python scripts/gen_mock_assets.py
+  ```
+
+  这两份数据以前是手写示意样本，很快就漂了（漏插件、编造不存在的插件、类别放错、
+  `credential_type` 写成猜的），dev 模式的症状是「页面上少了几个插件 / 搜索搜不到 / 下拉里没有」。
+  产物刻意保持**确定性**（不写时间戳、按 `credential_type` 排序、`id` 顺序分配），
+  没改插件时重跑不会产生 diff。
+
+  **不用记着手动跑**：仓库自带 `pre-commit` 钩子（`scripts/git-hooks/`），
+  提交只要动到 `plugins/` 或该生成脚本，就会自动重跑并把产物一并暂存：
+
+  ```bash
+  .venv/bin/python scripts/install_git_hooks.py   # 每个克隆装一次（写本仓库的 core.hooksPath）
+  ```
+
+  钩子在「解释器/依赖缺失、生成脚本报错」时**只警告不拦提交**——不让一个 dev-only 产物
+  把正常提交卡死；需要临时绕过时用 `git commit --no-verify`。
+
+> mock 由 `import.meta.env.DEV` 守卫，**生产构建里被完全摇树移除**——改完可对比 `dist` 的 JS 哈希与
+> 体积是否变化来确认它确实没被打进去（插件目录 + 图标共约 280 KB，只服务 dev）。
 
 ---
 
@@ -549,6 +587,14 @@ App.vue
 > **右键节点**弹菜单：**类别节点**给「类别默认设置」，**服务节点**另有「禁用插件」/「启用插件」
 > （按当前状态切换；禁用**不动磁盘目录**，其凭据照常保留、状态显示为「插件禁用」，
 > 依赖插件的功能选项置灰）。
+> **节点顺序可拖拽调整**：按住节点拖到同级目标的前/后即改顺序，顺序落 `settings.tree_order`
+> （不是 localStorage——同一份顺序要在别的机器、别的客户端上也成立）。**只做同级排序**：
+> 类别与类别、插件与插件，落点校验 `allowTreeDrop` 拒掉 `inner` 与跨父节点，因为「把插件拖进
+> 另一个类别」等于改磁盘上的插件目录，不在本功能范围；类别与插件也不能混排（未归类的插件与
+> 类别节点同处一层）。类别的 `category` 键可能是**空串**（「未归类」桶），那是合法条目。
+> 存的是**顺序清单而非快照**：只记用户排过的那些键，新装的插件不在清单里，由前端按自然顺序
+> 追加到末尾，所以后续增删插件不会让这份顺序失效。拖拽期间保存失败会**回滚**到原顺序并提示。
+> 「恢复默认顺序」按钮仅在存在自定义顺序时出现，点了**弹二次确认**（破坏性），确认后写入空清单。
 > 树的**展开/收起**由本组件维护（`expandedKeys` 持久化到
 > `localStorage['vault.credentials.treeExpanded']`），再通过 `:default-expanded-keys` 交回 el-tree
 > 在重建时恢复。**两个必须注意的约束**：**(1)** `:auto-expand-parent` **要显式关掉**——el-tree 默认
@@ -736,17 +782,33 @@ store 随后重拉分组 / 插件。**不走「前端 for 循环调单条删除�
 
 ── 工具权限（全局开关）──
 
-✅ vault_list_credentials    列出凭据
-✅ vault_verify_credential   触发验证
-✅ vault_list_groups         列出分组
-✅ vault_list_plugins        列出插件
-⬜ vault_get_credential      获取凭据详情
-⬜ vault_create_credential   创建凭据
-⬜ vault_update_credential   修改凭据
-⬜ vault_delete_credential   删除凭据
-⬜ vault_batch_verify        批量验证
-⬜ vault_create_group        创建分组
-⬜ vault_get_secret          获取明文密钥（需二次确认）⚠️
+（表格按工具名排序，列：工具名［带「高危」标记］/ 说明 / 开关）
+
+| 工具名 | 说明 | 默认 |
+|--------|------|------|
+| `vault_batch_verify` | 批量验证 | ⬜ |
+| `vault_create_credential` | 创建凭据 | ⬜ ⚠️ |
+| `vault_create_group` | 创建分组 | ⬜ |
+| `vault_create_proxy` | 新增验证代理 | ⬜ ⚠️ |
+| `vault_delete_credential` | 删除凭据 | ⬜ ⚠️ |
+| `vault_delete_group` | 删除分组（组内凭据保留，仅解除归属） | ⬜ |
+| `vault_delete_proxy` | 删除验证代理 | ⬜ ⚠️ |
+| `vault_export_backup` | 导出备份 | ⬜ ⚠️ |
+| `vault_get_credential` | 获取凭据详情 | ⬜ |
+| `vault_get_secret` | 获取明文密钥 | ⬜ ⚠️ |
+| `vault_import_backup` | 导入备份 | ⬜ ⚠️ |
+| `vault_list_credentials` | 列出凭据 | ✅ |
+| `vault_list_groups` | 列出分组 | ✅ |
+| `vault_list_plugins` | 列出插件 | ✅ |
+| `vault_list_proxies` | 列出验证代理与当前全局默认 | ✅ |
+| `vault_set_global_proxy` | 设置全局默认代理 | ⬜ ⚠️ |
+| `vault_test_proxy` | 实测代理连通性（真实外网请求） | ⬜ ⚠️ |
+| `vault_update_credential` | 修改凭据 | ⬜ ⚠️ |
+| `vault_update_proxy` | 修改验证代理 | ⬜ ⚠️ |
+| `vault_verify_credential` | 触发验证 | ✅ |
+
+⚠️ = 开启前需二次确认（`SENSITIVE_TOOLS`）。代理那几个之所以也在列：**代理决定「凭据的
+验证流量发到哪」**，被 Agent 改掉等于把所有跟随全局的凭据出口交给它指定的地址。
 ```
 
 > Token **默认即存在、且只需轮换**：不再有"生成 Token"入口，也不在 Token 上单独配置工具范围
@@ -806,6 +868,9 @@ store 随后重拉分组 / 插件。**不走「前端 for 循环调单条删除�
 │  ── 窗口与关闭 ──                                           │
 │  关闭主窗口时：[ 后台运行（最小化到托盘） ▼ ]               │
 │  ─────────────────────────────────────────────────────────  │
+│  开机自启动：[ ●── ]                                        │
+│     登录系统后自动拉起本应用（Windows / macOS / Linux）。   │
+│  ─────────────────────────────────────────────────────────  │
 │  轻量模式：[ ●── ]                                          │
 │     最小化到托盘时释放界面（销毁当前网页）省内存，           │
 │     从托盘打开窗口时重新加载。                              │
@@ -860,6 +925,15 @@ store 随后重拉分组 / 插件。**不走「前端 for 循环调单条删除�
 ——真正的行为在**下次最小化到托盘**时发生。开启后最小化会「释放界面」：后端把当前文档换成一张极小
 的占位页（`Window.load_html`，见 [ARCHITECTURE.md §2.11](ARCHITECTURE.md)），释放掉整个 SPA 的
 DOM 与 JS 堆；再从托盘「打开窗口」时后端 `load_url(<file:// 入口>)` 重新加载前端。
+
+**「开机自启动」**（`backend/autostart.py`）：**只碰系统侧、不落 `settings`**。开关的取值来自
+`get_autostart()` 现读的操作系统自启条目（Windows `HKCU\…\Run` 值名 `CredentialVault`、
+Linux `$XDG_CONFIG_HOME/autostart/credential-vault.desktop`、macOS
+`~/Library/LaunchAgents/com.credentialvault.app.plist`），开启 = 写条目、关闭 = 删条目。
+**库里刻意不存副本**：用户手动删掉系统条目后两边就长期不一致，且没有时机能可靠重同步。
+启动命令由 `launch_argv()` 按**冻结与否**推导（冻结 → 执行 exe 本身；源码 → `<python> main.py`），
+不写死本机路径。开关旁显示系统落点（`target`）；平台不支持或写失败时面板置灰 / 报错（`AutostartError`
+→ `{ok:false, message}`），前端按返回的 `enabled` 回写开关而非自行假设。
 
 代价要在界面上说清（就是开关下方那行说明）：重新打开需要等界面重建；释放时未保存的编辑内容会丢；
 **后台的 MCP 服务与定时任务完全不受影响**（它们和后端进程一样在跑，释放的只是前端渲染层）。
@@ -917,6 +991,10 @@ DOM 与 JS 堆；再从托盘「打开窗口」时后端 `load_url(<file:// 入�
 工具条右侧的**「复制」**把所有当前显示的日志按行拼接写进剪贴板（走 `utils/clipboard` 的
 降级实现，pywebview 下 `navigator.clipboard` 不可用时回退 `execCommand`），方便整段贴出去反馈。
 
+> **导入日志不在这里**：备份导入写出的 `import_*.log` / `import_*_failed.log` 是**独立的条目化
+> 审计文件**（与运行日志同在 `data/logs/`，但**不进**滚动日志、也不出现在本页的日志流里）。
+> 查看入口在「备份」页导入结果弹窗的「打开」按钮，见 §9。
+
 ### 8. 插件管理（PluginManager）
 
 **一张卡片：插件列表**（按类别分组）。不再有「可添加（内置源）」卡片——`plugins/` 是插件的
@@ -930,7 +1008,7 @@ DOM 与 JS 堆；再从托盘「打开窗口」时后端 `load_url(<file:// 入�
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ 插件管理   共 51 个              [🔍 搜索插件…      ] [刷新]  │
+│ 插件管理   共 60 个              [🔍 搜索插件…      ] [刷新]  │
 ├──────────────────────────────────────────────────────────────┤
 │ 插件列表                                                      │
 │  🤖 LLM 模型                                                  │
@@ -963,7 +1041,7 @@ DOM 与 JS 堆；再从托盘「打开窗口」时后端 `load_url(<file:// 入�
 - 凭据页**目录树右键菜单**里，原来的「删除插件」改为**「禁用插件」/「启用插件」**（按当前状态切换）。
 - 被禁用**且名下没有凭据**的插件，在**目录树里不再显示**。
 
-**类别折叠**：51 个插件平铺太长，按类别分组 + **可点击折叠的标题**
+**类别折叠**：60 个插件平铺太长，按类别分组 + **可点击折叠的标题**
 （标题显示类别图标、名称与条数，如 `🤖 LLM 模型（18）`）。折叠状态存
 `localStorage['vault.plugins.collapsedCats']`，刷新后保持；**搜索框有内容时忽略折叠、
 强制展开所有命中类别**——否则搜到了东西却看不见，会让人以为没结果。
@@ -1018,12 +1096,40 @@ DOM 与 JS 堆；再从托盘「打开窗口」时后端 `load_url(<file:// 入�
   （不会把被搜索隐藏的也勾上），右侧实时显示「已选 n / 总数」。**未勾选任何凭据时导出按钮禁用**。
 - 空/加载/无结果各有文案（「正在加载凭据…」/「没有可选凭据」），避免出现空白框。
 
+**导入卡片**：一句话说明语义——按**当前系统的插件字段表**填充，不覆盖既有数据。点「导入备份」
+先弹一次确认（列出三种会导致**整条失败**的情形：插件未安装/已禁用、含当前插件不认识的字段、
+缺少必填字段），确认后走 `api.importBackup()`（文件选择框在后端）。
+
+导入结果**有失败或生成了日志就弹「导入结果」对话框**（`append-to-body`），否则只用一条
+`ElMessage` 收尾：
+
+```
+┌ 导入结果 ─────────────────────────────────────────────┐
+│ ⚠ 已导入 9 条，失败 3 条                              │
+│ 失败条目（3 条）                                       │
+│ ┌────────────┬──────────────┬──────────────────────┐ │
+│ │ 名称        │ 类型          │ 原因                  │ │
+│ │ OpenAI 备用 │ llm_openai   │ 插件未安装或已禁用     │ │
+│ └────────────┴──────────────┴──────────────────────┘ │
+│ 日志文件                                               │
+│ 完整导入日志（敏感值已脱敏）：data/logs/import_….log   │
+│ 导入失败日志（含明文，供手动补录）：…/import_…_failed.log [打开] │
+└───────────────────────────────────────────────────────┘
+```
+
+- 失败原因**逐条列出**（表格 `名称 / 类型 / 原因`），超出上限时提示「另有 N 条未在此列出，
+  完整清单见失败日志」——IPC 载荷不必跟着条目数一起涨。
+- **两份日志的路径都摆出来**，并提醒用户日志在 `data/logs/` 下；失败日志一行带**「打开」按钮**，
+  调 `api.openLogFile(name)` 用系统默认程序打开（后端只接受纯文件名，防目录穿越）。
+- **失败条目一律不写库**，成功条目照常导入；「打开」只在确实生成了失败日志时出现。
+
 ---
 
 ### 10. 关于（About）
 
-版本、运行环境、当前状态、插件数量、MCP 端口、前后端技术栈。**不再有「数据存储与安全」提示块**
+版本号、数据库结构版本、运行环境、当前状态、插件数、MCP 服务、前后端技术栈。**不再有「数据存储与安全」提示块**
 ——加密与存储细节属于文档（ARCHITECTURE.md）而非界面，界面上重复一遍只是噪音。
+也**不再有「项目名称」一行**：顶部品牌区已经写着应用名与徽标，表格里再来一行纯属冗余。
 
 ### 11. 任务（Tasks）
 
@@ -1047,11 +1153,19 @@ DOM 与 JS 堆；再从托盘「打开窗口」时后端 `load_url(<file:// 入�
 
 **数据契约**：`api.listTasks()` → 数组，已按「进行中在前、其内按创建时间倒序」排好（照序渲染）。
 每项 `{id, kind, title, status, cancel_requested, current, total, text, output, error,
-created_at, finished_at}`，`status ∈ running | done | failed | canceled`。
+created_at, finished_at}`，`status ∈ running | done | failed | canceled | interrupted`。
+
+> **任务记录持久化到 `data/tasks.json`**（与日志同一个目录，不进数据库）：进程重启后仍在，
+> 用户回来能翻到「上次那个下载到底成没成」。重启时**所有 `running` 一律改判 `interrupted`**
+> ——线程随进程没了，继续显示「进行中」是骗人；但也没失败（用户没做错什么），故单列一档。
+> 状态变迁立刻落盘，高频的 `progress()` 按 2 秒节流（进度条不需要毫秒级精度）；原子替换写入
+> （先写 `.tmp` 再 `replace`），避免半个 JSON 让下次启动解析失败。已结束的只留最近 50 条。
+> 不进库的理由：任务不参与查询与关联，进库白搭一次 schema 变动 + 迁移脚本，锁库时反而读不到。
 
 - **进度条**：`total > 0` 给百分比；`running` 且 `total <= 0`（总量未知）用 `indeterminate`，
   免得显示成卡在 0%。只有 `running` 才显示进度条与「取消」。
-- **状态标签**：进行中 / 已完成 / 失败 / 已取消；`cancel_requested` 为真时显示「正在取消…」。
+- **状态标签**：进行中 / 已完成 / 失败 / 已取消 / **已中断**（`interrupted`）；`cancel_requested`
+  为真时显示「正在取消…」。
 - **取消**：`api.cancelTask(id)`，二次确认说明「会停止下载并清理未完成的临时文件」。
   点完**不本地改状态**——等 `vault:tasks` 推回来，否则会显示成「取消没生效」。
 - **事件**：`vault:tasks` 的 detail 是**发生变化的那一条快照**（不是全量），就地更新/插入；
@@ -1149,6 +1263,10 @@ await window.pywebview.api.touch_activity()     // 前端有用户操作时上�
 // 轻量模式（"系统设置 → 窗口与关闭"）：开关只落库，行为发生在下次最小化到托盘时
 await window.pywebview.api.get_light_mode()     // → { enabled: false }
 await window.pywebview.api.set_light_mode(true) // → { ok: true, enabled: true }
+
+// 开机自启动（"系统设置 → 窗口与关闭"）：直接增删操作系统自启条目，不落库
+await window.pywebview.api.get_autostart()      // → { supported, enabled, platform, target }
+await window.pywebview.api.set_autostart(true)  // → { ok, enabled }；失败时 { ok:false, message }
 ```
 
 > **锁定一律只看 `vault:locked` 事件**：`lock_vault()` 是唯一加锁出口，界面按钮 / 托盘菜单 /
