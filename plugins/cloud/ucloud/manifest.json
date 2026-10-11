@@ -1,0 +1,36 @@
+{
+  "name": "UCloud",
+  "version": "1.0.0",
+  "credential_type": "cloud_ucloud",
+  "author": "Credential Vault",
+  "description": "UCloud 公有云 API 公私钥。校验走只读的 GetRegion 探针，另提供账号信息、地域、项目、云主机、弹性 IP、防火墙六项只读查询。",
+  "icon": "logo.svg",
+  "fields": [
+    {
+      "key": "public_key",
+      "label": "PublicKey",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "请输入 PublicKey",
+      "hint": "在 UCloud 控制台「API 密钥」页获取，形如 ucloudsomeone@example.com1296235120854146120"
+    },
+    {
+      "key": "private_key",
+      "label": "PrivateKey",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "请输入 PrivateKey",
+      "hint": "与 PublicKey 成对，仅在创建时完整显示一次"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false,
+      "sensitive": false,
+      "placeholder": "选填，例如用途、归属项目"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "name": "天翼云",
+  "version": "1.0.0",
+  "credential_type": "cloud_ctyun",
+  "author": "Credential Vault",
+  "description": "验证天翼云 AK/SK 有效性（EOP 网关 /v4/region/list-regions，只读），并提供资源池列表查询",
+  "icon": "logo.svg",
+  "fields": [
+    {
+      "key": "access_key",
+      "label": "AccessKey (AK)",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "请输入 AccessKey"
+    },
+    {
+      "key": "secret_key",
+      "label": "SecurityKey (SK)",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "请输入 SecurityKey"
+    },
+    {
+      "key": "region_id",
+      "label": "资源池 ID",
+      "type": "text",
+      "required": false,
+      "sensitive": false,
+      "placeholder": "选填，如 bb9fdb42056f11eda1610242ac110002",
+      "hint": "选填。「地域列表」按资源池 ID（32 位十六进制）或资源池名称精确匹配，只显示这一条；留空列出全部资源池。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

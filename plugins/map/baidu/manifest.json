@@ -1,0 +1,32 @@
+{
+  "name": "百度地图",
+  "version": "1.0.0",
+  "credential_type": "map_baidu",
+  "author": "Credential Vault",
+  "description": "验证 百度地图 服务端 AK 有效性，支持地理编码/逆地理编码/地点检索/IP 定位/天气；AK 开启 SN 校验时可补填私钥 SK 自动签名",
+  "icon": "logo.png",
+  "fields": [
+    {
+      "key": "ak",
+      "label": "服务端 AK",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "百度地图开放平台 → 控制台 → 应用管理 → 创建应用 → 服务端（AK 非浏览器端/移动端）"
+    },
+    {
+      "key": "sk",
+      "label": "私钥 SK",
+      "type": "password",
+      "required": false,
+      "sensitive": true,
+      "placeholder": "选填：控制台「SN 校验」开启时必填，用于计算 sn 签名"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

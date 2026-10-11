@@ -1,0 +1,41 @@
+{
+  "name": "火山引擎",
+  "version": "1.0.0",
+  "credential_type": "cloud_volcengine",
+  "author": "Credential Vault",
+  "description": "验证火山引擎 AK/SK 有效性（ECS DescribeRegions，只读），并提供身份、地域、可用区、云服务器与镜像的只读查询操作",
+  "icon": "logo.svg",
+  "fields": [
+    {
+      "key": "access_key_id",
+      "label": "Access Key ID (AK)",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "请输入 Access Key ID"
+    },
+    {
+      "key": "secret_access_key",
+      "label": "Secret Access Key (SK)",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "请输入 Secret Access Key"
+    },
+    {
+      "key": "region",
+      "label": "地域 (Region)",
+      "type": "text",
+      "required": false,
+      "default": "cn-beijing",
+      "placeholder": "cn-beijing",
+      "hint": "火山引擎的 OpenAPI 网关是全局域名，业务落在哪个地域是由签名的 Credential Scope 决定的，故本栏即签名用的地域，也是各查询操作默认查的地域。留空按 cn-beijing。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "name": "微信小程序",
+  "version": "1.0.0",
+  "credential_type": "im_wechat_miniprogram",
+  "author": "Credential Vault",
+  "description": "验证 微信小程序 AppID + AppSecret，支持获取调用凭据/小程序基础信息/接口调用配额",
+  "icon": "logo.png",
+  "batch_verify": false,
+  "fields": [
+    {
+      "key": "appid",
+      "label": "AppID",
+      "type": "text",
+      "required": true,
+      "placeholder": "微信公众平台 → 小程序 → 开发管理 → 开发设置 → 开发者ID"
+    },
+    {
+      "key": "secret",
+      "label": "AppSecret",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "同上位置；若已重置过，旧值立即失效"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

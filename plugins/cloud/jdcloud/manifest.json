@@ -1,0 +1,41 @@
+{
+  "name": "京东云",
+  "version": "1.0.0",
+  "credential_type": "cloud_jdcloud",
+  "author": "Credential Vault",
+  "description": "验证京东云 AccessKey 有效性（IAM 列举主账号 AccessKey，只读），并提供 IAM 身份、地域与可用区、云主机实例、云硬盘的只读查询操作",
+  "icon": "logo.svg",
+  "fields": [
+    {
+      "key": "access_key_id",
+      "label": "AccessKey ID (AK)",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "控制台「访问控制 - AccessKey 管理」中创建"
+    },
+    {
+      "key": "secret_access_key",
+      "label": "AccessKey Secret (SK)",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "请输入 AccessKey Secret"
+    },
+    {
+      "key": "region",
+      "label": "默认地域",
+      "type": "text",
+      "required": false,
+      "default": "cn-north-1",
+      "placeholder": "cn-north-1",
+      "hint": "用于「云主机实例列表」与「云硬盘列表」的默认地域，可随时在操作表单里改。常用：cn-north-1（华北-北京）、cn-east-2（华东-上海）、cn-south-1（华南-广州）、cn-east-1（华东-宿迁）。只读校验走 IAM 接口，与本栏无关。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}
