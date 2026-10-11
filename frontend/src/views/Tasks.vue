@@ -30,11 +30,14 @@ const tasks = ref([])
 const loading = ref(false)
 
 // 状态 → 标签文案/颜色。后端状态是固定集合，这里兜底 unknown 免得出现空白标签。
+// interrupted：上次退出时还在跑的任务。线程随进程没了，任务不可能继续，单列一档
+// 与「失败」「已取消」区分——用户没做错什么，也不是他点的取消。
 const STATUS_META = {
   running: { label: '进行中', type: 'primary' },
   done: { label: '已完成', type: 'success' },
   failed: { label: '失败', type: 'danger' },
   canceled: { label: '已取消', type: 'info' },
+  interrupted: { label: '已中断', type: 'warning' },
 }
 
 const runningCount = computed(() => tasks.value.filter((t) => t.status === 'running').length)
@@ -61,10 +64,11 @@ function formatTime(iso) {
   return date.toLocaleString()
 }
 
-/** 终态行只展示一行摘要：失败优先看 error，成功/取消看 output。 */
+/** 终态行只展示一行摘要：失败优先看 error，成功/取消看 output。
+ *  中断的任务两者都为空，改用它被改判时写下的说明（text）。 */
 function resultLine(task) {
   if (task.status === 'running') return ''
-  return task.error || task.output || ''
+  return task.error || task.output || (task.status === 'interrupted' ? task.text : '') || ''
 }
 
 async function load() {
@@ -133,7 +137,7 @@ async function cancelTask(task) {
 async function clearFinished() {
   try {
     await ElMessageBox.confirm(
-      '将移除所有已结束（已完成 / 失败 / 已取消）的任务记录，进行中的任务不受影响。',
+      '将移除所有已结束（已完成 / 失败 / 已取消 / 已中断）的任务记录，进行中的任务不受影响。',
       '清空已完成',
       { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' },
     )
@@ -497,6 +501,8 @@ onBeforeUnmount(() => {
       <template #header>
         <div class="card-header">
           <span>后台任务</span>
+          <span class="text-muted header-hint">记录会保留到下次启动</span>
+          <div class="spacer" />
           <el-button type="danger" plain :icon="Delete" @click="clearFinished">清空已完成</el-button>
         </div>
       </template>
@@ -740,7 +746,13 @@ onBeforeUnmount(() => {
 .card-header {
   display: flex;
   align-items: center;
+  gap: 10px;
   justify-content: space-between;
+}
+
+/* 标题后的补充说明：比正文小一号，别抢标题的视觉重心 */
+.header-hint {
+  font-size: 12px;
 }
 
 .task-list {

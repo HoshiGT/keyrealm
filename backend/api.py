@@ -124,6 +124,11 @@ def init_callbacks():
     idle_lock.set_callbacks(lock_vault, lambda: _get_key() is not None)
     # 后台任务状态一变就推给前端（任务列表与侧栏角标据此刷新）
     tasks.set_notifier(lambda snapshot: push_event("vault:tasks", snapshot))
+    # 恢复上次运行留下的任务记录（与日志同为普通文件，进程重启后仍可回看）。
+    # 上次退出时仍在跑的一律改判「中断」——线程随进程没了，继续显示进行中是骗人。
+    restored = tasks.load()
+    if restored:
+        _log.info("已恢复 %d 条历史后台任务记录", restored)
 
 
 # ── Auth / Lock ───────────────────────────────────────────

@@ -11,8 +11,22 @@
 - **本模块只管状态**：任务的增删改查 + 取消标志。不认识 webview、不认识数据库。
 - **推送由 `backend/api.py` 注入**（`set_notifier`）：任何变更都回调一次，由它 `push_event`
   通知前端。这样本模块能脱离应用单独测试，也不会和 api 形成循环依赖。
-- **任务不持久化**：它是运行期状态，进程重启即失效（重启后也没有线程在跑了）。已结束的
-  只保留最近 `_MAX_FINISHED` 条，免得长时间运行越攒越多。
+
+持久化
+------
+任务记录与日志一样落**普通文件**（`data/tasks.json`），进程重启后仍在，用户回来能翻到
+「上次那个下载到底成没成」。之所以不进数据库：任务是运行期状态、不参与查询与关联，
+进库就白白要一次 schema 变动 + 迁移脚本，且锁库时反而读不到。文件与日志同放
+`app_dir()/data/`，便携分发时跟着 exe 走。
+
+进程重启时**所有 `running` 的任务一律改判 `interrupted`**：线程随进程没了，任务不可能还在跑，
+继续显示「进行中」是骗人；但也没失败（用户没做错什么），故单列一档，与 `canceled` 区分。
+
+写盘时机：状态**变迁**（新建 / 结束 / 取消 / 清理）一律立刻落盘；`progress()` 是高频回调
+（每个 chunk 一次），按 `_SAVE_INTERVAL` 节流，最多每 2 秒写一次——重进度任务的进度条
+本来就不需要毫秒级精度，重启后看到的是最后一次节流点。
+
+已结束的只保留最近 `_MAX_FINISHED` 条，免得文件长时间运行越攒越大。
 
 取消是怎么生效的
 ----------------
@@ -22,24 +36,37 @@
 """
 from __future__ import annotations
 
+import json
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
+
+from .paths import app_dir
 
 # 任务状态
 RUNNING = "running"
 DONE = "done"
 FAILED = "failed"
 CANCELED = "canceled"
+# 应用退出时仍在跑的任务：线程已随进程消失，既不是失败（用户没做错）也不是用户取消
+INTERRUPTED = "interrupted"
 
 # 已结束的任务只留最近这么多条
 _MAX_FINISHED = 50
+
+# progress() 的落盘节流间隔（秒）
+_SAVE_INTERVAL = 2.0
+
+_STORE = app_dir() / "data" / "tasks.json"
 
 _lock = threading.Lock()
 _tasks: dict[str, dict] = {}          # task_id → 快照
 _cancel_events: dict[str, threading.Event] = {}
 _notifier: Optional[Callable[[dict], None]] = None
+_last_save = 0.0
+_loaded = False
 
 
 def set_notifier(fn: Optional[Callable[[dict], None]]) -> None:
@@ -70,9 +97,73 @@ def _snapshot(task: dict) -> dict:
     return out
 
 
+# ── 持久化 ────────────────────────────────────────────────
+
+def _save_locked(force: bool = False) -> None:
+    """把任务表写回文件（调用方需持有锁）。
+
+    写盘失败（磁盘满 / 权限）只吞掉：任务状态本来就在内存里，界面照常，
+    不能因为存不下历史记录就让正在跑的任务崩掉。
+    """
+    global _last_save
+    stamp = time.monotonic()
+    if not force and stamp - _last_save < _SAVE_INTERVAL:
+        return
+    try:
+        payload = [_snapshot(t) for t in _tasks.values()]
+        _STORE.parent.mkdir(parents=True, exist_ok=True)
+        # 先写临时文件再原子替换：避免写到一半被强杀，留下半个 JSON 让下次启动解析失败
+        tmp = _STORE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(_STORE)
+        _last_save = stamp
+    except Exception:  # noqa: BLE001 - 见 docstring
+        pass
+
+
+def load() -> int:
+    """从文件恢复历史任务（应用启动时调用一次），返回恢复的条数。
+
+    仍在 `running` 的一律改判 `interrupted`——进程重启意味着线程没了。
+    文件缺失 / 损坏都按「没有历史」处理，不影响启动。重复调用只生效一次。
+    """
+    global _loaded
+    if _loaded:
+        return 0
+    _loaded = True
+    try:
+        raw = _STORE.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+    except FileNotFoundError:
+        return 0
+    except Exception:  # noqa: BLE001 - 损坏的历史记录不值得拦住启动
+        return 0
+    if not isinstance(payload, list):
+        return 0
+
+    restored = 0
+    with _lock:
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            task_id = str(item.get("id") or "").strip()
+            if not task_id or task_id in _tasks:
+                continue
+            item.pop("cancel_requested", None)
+            item["id"] = task_id
+            if item.get("status") == RUNNING:
+                item["status"] = INTERRUPTED
+                item["text"] = "应用已退出，任务中断"
+                item["finished_at"] = item.get("finished_at") or _now()
+            _tasks[task_id] = item
+            restored += 1
+        _prune_locked()
+    return restored
+
+
 def _prune_locked() -> None:
     """只保留最近 `_MAX_FINISHED` 条已结束的任务（调用方需持有锁）。"""
-    finished = [t for t in _tasks.values() if t["status"] != RUNNING]
+    finished = [t for t in _tasks.values() if t["status"] not in (RUNNING,)]
     if len(finished) <= _MAX_FINISHED:
         return
     finished.sort(key=lambda t: t.get("finished_at") or "")
@@ -105,6 +196,7 @@ def create(kind: str, title: str, *, credential_id: Optional[int] = None,
         _tasks[task_id] = task
         _cancel_events[task_id] = threading.Event()
         snapshot = _snapshot(task)
+        _save_locked(force=True)
     _notify(snapshot)
     return snapshot
 
@@ -146,6 +238,7 @@ def progress(task_id: str, current: Any, total: Any, text: str = "") -> None:
         task["total"] = tot
         task["text"] = str(text or "")
         snapshot = _snapshot(task)
+        _save_locked()   # 高频回调，内部按 _SAVE_INTERVAL 节流
     _notify(snapshot)
 
 
@@ -173,6 +266,7 @@ def finish(task_id: str, *, ok: bool = True, output: str = "", error: str = "",
             task["text"] = "已取消"
         snapshot = _snapshot(task)
         _prune_locked()
+        _save_locked(force=True)
     _notify(snapshot)
     return snapshot
 
@@ -187,6 +281,7 @@ def cancel(task_id: str) -> bool:
         event.set()
         task["text"] = task["text"] or "正在取消…"
         snapshot = _snapshot(task)
+        _save_locked(force=True)
     _notify(snapshot)
     return True
 
@@ -208,9 +303,12 @@ def clear_finished() -> int:
         for tid in ids:
             _tasks.pop(tid, None)
             _cancel_events.pop(tid, None)
+        if ids:
+            _save_locked(force=True)
     return len(ids)
 
 
 def running_count() -> int:
     with _lock:
         return sum(1 for t in _tasks.values() if t["status"] == RUNNING)
+
