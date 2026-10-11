@@ -9,16 +9,18 @@
   为主、联网 best-effort 增强**（详见 ``_verify_chatgpt``）。
 
 登录态**按字段分开填**，不要求粘贴整份 ``~/.codex/auth.json``（那样既难维护、又把不必要的
-字段一起存了）。字段一一对应 ``~/.codex/auth.json`` 里 ``tokens`` 下的同名项：
+字段一起存了）。字段一一对应 ``~/.codex/auth.json`` 里的同名项：
 
 - ``access_token``（必需）：本地判过期 + 联网校验都用它；
 - ``id_token``（可选）：仅在 access_token 缺展示字段时补充；
 - ``refresh_token``（可选）：**只读校验路径绝不使用**；填了之后才会多出「刷新 access_token」
-  这个**手动**操作，由用户显式点击，用它在过期后换一组新令牌。
-
-联网时的 ``chatgpt-account-id`` 头不再单列一个输入字段（那个字段与 JWT claim 同源、纯属重复，
-已删除）：一律从 access_token 的 JWT claim ``chatgpt_account_id`` 里取（见 ``_account_id_from``），
-取不到就**不带**这个头。
+  这个**手动**操作，由用户显式点击，用它在过期后换一组新令牌；
+- ``account_id``（可选）：``tokens.account_id``，即联网头 ``chatgpt-account-id`` 的值。
+  留空时从 access_token 的 JWT claim ``chatgpt_account_id`` 兜底（见 ``_account_id``），
+  两处都取不到就**不带**这个头——它不是必需的，认不认只看 access_token；
+- ``last_refresh``（可选）：文件顶层的 ``last_refresh``（形如
+  ``2026-10-10T01:55:56.325203037Z``），**只在「登录态详情」里展示这份登录态有多旧**，
+  不参与任何判定；用户手动刷新成功后由插件写成本次刷新时间。
 
 另外用到两个**非公开/实验性**的 chatgpt.com 端点（与 ``/backend-api/me`` 同源）：
 额度使用情况 ``GET /backend-api/wham/usage``（只读，用于「附加信息」的「使用率」一行）和
@@ -414,6 +416,49 @@ def _humanize(seconds) -> str:
     return f"{total} 秒"
 
 
+def _parse_iso_utc(value) -> Optional[datetime]:
+    """解析 RFC 3339 / ISO 8601 时间串；解析不了返回 None。
+
+    兼容 codex CLI 实际写出的形态（``2026-10-10T01:55:56.325203037Z``，**纳秒**精度 + 结尾 ``Z``）：
+    ``datetime.fromisoformat`` 要到 3.11+ 才接受 ``Z`` 与任意位数的小数秒，这里先自己做归一
+    （``Z`` → ``+00:00``、小数秒截到 6 位），老版本 Python 也能解析。
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text[-1] in ("Z", "z"):
+        text = text[:-1] + "+00:00"
+    dot = text.find(".")
+    if dot != -1:
+        end = dot + 1
+        while end < len(text) and text[end].isdigit():
+            end += 1
+        if end - dot - 1 > 6:                     # 纳秒 → 微秒
+            text = text[: dot + 7] + text[end:]
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _fmt_iso_utc(value) -> str:
+    """ISO 时间串 → 「2026-10-10 01:55:56 UTC（约 1 天 20 小时前）」。
+
+    解析不了就**原样回显**——用户粘错东西时，让他看见自己粘了什么，比显示一片空白有用。
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    parsed = _parse_iso_utc(raw)
+    if parsed is None:
+        return raw
+    stamp = parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    delta = time.time() - parsed.timestamp()
+    ago = _humanize(-delta) if delta < 0 else (_humanize(delta) or "刚刚")
+    return f"{stamp}（{ago}{'后' if delta < 0 else '前'}）"
+
+
 def _plan_label(raw) -> str:
     """套餐原始值 → 展示值（如 plus → Plus）。"""
     text = str(raw or "").strip()
@@ -433,13 +478,13 @@ def _short_id(value, keep: int = 8) -> str:
 def _read_auth(data: dict) -> dict:
     """把用户**分字段**填的登录态摊平成内部结构（不做任何判定）。
 
-    不再要求粘贴整份 auth.json：字段一一对应 `~/.codex/auth.json` 里 `tokens` 下的同名项，
+    不再要求粘贴整份 auth.json：字段一一对应 `~/.codex/auth.json` 里的同名项，
     - ``access_token``：必需（JWT，用于本地判过期 + 联网校验）
     - ``id_token``：可选（仅在 access_token 缺展示字段时补充）
-
-    以前还有一个可手填的 ``account_id`` 字段（联网头 ``chatgpt-account-id`` 的值），但它与
-    access_token 的 JWT claim 同源、纯属重复，已删除——联网头一律改由 claim 兜底
-    （见 ``_account_id_from``）。
+    - ``account_id``：可选（`tokens.account_id`），联网头 ``chatgpt-account-id`` 的**显式覆盖**。
+      留空就走 access_token 的 JWT claim 兜底（见 ``_account_id``）——两者同源，显式填只是
+      为了「JWT 里取不到」或「想拿别的账号 id 去请求」这两种情况。
+    - ``last_refresh``：可选（文件顶层的 `last_refresh`），**纯展示**，不参与判定。
 
     ``refresh_token`` 只在用户**显式**点「刷新 access_token」时用到（那是一次会轮换令牌的
     写操作），只读校验路径绝不碰它。
@@ -451,6 +496,8 @@ def _read_auth(data: dict) -> dict:
         "access_token": _text(data.get("access_token")),
         "id_token": _text(data.get("id_token")),
         "refresh_token": _text(data.get("refresh_token")),
+        "account_id": _text(data.get("account_id")),
+        "last_refresh": _text(data.get("last_refresh")),
     }
 
 
@@ -460,6 +507,21 @@ def _account_id_from(claims: dict) -> str:
     取不到就返回空串——调用方据此**不带**这个头（该头不是必需的，401 与否看 access_token）。
     """
     return str((claims or {}).get("account_id") or "").strip()
+
+
+def _account_id(auth: dict, claims: dict) -> str:
+    """``chatgpt-account-id`` 头的最终取值：**显式字段优先，其次 JWT claim**。
+
+    显式字段是用户在凭据里手填的那个（对应 `~/.codex/auth.json` 的 `tokens.account_id`）；
+    留空才回落到 access_token 的 claim。**不用 id_token 的 claim 兜底**——那个头本意是
+    「这个 token 属于哪个账号 / 工作区」，理应取 access_token 自己那份，id_token 里可能是另一个。
+
+    实测（2026-10，个人 Pro 账号）该头**不被上面几个只读端点校验**（正确 / 错误 / 不带三种取值
+    结果一致），它的实际用途是**多组织账号下指定工作区**。所以取空时**不必**编一个出来，
+    直接不带即可。
+    """
+    explicit = str((auth or {}).get("account_id") or "").strip()
+    return explicit or _account_id_from(claims)
 
 
 def _chatgpt_headers(access_token: str, account_id: str = "", *, stream: bool = False) -> dict:
@@ -622,7 +684,7 @@ def _verify_chatgpt(auth: dict) -> VerifyResult:
     except (TypeError, ValueError):
         exp_ts = None
 
-    account_id = _account_id_from(claims)
+    account_id = _account_id(auth, claims)
     info = _account_info(claims, None)
 
     # ① 本地先判过期（过期就没必要再联网了）
@@ -726,12 +788,24 @@ def _token_info_rows(data: dict) -> list:
         delta = None
     if delta is not None:
         add("剩余有效期", _humanize(delta) if delta > 0 else f"已过期 {_humanize(-delta)}")
+    # last_refresh 是 auth.json 顶层的字段：看它就知道这份登录态有多久没换过令牌了
+    add("上次刷新", _fmt_iso_utc(auth["last_refresh"]))
     add("邮箱", claims.get("email"))
     add("账号名称", claims.get("name"))
     add("套餐", _plan_label(claims.get("plan")))
     add("订阅生效", _fmt_ts(claims.get("subscription_start")))
     add("订阅到期", _fmt_ts(claims.get("subscription_until")))
-    add("账号 ID", _short_id(claims.get("account_id")))
+    # 账号 ID：联网头用的就是它（显式字段优先）。若与 access_token 里的不一致就提一句——
+    # 实测（2026-10，个人 Pro 账号）`/me`、`/wham/usage`、`/codex/models`、`/codex/responses`
+    # 四处在「正确 / 错误 / 不带」三种取值下表现完全一致，即**这个头不被校验、也不参与选租户**；
+    # 它的实际用途是多组织 / 工作区账号下指定用哪个工作区的配额。所以这里只陈述事实，不吓唬人。
+    explicit_id = auth["account_id"]
+    claim_id = claims.get("account_id")
+    add("账号 ID", _short_id(explicit_id or claim_id))
+    if explicit_id and claim_id and explicit_id != claim_id:
+        add("⚠️ 账号 ID 与登录态不一致",
+            f"凭据里填的是 {_short_id(explicit_id)}，access_token 里是 {_short_id(claim_id)}；"
+            "联网时以凭据里的值为准（留空才会用 access_token 里的）")
     add("用户 ID", _short_id(claims.get("user_id"), 12))
 
     orgs = claims.get("organizations")
@@ -869,9 +943,9 @@ def _codex_chat(access_token: str, account_id: str, model: str, messages: list, 
 
 
 def _chatgpt_account_id(data: dict) -> str:
-    """从凭据里解出 chatgpt-account-id（= access_token 的 JWT claim）。"""
+    """从凭据里解出 chatgpt-account-id（凭据里的 account_id 字段优先，其次 access_token 的 JWT claim）。"""
     auth = _read_auth(data)
-    return _account_id_from(_extract_claims(_decode_jwt_payload(auth["access_token"])))
+    return _account_id(auth, _extract_claims(_decode_jwt_payload(auth["access_token"])))
 
 
 _CHAT_ACTION = {"id": "chat", "name": "简单对话", "kind": "chat", "model": ""}
@@ -979,6 +1053,9 @@ def _do_refresh(data: dict) -> dict:
         patch["refresh_token"] = new_refresh   # 轮换后的新刷新令牌，必须一并写回
     if new_id:
         patch["id_token"] = new_id
+    # 与 codex CLI 的行为对齐：刷新完把 last_refresh 记成此刻。否则这个字段会一直停在用户当初
+    # 粘进来的旧值上，在「登录态详情」里显示出一个假的「多久没刷新过」。
+    patch["last_refresh"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
     claims = _extract_claims(_decode_jwt_payload(new_access))
     exp_text = _fmt_ts(claims.get("exp"))
@@ -986,6 +1063,7 @@ def _do_refresh(data: dict) -> dict:
     if exp_text:
         parts.append(f"新令牌有效期至 {exp_text}")
     parts.append("refresh_token 已轮换并写回本凭据" if new_refresh else "响应里没有新 refresh_token（沿用原值）")
+    parts.append("last_refresh 已更新")
     return {"ok": True, "output": "；".join(parts), "updated_data": patch}
 
 

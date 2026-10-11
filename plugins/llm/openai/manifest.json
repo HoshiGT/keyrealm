@@ -85,6 +85,28 @@
       }
     },
     {
+      "key": "account_id",
+      "label": "account_id（可选）",
+      "type": "text",
+      "required": false,
+      "placeholder": "留空则从 access_token 自动解析",
+      "hint": "可选。auth.json 里 tokens.account_id（一个 UUID），也就是联网头 chatgpt-account-id 的值。留空时从 access_token 的 JWT claim 里取，两处都没有就不带这个头——它不是必需的（个人账号下实测：带对、带错、不带，各接口表现一致）；多组织 / 工作区账号才靠它指定用哪个工作区。",
+      "show_if": {
+        "auth_mode": "chatgpt"
+      }
+    },
+    {
+      "key": "last_refresh",
+      "label": "last_refresh（可选）",
+      "type": "text",
+      "required": false,
+      "placeholder": "留空即可（可选）",
+      "hint": "可选。auth.json 顶层的 last_refresh（形如 2026-10-10T01:55:56.325203037Z），只在「登录态详情」里用来显示这份登录态有多旧，不参与校验。用户点「刷新 access_token」成功后会被写成当次时间。",
+      "show_if": {
+        "auth_mode": "chatgpt"
+      }
+    },
+    {
       "key": "probe_chat",
       "label": "余额未知时发一次对话探测",
       "type": "checkbox",
