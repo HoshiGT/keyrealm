@@ -2,7 +2,7 @@
   "name": "月之暗面 Moonshot",
   "version": "1.0.0",
   "credential_type": "llm_moonshot",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 月之暗面 Moonshot API Key 有效性，支持余额查询",
   "icon": "logo.png",
   "fields": [

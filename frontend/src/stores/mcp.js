@@ -18,11 +18,11 @@ export const useMcpStore = defineStore('mcp', {
       JSON.stringify(
         {
           mcpServers: {
-            'credential-vault': {
+            'keyrealm': {
               url:
                 state.status.url ||
                 `http://${state.status.host || '127.0.0.1'}:${state.status.port || 8765}/sse`,
-              headers: { Authorization: 'Bearer cv_<your_token>' },
+              headers: { Authorization: 'Bearer kr_<your_token>' },
             },
           },
         },

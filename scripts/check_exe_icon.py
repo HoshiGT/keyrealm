@@ -37,8 +37,8 @@ ICO = ROOT / "assets" / "icon.ico"
 
 # 自动探测：Windows 下是 .exe，Linux/macOS 构建产物无扩展名
 _CANDIDATES = [
-    ROOT / "release" / "CredentialVault.exe",
-    ROOT / "release" / "CredentialVault",
+    ROOT / "release" / "Keyrealm.exe",
+    ROOT / "release" / "Keyrealm",
 ]
 
 _RT_ICON = 3
@@ -178,7 +178,7 @@ def check(exe: Path) -> int:
         print()
         if str(e).startswith("不是 PE 文件"):
             print("结论：这个文件不是 Windows 可执行程序（PE），路径可能选错了。")
-            print("      传入 release/CredentialVault.exe，或先运行 python scripts/build.py --frontend。")
+            print("      传入 release/Keyrealm.exe，或先运行 python scripts/build.py --frontend。")
             return 2
         print("结论：exe 里没有 PE 图标资源 → 这次构建没带上图标。逐项排查：")
         print("        1) 构建日志里是否为「[spec] 警告：未找到 assets/icon.ico」；")

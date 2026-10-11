@@ -2,7 +2,7 @@
   "name": "OpenAI",
   "version": "1.0.0",
   "credential_type": "llm_openai",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 OpenAI API Key 有效性，或 Codex CLI 的 ChatGPT 登录态（~/.codex/auth.json）",
   "icon": "logo.png",
   "fields": [

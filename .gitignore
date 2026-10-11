@@ -9,7 +9,7 @@ venv/
 .venv/
 env/
 
-# 打包产物（PyInstaller 输出 + 源码归档，不入库；CredentialVault.spec 与 scripts/*.py 是构建配置，保留追踪）
+# 打包产物（PyInstaller 输出 + 源码归档，不入库；Keyrealm.spec 与 scripts/*.py 是构建配置，保留追踪）
 release/
 
 # 中间产物目录（不入库）

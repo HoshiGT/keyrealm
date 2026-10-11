@@ -2,7 +2,7 @@
   "name": "GCP 服务账号",
   "version": "1.1.0",
   "credential_type": "cloud_gcp",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 GCP 服务账号有效性（JWT 断言换 token + Resource Manager 探测，只读）",
   "icon": "logo.svg",
   "fields": [

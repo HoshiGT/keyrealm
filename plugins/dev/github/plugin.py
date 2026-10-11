@@ -113,7 +113,7 @@ def _headers(token: str) -> dict:
     return {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
-        "User-Agent": "CredentialVault",
+        "User-Agent": "Keyrealm",
     }
 
 

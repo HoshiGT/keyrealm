@@ -60,7 +60,7 @@ onMounted(() => {
           <span class="auth-ring" aria-hidden="true" />
           <el-icon class="auth-mark-icon"><LockIcon /></el-icon>
         </span>
-        <h1 class="v-grad-text">Credential Vault</h1>
+        <h1 class="v-grad-text">Keyrealm</h1>
         <p class="auth-subtitle">保险库已锁定，请输入主密码解锁</p>
       </div>
 

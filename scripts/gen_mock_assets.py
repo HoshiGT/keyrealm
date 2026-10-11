@@ -130,7 +130,7 @@ def _add(plugins, icons, svc_dir, category, cat_name, cat_icon, enabled) -> None
         "id": 0,                                  # 收集完再统一分配
         "name": mf.get("name") or svc_dir.name,
         "version": mf.get("version") or "1.0.0",
-        "author": mf.get("author") or "Credential Vault",
+        "author": mf.get("author") or "Keyrealm",
         "description": mf.get("description") or "",
         "credential_type": ct,
         "icon": icon,

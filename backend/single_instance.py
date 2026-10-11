@@ -1,4 +1,4 @@
-"""单实例闸门：同一台机器只允许跑一套 Credential Vault。
+"""单实例闸门：同一台机器只允许跑一套 Keyrealm。
 
 第二套进程**不创建界面**，而是把已在运行的那套窗口拉到前台，然后自己退出——
 用户感知上就是「双击 exe 就出来了」，而不是莫名其妙多出一个托盘图标。
@@ -21,9 +21,9 @@ from .paths import app_dir
 
 # 不加 "Global\" 前缀：那是内核对象命名空间，创建需要额外权限；
 # 不带前缀落在当前会话命名空间，正好对应「用户双击 exe」的语义。
-MUTEX_NAME = "CredentialVault_SingleInstance"
+MUTEX_NAME = "Keyrealm_SingleInstance"
 # pywebview 窗口标题（main.py 里 create_window(title=...) 用的就是这个字面量）
-WINDOW_TITLE = "Credential Vault"
+WINDOW_TITLE = "Keyrealm"
 
 ERROR_ALREADY_EXISTS = 183
 

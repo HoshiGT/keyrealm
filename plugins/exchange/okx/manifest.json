@@ -2,7 +2,7 @@
   "name": "OKX",
   "version": "1.0.0",
   "credential_type": "exchange_okx",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 OKX API Key / Secret / Passphrase 有效性",
   "icon": "logo.png",
   "fields": [

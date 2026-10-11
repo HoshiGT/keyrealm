@@ -76,8 +76,8 @@ def decrypt_dict(key: bytes, token: str) -> dict:
 
 
 def generate_token() -> str:
-    """生成 MCP 访问令牌：cv_ + 32位hex"""
-    return "cv_" + os.urandom(16).hex()
+    """生成 MCP 访问令牌：kr_ + 32位hex"""
+    return "kr_" + os.urandom(16).hex()
 
 
 def hash_token(token: str) -> str:

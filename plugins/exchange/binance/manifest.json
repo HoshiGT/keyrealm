@@ -2,7 +2,7 @@
   "name": "Binance",
   "version": "1.0.0",
   "credential_type": "exchange_binance",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 Binance API Key / Secret Key 有效性",
   "icon": "logo.svg",
   "fields": [

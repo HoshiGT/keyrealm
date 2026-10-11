@@ -1,5 +1,5 @@
 {
-  "name": "credential-vault-frontend",
+  "name": "keyrealm-frontend",
   "private": true,
   "version": "1.0.0",
   "type": "module",

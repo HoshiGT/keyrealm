@@ -2,7 +2,7 @@
   "name": "秘塔 AI 搜索",
   "version": "1.0.0",
   "credential_type": "api_metaso",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证秘塔 AI 搜索（Metaso）API Key 有效性",
   "icon": "logo.png",
   "fields": [

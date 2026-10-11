@@ -2,7 +2,7 @@
   "name": "FOFA",
   "version": "1.0.0",
   "credential_type": "api_fofa",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 FOFA API Key 有效性（邮箱可留空）",
   "icon": "logo.png",
   "fields": [

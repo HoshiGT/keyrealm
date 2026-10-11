@@ -42,7 +42,7 @@ INVALID_CODES = {"unauthorized", "access_denied", "invalid_token"}
 
 # Dify 用 user 区分「终端用户」——会话、消息、文件都挂在它下面。
 # 插件没有终端用户这个概念，给一个固定值即可（换值会另起一批会话，没必要）。
-END_USER = "credential-vault"
+END_USER = "keyrealm"
 
 # 能用 POST /chat-messages 的应用形态。注意 completion（文本生成应用）走的是
 # /completion-messages，不在其列；workflow 只能跑工作流，也不能对话。

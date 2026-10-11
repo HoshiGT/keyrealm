@@ -2,7 +2,7 @@
   "name": "Discord Webhook",
   "version": "1.0.0",
   "credential_type": "im_discord",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 Discord Webhook URL 有效性",
   "icon": "logo.svg",
   "fields": [

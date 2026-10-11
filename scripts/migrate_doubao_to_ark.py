@@ -134,7 +134,7 @@ def main() -> int:
     else:
         # 写库前必须确认应用没在跑：它持有连接、且启动时会重建 plugins 表，边跑边改会互相打架。
         if not single_instance.acquire():
-            print("✗ 检测到应用正在运行。请先**完全退出** Credential Vault，再执行本脚本。", file=sys.stderr)
+            print("✗ 检测到应用正在运行。请先**完全退出** Keyrealm，再执行本脚本。", file=sys.stderr)
             return 3
 
     conn = sqlite3.connect(str(db_path))

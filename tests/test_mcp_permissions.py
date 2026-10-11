@@ -169,7 +169,7 @@ def test_token_create_hash_lookup():
     """创建 Token → SHA-256 哈希存储 → 可查回"""
     plaintext = crypto.generate_token()
     token_hash = crypto.hash_token(plaintext)
-    assert plaintext.startswith("cv_")
+    assert plaintext.startswith("kr_")
 
     record = db.create_mcp_token(name="test-perm", token_hash=token_hash,
                                  token_prefix=plaintext[:8], tools_allowed=[])

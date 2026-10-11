@@ -2,7 +2,7 @@
   "name": "腾讯 CodeBuddy",
   "version": "1.0.0",
   "credential_type": "llm_codebuddy",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 腾讯 CodeBuddy 客户端登录态有效性",
   "icon": "logo.png",
   "batch_verify": true,

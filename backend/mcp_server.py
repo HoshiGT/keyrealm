@@ -76,7 +76,7 @@ def _perm_denied(tool_name: str) -> Optional[dict]:
         return {
             "error": "permission_denied", "tool": tool_name, "reason": "global_disabled",
             "message": (f"工具「{tool_name}」未授权：它在 MCP 里默认就是**关闭**的（高危工具）。"
-                        "请到 Credential Vault →「设置 → MCP 服务 → 工具权限」勾选启用后重试。"),
+                        "请到 Keyrealm →「设置 → MCP 服务 → 工具权限」勾选启用后重试。"),
         }
     allowed = record.get("tools_allowed") or []
     if allowed and tool_name not in allowed:
@@ -94,8 +94,8 @@ def _build_mcp_app() -> MCPServer:
     from mcp.server.mcpserver import MCPServer  # 重依赖下沉，见文件头注释
 
     mcp = MCPServer(
-        "CredentialVault",
-        instructions="Credential Vault MCP Server — 管理、验证 LLM API Key 及其他凭据",
+        "Keyrealm",
+        instructions="Keyrealm MCP Server — 管理、验证 LLM API Key 及其他凭据",
     )
 
     # ── vault_list_credentials ────────────────────────────

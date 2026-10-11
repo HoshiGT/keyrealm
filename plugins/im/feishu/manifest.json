@@ -2,7 +2,7 @@
   "name": "飞书",
   "version": "1.0.0",
   "credential_type": "im_feishu",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 飞书应用 App ID / App Secret 有效性，支持账号/机器人/通讯录/群组/知识库/云文档查询",
   "icon": "logo.png",
   "fields": [

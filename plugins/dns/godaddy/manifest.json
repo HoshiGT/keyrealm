@@ -2,7 +2,7 @@
   "name": "GoDaddy",
   "version": "1.0.0",
   "credential_type": "dns_godaddy",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 GoDaddy API Key / Secret 有效性",
   "icon": "logo.svg",
   "fields": [

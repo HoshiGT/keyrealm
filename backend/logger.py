@@ -20,7 +20,7 @@ from .paths import app_dir
 
 # ── 常量 ──────────────────────────────────────────────────
 LOG_DIR = app_dir() / "data" / "logs"
-LOG_FILE = LOG_DIR / "credential_vault.log"
+LOG_FILE = LOG_DIR / "keyrealm.log"
 LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 DEFAULT_LEVEL = "INFO"
 

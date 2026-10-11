@@ -8,6 +8,45 @@
 
 ---
 
+## [1.2.0] - 2026-10-11
+
+### 变更
+
+- **项目更名为 Keyrealm（中文名「凭域」）**，原 `Credential Vault`。这是本版唯一的实质内容：
+  只改**用户与系统看得见的名字**，凡牵动数据兼容的标识一律保持原样。
+
+  | 跟着改 | 故意不改（理由） |
+  |---|---|
+  | 显示名、窗口/托盘标题、关于页 | 备份格式串 `"credential-vault-backup"`（改了旧备份全导不进来） |
+  | exe 与包名：`Keyrealm.exe` / `Keyrealm.spec` | `vault_*` MCP 工具名、`vault:*` 事件名、`VAULT_*` 环境变量（那是「保险库」这个通用词，不是产品名） |
+  | 单实例互斥名、托盘标识 | `data/`、`credentials.db`、`master.key`（改了老库会「消失」） |
+  | MCP 客户端配置 key：`credential-vault` → `keyrealm` | 插件 `credential_type`（`llm_openai` 等）——库里的关联键，改名要跑迁移脚本 |
+  | 日志文件名：`credential_vault.log` → `keyrealm.log` | `_vault_plugin_*` / `_vault_*_signer` 模块名前缀 |
+  | MCP 令牌前缀 `cv_` → `kr_` | |
+  | 插件 manifest 的 `author`（60 个） | |
+
+- **旧令牌仍然有效**：鉴权按 SHA-256 哈希比对，前缀只用于展示；且全局只有一个活跃令牌，
+  轮换一次即统一为新前缀。
+- **开机自启动条目做了一次迁移**（这是改名唯一的真实风险点）：条目是按名字写在系统里的
+  （Windows 注册表 `Run` 值名 / Linux `.desktop` 文件名 + 归属标记 / macOS LaunchAgent `Label`），
+  旧条目新名字读不到——症状是「开关显示关闭、系统里却仍有旧条目，开机弹一次『找不到文件』，
+  再打开开关就变成两条」。现于启动时 `autostart.migrate_legacy()` 迁移一次（幂等）：
+  **旧条目存在 == 用户当初就是开着的**，删旧建新保留「开着」的意图；只认三种确实属于本程序的
+  证据，对不上就一字节不动。
+- `plugins/dev/github` 的 `User-Agent`、`plugins/mail/smtp` 的 RFC 2971 `ID` 声明名、
+  `plugins/api/dify` 的 `END_USER`、`scripts/pack_source.py` 的源码归档名等**对外可见标识**
+  一并改为新名。
+
+### 修复
+
+- 无。
+
+### 数据库
+
+- 结构版本保持 **1.0.0** —— 无结构变动，**不需要迁移脚本**。
+
+---
+
 ## [1.1.0] - 2026-10-11
 
 ### 新增

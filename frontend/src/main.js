@@ -39,7 +39,7 @@ async function bootstrap() {
   app.use(router)
 
   app.config.errorHandler = (err, _instance, info) => {
-    console.error('[Credential Vault] 未捕获的前端异常:', err, info)
+    console.error('[Keyrealm] 未捕获的前端异常:', err, info)
   }
 
   app.mount('#app')

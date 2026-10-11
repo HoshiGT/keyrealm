@@ -39,9 +39,9 @@ onMounted(() => {
 
     <el-card shadow="never">
       <div class="about-brand">
-        <img src="/favicon.svg" alt="Credential Vault" class="about-logo" />
+        <img src="/favicon.svg" alt="Keyrealm" class="about-logo" />
         <div>
-          <div class="about-name">Credential Vault</div>
+          <div class="about-name">Keyrealm</div>
           <div class="about-sub text-muted">本地凭据保险库 · 版本 v{{ versionInfo.display }}</div>
         </div>
       </div>

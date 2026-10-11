@@ -2,7 +2,7 @@
   "name": "Firebase 管理密钥",
   "version": "1.1.0",
   "credential_type": "firebase_admin",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 Firebase Admin SDK 服务账号密钥有效性（JWT 换 token + Firebase Management 探测，只读）",
   "icon": "logo.svg",
   "fields": [

@@ -463,7 +463,7 @@ def _send_imap_id(conn: imaplib.IMAP4) -> None:
         caps = getattr(conn, "capabilities", ()) or ()
         if "ID" not in caps:  # imaplib 的 capabilities 是大写字符串元组
             return
-        conn.xatom("ID", '("name" "CredentialVault" "version" "1.0.0")')
+        conn.xatom("ID", '("name" "Keyrealm" "version" "1.0.0")')
     except Exception:  # noqa: BLE001 - 见上：放过，交由 select 报真正的原因
         pass
 

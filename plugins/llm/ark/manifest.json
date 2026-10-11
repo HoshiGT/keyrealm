@@ -2,7 +2,7 @@
   "name": "火山方舟",
   "version": "1.1.0",
   "credential_type": "llm_ark",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证火山方舟（Volcengine Ark）API Key 有效性。方舟是字节的模型托管平台，同一把 key 可调豆包 / DeepSeek / 智谱 GLM / 阿里 Qwen 等多家模型",
   "icon": "logo.png",
   "fields": [

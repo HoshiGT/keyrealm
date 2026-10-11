@@ -105,7 +105,7 @@ _logger = logging.getLogger("plugin")
 
 
 def log(message: str) -> None:
-    """插件日志 → 应用统一日志（根 logger 落盘到 data/logs/credential_vault.log）。
+    """插件日志 → 应用统一日志（根 logger 落盘到 data/logs/keyrealm.log）。
 
     不要用 print(..., file=sys.stderr)：打包成 GUI 程序后没有 stdio，
     输出会被静默丢弃（在 windowed 模式下写 stderr 甚至直接抛异常），

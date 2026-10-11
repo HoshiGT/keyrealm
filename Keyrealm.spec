@@ -1,9 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller 打包规格：Credential Vault 单文件可执行程序。
+"""PyInstaller 打包规格：Keyrealm 单文件可执行程序。
 
 设计要点
 --------
-- **onefile**：产出单个可执行文件（Windows 为 CredentialVault.exe）。
+- **onefile**：产出单个可执行文件（Windows 为 Keyrealm.exe）。
 - **只打包代码 + frontend/dist**：前端产物作为只读资源随包（运行时从 sys._MEIPASS 取）。
 - **不打包 plugins/ 与 data/**：这两者是「用户可改 / 运行时可写」内容，由构建脚本
   以外部目录形式放到 exe 同级（见 scripts/build.py）。这样用户能直接编辑插件、
@@ -12,7 +12,7 @@
 console 开关
 ------------
 默认 GUI 模式（console=False，无黑框）。调试构建可设环境变量 CV_CONSOLE=1 保留控制台，
-便于运行 `CredentialVault --print-paths` 校验冻结后的路径解析。
+便于运行 `Keyrealm --print-paths` 校验冻结后的路径解析。
 """
 import os
 import re
@@ -242,7 +242,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="CredentialVault",
+    name="Keyrealm",
     icon=_icon,
     debug=False,
     bootloader_ignore_signals=False,

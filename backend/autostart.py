@@ -11,9 +11,9 @@ Linux XDG autostart / macOS LaunchAgent）。若再往 settings 表存一份镜�
 ----------
 - Windows：``HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run``（仅当前用户，
   无需管理员权限）。
-- Linux：``$XDG_CONFIG_HOME/autostart/credential-vault.desktop``（XDG 桌面规范，
+- Linux：``$XDG_CONFIG_HOME/autostart/keyrealm.desktop``（XDG 桌面规范，
   GNOME / KDE / XFCE 等均识别）。
-- macOS：``~/Library/LaunchAgents/com.credentialvault.app.plist``。
+- macOS：``~/Library/LaunchAgents/com.keyrealm.app.plist``。
 
 启动命令由 :func:`launch_argv` 按**冻结与否**推导，不写死任何本机路径。
 """
@@ -30,12 +30,25 @@ from .paths import app_dir, is_frozen
 
 _log = logging.getLogger(__name__)
 
-APP_ID = "CredentialVault"                    # Windows 注册表值名 / 通用标识
-APP_NAME = "Credential Vault"
-LINUX_DESKTOP_FILE = "credential-vault.desktop"
+APP_ID = "Keyrealm"                           # Windows 注册表值名 / 通用标识
+APP_NAME = "Keyrealm"
+LINUX_DESKTOP_FILE = "keyrealm.desktop"
 # 写进 .desktop 的归属标记：关闭时据此确认「这个文件是本程序建的」再删。
-LINUX_MARKER = "# Managed by Credential Vault"
-MACOS_LABEL = "com.credentialvault.app"
+LINUX_MARKER = "# Managed by Keyrealm"
+MACOS_LABEL = "com.keyrealm.app"
+
+# ── 改名（Credential Vault → Keyrealm）留下的旧自启条目 ─────────────────
+# 旧条目按旧名字写在系统里，新名字**读不到**它们。不处理的话症状是：开关显示「已关闭」，
+# 系统里却仍留着一条指向旧 exe 的条目——开机会弹一次「找不到文件」，而用户在界面上把开关
+# 打开后变成**两条**。所以启动时迁移一次：旧条目存在 == 用户当初就是开着的，删掉旧的重建新的，
+# 把「开着」这个意图保留下来（**不**改成默认关闭——那等于替用户改设置）。
+#
+# 只认三种「确实是我们写的」证据：注册表值名、.desktop 里的归属标记、LaunchAgent 的 Label；
+# 对不上就一个字节都不动。
+LEGACY_WIN_APP_ID = "CredentialVault"
+LEGACY_LINUX_DESKTOP_FILE = "credential-vault.desktop"
+LEGACY_LINUX_MARKER = "# Managed by Credential Vault"
+LEGACY_MACOS_LABEL = "com.credentialvault.app"
 
 
 class AutostartError(RuntimeError):
@@ -202,6 +215,104 @@ def _macos_set(enabled: bool) -> None:
         path.write_bytes(plistlib.dumps(payload))
     except OSError as exc:
         raise AutostartError(f"写入 {path} 失败：{exc}") from exc
+
+
+# ── 旧条目迁移（改名用，幂等）─────────────────────────────────────
+
+def _win_migrate_legacy() -> bool:
+    import winreg  # noqa: PLC0415
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, _WIN_RUN_KEY, 0,
+            winreg.KEY_READ | winreg.KEY_SET_VALUE,
+        ) as key:
+            try:
+                winreg.QueryValueEx(key, LEGACY_WIN_APP_ID)
+            except FileNotFoundError:
+                return False                      # 没有旧条目：正常路径，不是错误
+            try:
+                winreg.DeleteValue(key, LEGACY_WIN_APP_ID)
+            except FileNotFoundError:
+                pass
+            winreg.SetValueEx(
+                key, APP_ID, 0, winreg.REG_SZ, subprocess.list2cmdline(launch_argv())
+            )
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        _log.warning("迁移旧的 Windows 自启项失败：%s", exc)
+        return False
+
+
+def _linux_legacy_path() -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "autostart" / LEGACY_LINUX_DESKTOP_FILE
+
+
+def _linux_migrate_legacy() -> bool:
+    old = _linux_legacy_path()
+    if not old.is_file():
+        return False
+    try:
+        if LEGACY_LINUX_MARKER not in old.read_text(encoding="utf-8", errors="replace"):
+            # 同名但不是本程序写的 → 一个字节都不动
+            _log.warning("%s 缺少归属标记，按「不是本程序创建」处理，未改动", old)
+            return False
+        old.unlink()
+    except OSError as exc:
+        _log.warning("删除旧的自启文件 %s 失败：%s", old, exc)
+        return False
+    try:
+        _linux_set(True)
+    except AutostartError as exc:
+        _log.warning("按新名字重建自启文件失败：%s", exc)
+        return False
+    return True
+
+
+def _macos_legacy_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{LEGACY_MACOS_LABEL}.plist"
+
+
+def _macos_migrate_legacy() -> bool:
+    old = _macos_legacy_path()
+    if not old.is_file():
+        return False
+    try:
+        payload = plistlib.loads(old.read_bytes())
+    except Exception as exc:  # noqa: BLE001 - 损坏就当作不是我们的
+        _log.warning("解析 %s 失败，未改动：%s", old, exc)
+        return False
+    if not isinstance(payload, dict) or payload.get("Label") != LEGACY_MACOS_LABEL:
+        _log.warning("%s 的 Label 不是本程序，未改动", old)
+        return False
+    try:
+        old.unlink()
+    except OSError as exc:
+        _log.warning("删除旧的 LaunchAgent %s 失败：%s", old, exc)
+        return False
+    try:
+        _macos_set(True)
+    except AutostartError as exc:
+        _log.warning("按新名字重建 LaunchAgent 失败：%s", exc)
+        return False
+    return True
+
+
+def migrate_legacy() -> bool:
+    """迁移改名前的旧自启条目（缘由见上方 ``LEGACY_*`` 的说明）。返回是否发生了迁移。
+
+    **幂等**：没有旧条目时立刻返回 ``False``，不做任何写入。应用启动时调一次即可。
+    """
+    if sys.platform == "win32":
+        return _win_migrate_legacy()
+    if sys.platform == "darwin":
+        return _macos_migrate_legacy()
+    if os.name == "posix":
+        return _linux_migrate_legacy()
+    return False
 
 
 # ── 对外接口 ───────────────────────────────────────────────────────

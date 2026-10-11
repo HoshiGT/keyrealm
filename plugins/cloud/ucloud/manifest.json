@@ -2,7 +2,7 @@
   "name": "UCloud",
   "version": "1.0.0",
   "credential_type": "cloud_ucloud",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "UCloud 公有云 API 公私钥。校验走只读的 GetRegion 探针，另提供账号信息、地域、项目、云主机、弹性 IP、防火墙六项只读查询。",
   "icon": "logo.svg",
   "fields": [

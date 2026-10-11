@@ -149,7 +149,7 @@ def _write_import_logs(records: list[dict], *, encrypted: bool, source: str,
     failed_path = LOG_DIR / f"import_{stamp}_failed.log"
 
     head = [
-        "Credential Vault 备份导入日志",
+        "Keyrealm 备份导入日志",
         f"时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"源文件：{source or '（未记录）'}",
         f"备份加密：{'是' if encrypted else '否'}",
@@ -170,7 +170,7 @@ def _write_import_logs(records: list[dict], *, encrypted: bool, source: str,
         return str(log_path), None
 
     failed_head = [
-        "Credential Vault 备份导入失败日志",
+        "Keyrealm 备份导入失败日志",
         f"时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"源文件：{source or '（未记录）'}",
         f"失败条数：{counts['failed']}",
@@ -301,7 +301,7 @@ def import_backup(key: bytes, doc: dict, dedupe: bool = True, source: str = "") 
     因为那说明用户拿错了密码/文件，逐条报失败没有意义。
     """
     if not isinstance(doc, dict) or doc.get("format") != FORMAT:
-        raise ValueError("不是有效的 Credential Vault 备份文件")
+        raise ValueError("不是有效的 Keyrealm 备份文件")
 
     encrypted = bool(doc.get("encrypted"))
     entries = doc.get("credentials") or []

@@ -2,7 +2,7 @@
   "name": "京东云",
   "version": "1.0.0",
   "credential_type": "cloud_jdcloud",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证京东云 AccessKey 有效性（IAM 列举主账号 AccessKey，只读），并提供 IAM 身份、地域与可用区、云主机实例、云硬盘的只读查询操作",
   "icon": "logo.svg",
   "fields": [

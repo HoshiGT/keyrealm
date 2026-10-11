@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""把当前源码打包为 release/credential-vault-src.zip（存在则覆盖）。
+"""把当前源码打包为 release/keyrealm-src.zip（存在则覆盖）。
 
 打包范围 = git 已追踪文件 + 未被 .gitignore 忽略的新增文件（即当前工作树源码），
 因此「改完源码直接跑本脚本」即可，无需先 commit。自动排除被 gitignore 的内容：
@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 RELEASE = ROOT / "release"
-OUT = RELEASE / "credential-vault-src.zip"
+OUT = RELEASE / "keyrealm-src.zip"
 
 
 def _is_secret(rel: str) -> bool:

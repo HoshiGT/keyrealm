@@ -2,7 +2,7 @@
   "name": "MiniMax",
   "version": "1.0.0",
   "credential_type": "llm_minimax",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 MiniMax API Key 有效性",
   "icon": "logo.png",
   "fields": [

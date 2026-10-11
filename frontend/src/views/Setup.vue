@@ -84,7 +84,7 @@ async function submit() {
           <span class="auth-ring" aria-hidden="true" />
           <el-icon class="auth-mark-icon"><Lock /></el-icon>
         </span>
-        <h1 class="v-grad-text">Credential Vault</h1>
+        <h1 class="v-grad-text">Keyrealm</h1>
         <p class="auth-subtitle">设置主密码（首次使用）</p>
       </div>
 

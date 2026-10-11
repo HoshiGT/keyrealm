@@ -2,7 +2,7 @@
   "name": "腾讯云",
   "version": "1.0.0",
   "credential_type": "cloud_tencentcloud",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证腾讯云 SecretId/SecretKey 有效性（STS GetCallerIdentity）",
   "icon": "logo.svg",
   "fields": [

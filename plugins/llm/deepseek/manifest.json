@@ -2,7 +2,7 @@
   "name": "DeepSeek",
   "version": "1.0.0",
   "credential_type": "llm_deepseek",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 DeepSeek API Key 有效性，支持余额查询",
   "icon": "logo.png",
   "fields": [

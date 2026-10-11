@@ -2,7 +2,7 @@
   "name": "商汤 SenseNova",
   "version": "1.0.0",
   "credential_type": "llm_sensenova",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 商汤日日新 SenseNova API Key 有效性",
   "icon": "logo.png",
   "fields": [

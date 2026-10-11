@@ -2,7 +2,7 @@
   "name": "New API 中转站",
   "version": "1.0.0",
   "credential_type": "llm_newapi",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 New API（one-api 衍生）自建中转站的 API Key 有效性",
   "icon": "logo.png",
   "fields": [

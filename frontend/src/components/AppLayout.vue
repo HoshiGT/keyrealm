@@ -202,7 +202,7 @@ onBeforeUnmount(() => {
   window.removeEventListener(EVENTS.tasksChanged, onTasksChanged)
 })
 
-const pageTitle = computed(() => route.meta.title || 'Credential Vault')
+const pageTitle = computed(() => route.meta.title || 'Keyrealm')
 
 /* ── 批量验证横幅 ───────────────────────────────────────
  * 刻意做成**非阻塞**的横幅而不是模态弹窗：批量验证可能跑很久，模态会把整个界面按在前台，
@@ -275,9 +275,9 @@ async function handleMinimize() {
     >
       <div class="brand" :class="{ 'is-collapsed': collapsed }">
         <span class="brand-mark">
-          <img src="/favicon.svg" class="brand-logo" alt="Credential Vault" />
+          <img src="/favicon.svg" class="brand-logo" alt="Keyrealm" />
         </span>
-        <span v-show="!collapsed" class="brand-text v-grad-text">Credential Vault</span>
+        <span v-show="!collapsed" class="brand-text v-grad-text">Keyrealm</span>
       </div>
 
       <!-- 预留位：后续功能按钮加在这里 -->
@@ -431,9 +431,9 @@ async function handleMinimize() {
 
 /* ── 品牌区 ─────────────────────────────────────────────────────── */
 
-/* 宽度 176px 是为了容下完整品牌名：152px 时 "Credential Vault" 会被截成
-   "Credential V…"（重构前靠更小的 logo 和更紧的内边距勉强塞下）。
-   宁可侧栏宽一点，也不要一个带省略号的品牌名。 */
+/* 宽度 176px 是按**改名前的旧品牌名**（`Credential Vault`，17 字符）定的：152px 时那个名字
+   会被截成带省略号的样子。现在的名字 `Keyrealm` 只有 8 字符，176px 明显有富余——
+   但侧栏宽度还被别处引用，收窄要连着看这些地方，故先留着。（见「品牌区」下方各处的 176px） */
 .brand {
   display: flex;
   align-items: center;

@@ -2,7 +2,7 @@
   "name": "企业微信",
   "version": "1.0.0",
   "credential_type": "im_wecom",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证企业微信：自建应用（CorpID / CorpSecret）或群机器人 Webhook 密钥",
   "icon": "logo.png",
   "fields": [

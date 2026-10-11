@@ -22,7 +22,7 @@ const minutesDate = (n) => new Date(Date.now() - n * 60_000)
 
 const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
 const LOG_LEVEL_VALUES = { DEBUG: 10, INFO: 20, WARNING: 30, ERROR: 40, CRITICAL: 50 }
-const MOCK_LOG_FILE = '<开发模式>/data/logs/credential_vault.log'
+const MOCK_LOG_FILE = '<开发模式>/data/logs/keyrealm.log'
 
 /** 生成一行与后端格式一致的日志文本：YYYY-MM-DD HH:MM:SS [LEVEL] name: message */
 function logLine(level, name, message, date = new Date()) {
@@ -113,7 +113,7 @@ function createState() {
     mcpPermissions,
     mcpToken: {
       id: 1,
-      token_prefix: 'cv_a3f2',
+      token_prefix: 'kr_a3f2',
       created_at: daysAgo(2),
       last_used_at: minutesAgo(2),
     },
@@ -561,7 +561,7 @@ export function createMockApi() {
       if (!state.mcpToken) {
         state.mcpToken = {
           id: nextId(),
-          token_prefix: `cv_${Math.random().toString(36).slice(2, 6)}`,
+          token_prefix: `kr_${Math.random().toString(36).slice(2, 6)}`,
           created_at: iso(),
           last_used_at: null,
         }
@@ -571,7 +571,7 @@ export function createMockApi() {
 
     async rotate_mcp_token() {
       await delay(300)
-      const secret = `cv_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`
+      const secret = `kr_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`
       state.mcpToken = {
         id: nextId(),
         token_prefix: secret.slice(0, 7),
@@ -723,7 +723,7 @@ export function createMockApi() {
         supported: true,
         enabled: state.autostartEnabled,
         platform: 'mock',
-        target: 'mock://autostart/credential-vault',
+        target: 'mock://autostart/keyrealm',
       }
     },
 
@@ -922,7 +922,7 @@ export function createMockApi() {
       await delay(140)
       requireUnlocked()
       const count = scope === 'all' ? state.credentials.length : state.credentials.length
-      return { ok: true, path: `/mock/credential-vault-backup-${Date.now()}.json`, count, encrypted: !!encrypted }
+      return { ok: true, path: `/mock/keyrealm-backup-${Date.now()}.json`, count, encrypted: !!encrypted }
     },
 
     async import_backup() {
@@ -933,7 +933,7 @@ export function createMockApi() {
         skipped_plugin: 0, skipped_duplicate: 0, failed_count: 0, failed: [],
         created_groups: 0,
         log_file: 'import-20260101-000000.log', failed_log_file: '',
-        path: '/mock/credential-vault-backup.json',
+        path: '/mock/keyrealm-backup.json',
       }
     },
 
@@ -991,7 +991,7 @@ export async function installDevBridge(gracePeriod = 800) {
   window.__VAULT_MOCK__ = { password: MOCK_PASSWORD }
   window.dispatchEvent(new CustomEvent('pywebviewready'))
   console.info(
-    `[Credential Vault] 开发模式：未检测到 pywebview，已启用内存 Mock 后端。主密码：${MOCK_PASSWORD}`,
+    `[Keyrealm] 开发模式：未检测到 pywebview，已启用内存 Mock 后端。主密码：${MOCK_PASSWORD}`,
   )
   return true
 }

@@ -2,7 +2,7 @@
   "name": "百度智能云",
   "version": "1.0.0",
   "credential_type": "cloud_baiducloud",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证百度智能云（BCE）Access Key 有效性（IAM 列举子用户，只读），并提供 IAM 子用户/用户组/角色/权限策略与 BOS 对象存储的只读查询操作",
   "icon": "logo.svg",
   "fields": [

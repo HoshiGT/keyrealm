@@ -4,7 +4,7 @@
 上游原始响应**是常态（body_snippet 把上游报错原样带进 message；部分服务的密钥就在 URL
 query 里，异常文本天然带着它）。这些文本有两条**持久化**去向：
 
-- 落盘到 ``data/logs/credential_vault.log``（见 backend/scheduler.py 的验证结果日志）
+- 落盘到 ``data/logs/keyrealm.log``（见 backend/scheduler.py 的验证结果日志）
 - 落库到凭据的 ``status_detail`` 列
 
 所以净化必须在**框架侧统一做**，不能指望每个插件自己记得。本模块被两处共用：

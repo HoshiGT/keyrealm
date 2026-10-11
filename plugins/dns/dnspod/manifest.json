@@ -2,7 +2,7 @@
   "name": "DNSPod",
   "version": "1.0.0",
   "credential_type": "dns_dnspod",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 DNSPod API Token 有效性并统计名下域名数量",
   "icon": "logo.png",
   "fields": [

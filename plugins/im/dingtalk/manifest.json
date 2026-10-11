@@ -2,7 +2,7 @@
   "name": "钉钉",
   "version": "1.0.0",
   "credential_type": "im_dingtalk",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证钉钉：企业内部应用（App Key / App Secret）或自定义群机器人 Webhook 密钥",
   "icon": "logo.png",
   "fields": [

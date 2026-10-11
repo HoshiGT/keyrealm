@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""构建 Credential Vault 单文件可执行程序，输出到 release/。
+"""构建 Keyrealm 单文件可执行程序，输出到 release/。
 
-跨平台：在 Windows 上产出 release/CredentialVault.exe，在 Linux/macOS 上产出
-release/CredentialVault。**要生成 Windows exe，必须在 Windows 上运行本脚本**
+跨平台：在 Windows 上产出 release/Keyrealm.exe，在 Linux/macOS 上产出
+release/Keyrealm。**要生成 Windows exe，必须在 Windows 上运行本脚本**
 （PyInstaller 不能跨平台交叉编译）。
 
 打包边界
@@ -28,7 +28,7 @@ release/CredentialVault。**要生成 Windows exe，必须在 Windows 上运行�
 并中止，提示 pip install -r requirements.txt；确实要忽略可加 --allow-missing-deps。
 extras 必须查：httpx 是在函数体内 import socksio 的，构建机没装时 PyInstaller 既不报错
 也不打包，问题要到 exe 里真的用 socks5 代理才暴露。
-同一条检查在 `CredentialVault.spec` 里也有一份（那四个隐式依赖），**默认缺一个即中止构建**；
+同一条检查在 `Keyrealm.spec` 里也有一份（那四个隐式依赖），**默认缺一个即中止构建**；
 `--allow-missing-deps` 会以 CV_ALLOW_MISSING_DEPS=1 透传给 spec，两边口径一致。
 """
 from __future__ import annotations
@@ -44,7 +44,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SPEC = ROOT / "CredentialVault.spec"
+SPEC = ROOT / "Keyrealm.spec"
 REQUIREMENTS = ROOT / "requirements.txt"
 FRONTEND = ROOT / "frontend"
 FRONTEND_DIST = FRONTEND / "dist"
@@ -53,7 +53,7 @@ DIST = ROOT / "dist"      # PyInstaller 产物中转（gitignored）
 WORK = ROOT / "build"     # PyInstaller 中间文件（gitignored）
 
 IS_WINDOWS = platform.system() == "Windows"
-EXE_NAME = "CredentialVault.exe" if IS_WINDOWS else "CredentialVault"
+EXE_NAME = "Keyrealm.exe" if IS_WINDOWS else "Keyrealm"
 
 
 def _run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> None:
@@ -313,7 +313,7 @@ def assemble_release() -> Path:
         sys.exit(f"未找到构建产物：{built}")
 
     # 不整体清空 release/：保留其中已存在的 data/（运行时数据）与
-    # credential-vault-src.zip（源码归档）等无关文件，只替换本脚本负责的 exe 与 plugins/。
+    # keyrealm-src.zip（源码归档）等无关文件，只替换本脚本负责的 exe 与 plugins/。
     RELEASE.mkdir(parents=True, exist_ok=True)
 
     exe_dest = RELEASE / EXE_NAME
@@ -386,7 +386,7 @@ def human_size(n: int) -> str:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="构建 Credential Vault 单文件可执行程序到 release/")
+    ap = argparse.ArgumentParser(description="构建 Keyrealm 单文件可执行程序到 release/")
     ap.add_argument("--frontend", action="store_true", help="构建前先执行 npm run build")
     ap.add_argument("--console", action="store_true", help="保留控制台窗口（调试）")
     ap.add_argument("--smoke", action="store_true", help="构建后运行 --print-paths 校验（隐含 --console）")

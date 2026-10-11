@@ -1,5 +1,5 @@
 """
-Credential Vault — 入口
+Keyrealm — 入口
 pywebview 主窗口 + 系统托盘 + MCP Server + 调度器
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ if str(BASE_DIR) not in sys.path:
 
 import webview  # pywebview
 
-from backend import api, database as db, idle_lock, logger, mcp_server, plugin_manager, proxy as proxy_config, scheduler, single_instance, tray, verify_options, version
+from backend import api, autostart, database as db, idle_lock, logger, mcp_server, plugin_manager, proxy as proxy_config, scheduler, single_instance, tray, verify_options, version
 from backend import vault_proxy_ctx
 from backend.paths import app_dir, is_frozen, resource_dir
 
@@ -369,7 +369,7 @@ _LIGHT_PLACEHOLDER = """<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>Credential Vault</title>
+<title>Keyrealm</title>
 <style>
   html, body { height: 100%; margin: 0; }
   body {
@@ -515,6 +515,12 @@ def main():
     log.info("应用启动（版本=%s，frozen=%s，日志级别=%s，数据目录=%s）",
              version.version_string(), is_frozen(), logger.get_level(), app_dir())
 
+    # 迁移改名（Credential Vault → Keyrealm）留在系统里的旧自启条目：不清掉的话，
+    # 开关会显示「已关闭」而系统里仍有一条指向旧 exe 的条目，开机弹「找不到文件」。
+    # 幂等：没有旧条目时什么都不做（见 backend/autostart.py 的 migrate_legacy）。
+    if autostart.migrate_legacy():
+        log.info("已把开机自启条目迁移到新名字（Keyrealm）")
+
     # 扫描 plugins/ 装载插件
     plugin_manager.sync_plugins()
 
@@ -534,7 +540,7 @@ def main():
     _frontend = _get_frontend_path()
     _app_url = _to_url(_frontend)
     _window = webview.create_window(
-        title="Credential Vault",
+        title="Keyrealm",
         url=_frontend,
         js_api=VaultApi(),
         width=1200,
@@ -565,7 +571,7 @@ def main():
     #
     # 图标：显式传入 .ico。不传时 pywebview 会从 sys.executable 提取 exe 内嵌图标，
     # 但提取到的通常是 16×16 小图，在高 DPI 任务栏/标题栏下模糊甚至回退为默认图标。
-    # 图标随包在 resource_dir()/assets/（见 CredentialVault.spec）。
+    # 图标随包在 resource_dir()/assets/（见 Keyrealm.spec）。
     webview_dir = db.DATA_DIR / "webview"
     webview_dir.mkdir(parents=True, exist_ok=True)
     _icon_file = resource_dir() / "assets" / "icon.ico"

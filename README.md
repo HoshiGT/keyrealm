@@ -1,4 +1,4 @@
-# Credential Vault — 凭据管理与验证平台
+# Keyrealm — 凭据管理与验证平台
 
 一个本地优先的桌面应用，用于集中管理、加密存储和主动验证各类 API 凭据。
 
@@ -13,7 +13,7 @@
 - **多代理 + 按凭据选出口**：可维护**多个代理**（各自取名，其它地方一律按 id 引用），设一个全局默认；**每条凭据**可三选一——跟随上层设置 / 指定某个代理 / 直连；解析优先级是 **本条凭据 > 该插件预设 > 所属类别预设 > 全局默认**。批量验证并发时各凭据互不串（框架按调用注入、线程隔离，插件无需改动）。「网络与代理」里可对任一代理一键**对照测试**：同一批探测分别走直连与代理，比对出口 IP 归属与国内外站点可达性，直接给出「代理是否真的生效」的结论（测试状态在 store 里，**切页不会丢结果**）。socks5 需 `socksio`（`requirements.txt` 已声明 `httpx[socks]`）：环境缺它时不再甩英文异常，而是直接给中文处理办法。**邮箱（SMTP/IMAP）同样支持代理**——它走的是裸 TCP，吃不了 HTTP 代理，改用 SOCKS / HTTP CONNECT **隧道**穿出去（依赖 `PySocks`）
 - **类别 / 插件默认设置**：可给一个**类别**（如 LLM）或某个**插件**预设新建凭据的默认值（Base URL、备注、走哪个代理…），**插件级覆盖类别级**；新建凭据时自动带出。框架只提供存与继承，可预设哪些字段由插件自行声明，**敏感字段永不参与**
 - **只允许一套在跑**：重复双击 exe 不会开出第二个实例，而是把已运行的那个窗口拉到前台
-- **独立日志模块**：插件与后端的 INFO/告警/异常统一落盘（`data/logs/credential_vault.log`，1MB×5 轮转），独立页面可调级别、按关键词**搜索**（支持 AND 多词、含 traceback 的整条记录匹配）、清空与刷新；**第三方库的噪声日志默认压制**（`httpx` / `httpcore` / `PIL.PngImagePlugin` 的调试行——后者每处理一张视图就刷一串 `STREAM b'IHDR'`，对用户无意义），免得把有用信息淹掉
+- **独立日志模块**：插件与后端的 INFO/告警/异常统一落盘（`data/logs/keyrealm.log`，1MB×5 轮转），独立页面可调级别、按关键词**搜索**（支持 AND 多词、含 traceback 的整条记录匹配）、清空与刷新；**第三方库的噪声日志默认压制**（`httpx` / `httpcore` / `PIL.PngImagePlugin` 的调试行——后者每处理一张视图就刷一串 `STREAM b'IHDR'`，对用户无意义），免得把有用信息淹掉
 - **凭据简易操作**：插件可声明可选操作，凭据行出现「操作」按钮，按 `kind` 分三种形态——**对话**（流式返回，报错以红色气泡留在对话流里）、**表单**（写操作提交前二次确认）、**列表**（表格 + 行内按钮 + 下钻，例如「域名列表 → 该域名的解析记录」）。一个凭据有多个操作时先弹选择菜单，**只有一个就直接进**。下载类操作（如 GitHub 仓库打包）会弹系统「另存为」并原子落盘
 - **按权限显隐操作**：插件可实现 `capabilities()` 探测该凭据真正能用哪些操作——**没权限的直接隐藏**，一个都没有时给出说明；探测失败一律 fail-open（宁可全显示，也不因一次网络抖动把能用的功能藏掉）
 - **后台任务**：下载 / 打包这类长操作会登记成**后台任务**——弹窗里能看实时进度（`12.3 MB / 45.0 MB`、`3/12 对象名`），**点「转到后台」关掉弹窗照样跑**，侧栏「任务」页随时看进度、**随时取消**（协作式：在下一个检查点停下并清理未完成的临时文件），也可以一键清空已完成的任务记录。**任务记录持久化**（`data/tasks.json`，与日志同目录、不进数据库）：应用重启后历史仍在，上次没跑完的会改判为**「已中断」**（线程随进程没了，不谎报「进行中」，也不冤枉成失败）
@@ -55,7 +55,7 @@ python main.py
 
 ## 打包为可执行文件
 
-打包为单文件可执行程序（Windows 为 `CredentialVault.exe`），输出到 `release/`。
+打包为单文件可执行程序（Windows 为 `Keyrealm.exe`），输出到 `release/`。
 **PyInstaller 不能跨平台编译，要得到 Windows exe 必须在 Windows 上执行构建。**
 
 ```bash
@@ -99,8 +99,8 @@ python scripts/build.py --frontend
 
 ```
 release/
-├── CredentialVault.exe        # 单文件可执行程序（后端代码 + frontend/dist 已内置）
-├── credential-vault-src.zip   # 源码归档（由 scripts/pack_source.py 生成，见下）
+├── Keyrealm.exe        # 单文件可执行程序（后端代码 + frontend/dist 已内置）
+├── keyrealm-src.zip   # 源码归档（由 scripts/pack_source.py 生成，见下）
 ├── plugins/                   # 插件【唯一事实来源】（不进 exe，可直接编辑，重启生效）；
 │                              #   .state.json 记录启用/禁用状态（不存在 = 全部启用）
 │   ├── llm/                   # LLM 类别目录（category.json；llm_common.py 为类别特有辅助）
@@ -136,7 +136,7 @@ release/
 | `plugins/` | ❌ 外部 | 插件唯一事实来源，放 exe 同级；启动时扫描自动加载，删除子插件目录即卸载 |
 | `data/` | ❌ 外部 | 运行时可写，放 exe 同级，保证数据持久化 |
 
-`release/` 是自包含、可便携分发的目录，且**不被 git 追踪**（`CredentialVault.spec` 与
+`release/` 是自包含、可便携分发的目录，且**不被 git 追踪**（`Keyrealm.spec` 与
 `scripts/*.py` 作为构建配置保留在版本库中）。
 
 > **升级时 `data/` 原样保留**：`scripts/build.py` 只替换 exe、`plugins/`（且不覆盖 `plugins/.state.json`，
@@ -170,16 +170,16 @@ release/
 > （确实要忽略可加 `--allow-missing-deps`）。之所以要查 extras：httpx 是在**函数体内**
 > `import socksio` 的，构建机没装时 PyInstaller 既不报错也不打包，问题直到 exe 里用 socks5
 > 代理才暴露（`the 'socksio' package is not installed`）。
-> **`CredentialVault.spec` 自己还会再核对一遍**那几个「静态分析看不到」的依赖（socksio /
+> **`Keyrealm.spec` 自己还会再核对一遍**那几个「静态分析看不到」的依赖（socksio /
 > PySocks / telethon / python-socks），**缺一个就中止构建**，避免产出一个悄悄缺功能的包
-> （直接用 `pyinstaller CredentialVault.spec` 打包同样会停）。逃生口是环境变量
+> （直接用 `pyinstaller Keyrealm.spec` 打包同样会停）。逃生口是环境变量
 > `CV_ALLOW_MISSING_DEPS=1`，`scripts/build.py --allow-missing-deps` 会自动设上，两边口径一致。
 >
 > **插件用到的标准库也会自动收进来**：插件由 `importlib` 运行时动态加载，`main.py` 从不
 > `import plugins`，PyInstaller 的静态分析看不到它们用到的模块。第三方库（httpx 等）后端也在用、
 > 已被收集，但**只有插件用**的标准库（`imaplib` / `smtplib` / `email` / `zipfile` / `xml` / `html`）
 > 不会进包——症状是 exe 里一执行对应操作就 `ModuleNotFoundError: No module named 'imaplib'`，
-> 构建期无警告、开发机也复现不出（开发机是完整解释器）。`CredentialVault.spec` 会扫一遍
+> 构建期无警告、开发机也复现不出（开发机是完整解释器）。`Keyrealm.spec` 会扫一遍
 > `plugins/**/*.py` 的顶层 import，把其中的标准库名补进 `hiddenimports`，新增插件自动生效。
 > **第三方库同理要显式收**：邮箱走代理靠 `PySocks`（`import socks`），spec 里单独
 > `collect_all("socks")`，缺包即中止构建——不然 exe 里给邮箱设代理会报「缺少 PySocks」。
@@ -202,7 +202,7 @@ release/
 需要把源码本身打成压缩包（分发、备份、迁移到 Windows 构建机）时，用：
 
 ```bash
-python scripts/pack_source.py     # 生成/覆盖 release/credential-vault-src.zip
+python scripts/pack_source.py     # 生成/覆盖 release/keyrealm-src.zip
 ```
 
 - 打包范围 = **当前工作树源码**（git 已追踪文件 + 未被 `.gitignore` 忽略的新增文件），
@@ -219,7 +219,7 @@ python scripts/pack_source.py     # 生成/覆盖 release/credential-vault-src.z
 API-Key-Checker/
 ├── main.py                  # 应用入口
 ├── requirements.txt
-├── CredentialVault.spec     # PyInstaller 打包规格
+├── Keyrealm.spec     # PyInstaller 打包规格
 ├── backend/
 │   ├── api.py               # pywebview JS-API 桥接层
 │   ├── crypto.py            # AES-256-GCM 加密/解密
@@ -249,7 +249,7 @@ API-Key-Checker/
 │   ├── build.py             # 可执行文件打包脚本（输出到 release/）
 │   ├── check_exe_icon.py    # 校验 exe 是否真的嵌入了 assets/icon.ico（区分「没嵌」与「图标缓存」）
 │   ├── make_icon.py         # 生成应用图标（ICO/PNG/favicon）
-│   └── pack_source.py       # 源码归档脚本（生成 release/credential-vault-src.zip）
+│   └── pack_source.py       # 源码归档脚本（生成 release/keyrealm-src.zip）
 ├── plugins/                 # 插件源码（打包时作为外部目录，不进 exe）
 │   ├── llm/                 # LLM 类别：18 个厂商子插件；llm_common.py 为类别特有辅助
 │   ├── api/                 # API 服务类别：firecrawl / tavily / metaso / coze / dify / fofa /

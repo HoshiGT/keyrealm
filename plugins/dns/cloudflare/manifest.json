@@ -2,7 +2,7 @@
   "name": "Cloudflare",
   "version": "1.0.0",
   "credential_type": "cloud_cloudflare",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 Cloudflare API Token 或 Global API Key 有效性",
   "icon": "logo.svg",
   "fields": [

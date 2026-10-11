@@ -2,7 +2,7 @@
   "name": "微信小程序",
   "version": "1.0.0",
   "credential_type": "im_wechat_miniprogram",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 微信小程序 AppID + AppSecret，支持获取调用凭据/小程序基础信息/接口调用配额",
   "icon": "logo.png",
   "batch_verify": false,

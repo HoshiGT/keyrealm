@@ -20,7 +20,7 @@ MCP 全局只保留**一个活跃 Token**，且**默认即存在**（无需手�
 活跃 Token 会自动创建一个。Token 形如：
 
 ```
-cv_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7
+kr_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7
 ```
 
 在应用 **MCP 设置** 页可查看 Token 前缀；需要更换时点击「轮换 Token」，旧 Token 立即作废，
@@ -31,7 +31,7 @@ cv_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7
 所有 SSE 连接必须在 HTTP Header 中携带 Token：
 
 ```
-Authorization: Bearer cv_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7
+Authorization: Bearer kr_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7
 ```
 
 ### 鉴权失败响应
@@ -56,7 +56,7 @@ Bearer Token 由 SSE 中间件校验，失败时在建立连接前直接返回 *
 > ```json
 > {"error": "permission_denied", "tool": "vault_create_credential", "reason": "global_disabled",
 >  "message": "工具「vault_create_credential」未授权：它在 MCP 里默认就是关闭的（高危工具）。请到
->              Credential Vault →「设置 → MCP 服务 → 工具权限」勾选启用后重试。"}
+>              Keyrealm →「设置 → MCP 服务 → 工具权限」勾选启用后重试。"}
 > ```
 >
 > `reason` 区分是哪一层拒绝：**`global_disabled`**（全局开关没开 → 去「设置 → MCP 服务 →
@@ -73,7 +73,7 @@ SHA-256 哈希与前缀）。
 | 操作 | 说明 |
 |------|------|
 | 轮换 | 作废旧 Token 并签发新 Token，明文仅展示一次 |
-| 查看 | 展示前缀（`cv_a3f2...`）与最近使用时间 |
+| 查看 | 展示前缀（`kr_a3f2...`）与最近使用时间 |
 
 ---
 
@@ -84,10 +84,10 @@ SHA-256 哈希与前缀）。
 ```json
 {
   "mcpServers": {
-    "credential-vault": {
+    "keyrealm": {
       "url": "http://localhost:8765/sse",
       "headers": {
-        "Authorization": "Bearer cv_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7"
+        "Authorization": "Bearer kr_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7"
       }
     }
   }
@@ -99,10 +99,10 @@ SHA-256 哈希与前缀）。
 ```json
 {
   "mcpServers": {
-    "credential-vault": {
+    "keyrealm": {
       "url": "http://localhost:8765/sse",
       "headers": {
-        "Authorization": "Bearer cv_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7"
+        "Authorization": "Bearer kr_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7"
       }
     }
   }
@@ -112,10 +112,10 @@ SHA-256 哈希与前缀）。
 ### Claude Code（CLI）
 
 ```bash
-claude mcp add credential-vault \
+claude mcp add keyrealm \
   --transport sse \
   --url http://localhost:8765/sse \
-  --header "Authorization: Bearer cv_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7"
+  --header "Authorization: Bearer kr_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7"
 ```
 
 ---
@@ -387,7 +387,7 @@ claude mcp add credential-vault \
     "id": 3,
     "name": "OpenAI",
     "version": "1.0.0",
-    "author": "Credential Vault",
+    "author": "Keyrealm",
     "description": "验证 OpenAI API Key 有效性",
     "credential_type": "llm_openai",
     "icon": "logo.png",
@@ -601,7 +601,7 @@ claude mcp add credential-vault \
   "error": "permission_denied",
   "tool": "vault_create_credential",
   "reason": "global_disabled",
-  "message": "工具「vault_create_credential」未授权：它在 MCP 里默认就是**关闭**的（高危工具）。请到 Credential Vault →「设置 → MCP 服务 → 工具权限」勾选启用后重试。"
+  "message": "工具「vault_create_credential」未授权：它在 MCP 里默认就是**关闭**的（高危工具）。请到 Keyrealm →「设置 → MCP 服务 → 工具权限」勾选启用后重试。"
 }
 ```
 

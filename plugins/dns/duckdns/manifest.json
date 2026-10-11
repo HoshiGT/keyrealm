@@ -2,7 +2,7 @@
   "name": "DuckDNS",
   "version": "1.0.0",
   "credential_type": "dns_duckdns",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 DuckDNS Token 与域名：会先把解析写入 1.1.1.1 确认生效，再还原为原值（有写副作用，仅支持手动单个验证）",
   "icon": "logo.png",
   "batch_verify": false,

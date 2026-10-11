@@ -1445,7 +1445,7 @@ def export_backup(scope: str = "all", encrypted: bool = True,
     doc = built["document"]
 
     path = _file_dialog(
-        "save", default_name=f"credential-vault-backup-{datetime.now():%Y%m%d-%H%M%S}.json"
+        "save", default_name=f"keyrealm-backup-{datetime.now():%Y%m%d-%H%M%S}.json"
     )
     if not path:
         return {"ok": False, "message": "已取消"}

@@ -41,6 +41,33 @@
   └─────────────────┘          └─────────────────┘
 ```
 
+### 1.1 名字与「故意不改」的标识
+
+应用叫 **Keyrealm**（中文名「凭域」）。1.2.0 从 `Credential Vault` 改名而来，
+**只有用户与系统看得见的名字变了**，凡是会牵动数据兼容的标识**一律保持原样**——改它们
+换不来任何用户可见的好处，却要背上迁移风险：
+
+| 保持原样（连同理由） | |
+|---|---|
+| 备份格式串 `"credential-vault-backup"` | 改了它，**用户手上所有旧备份都导不进来** |
+| `vault_*` MCP 工具名、`vault:*` 事件名、`VAULT_*` 环境变量 | 是「vault（保险库）」这个通用词，不是产品名；改了要同步所有 Agent 侧配置与文档 |
+| `data/`、`credentials.db`、`master.key` | 改了老用户的库会在原地「消失」 |
+| `_vault_plugin_*` / `_vault_*_signer` 模块名前缀 | 纯内部实现细节 |
+| 插件 `credential_type`（`llm_openai` 等） | 库里的关联键，改名要跑迁移脚本 |
+
+**跟着改了的**：显示名与窗口/托盘标题、exe 与包名（`Keyrealm.exe` / `Keyrealm.spec`）、
+单实例互斥名、MCP 客户端配置里的服务 key（`keyrealm`）、日志文件名（`data/logs/keyrealm.log`）、
+备份默认文件名，以及 MCP 令牌前缀 **`cv_` → `kr_`**（老令牌**仍有效**——鉴权按 SHA-256 哈希比对，
+前缀只用于展示；且全局只有一个活跃令牌，轮换一次就统一了）。
+
+> **改名会留下系统级的孤儿，必须迁移**：开机自启动的条目是按名字写在系统里的
+> （Windows 注册表 `Run` 的值名、Linux `.desktop` 文件名 + 归属标记、macOS LaunchAgent 的
+> `Label`）。旧条目新名字**读不到**，症状是「开关显示已关闭，系统里却仍有旧条目 → 开机弹
+> 一次『找不到文件』，用户再打开开关就变成两条」。因此启动时跑一次
+> `autostart.migrate_legacy()`（幂等，见 `backend/autostart.py`）：**旧条目存在 == 用户当初
+> 就是开着的**，删旧建新把「开着」的意图保留下来；只认三种「确实是我们写的」证据
+> （值名 / 归属标记 / Label），对不上就一个字节都不动。
+
 ---
 
 ## 2. 核心模块
@@ -48,7 +75,7 @@
 **启动与单实例**（`backend/single_instance.py`）：`main()` 的**第一件事**就是取单实例锁
 ——Windows 用命名互斥体 `CreateMutexW`（内核在进程退出时自动释放，**不像 pid 文件那样会在
 崩溃/被强杀后留下陈旧锁**），其它平台用 `data/.instance.lock` 上的 `fcntl.flock`。
-取不到锁说明已有实例在跑：第二套进程**不创建界面**，而是 `FindWindowW("Credential Vault")`
+取不到锁说明已有实例在跑：第二套进程**不创建界面**，而是 `FindWindowW("Keyrealm")`
 + `ShowWindow` + `SetForegroundWindow` 把已有窗口拉到前台，然后自己退出——用户感知上就是
 「双击 exe 就出来了」。拿不到句柄/目录不可写等意外一律**放行**（宁可多开，也不能让应用起不来）。
 互斥检查放在 `logger.setup_logging()` 之前，因为重复启动不该产生任何副作用；而
@@ -333,7 +360,7 @@ plugins/
 
 | 层 | 位置 | 行为 |
 |----|------|------|
-| 构建期 | `scripts/build.py` / `CredentialVault.spec` | 构建前按 `requirements.txt`（**含 extras 展开**）核对当前环境，缺包就打印清单并**中止**（`--allow-missing-deps` 可放行），提示 `pip install -r requirements.txt`；spec 自己还会再核对一遍那四个「静态分析看不到」的依赖（socksio / PySocks / telethon / python-socks），**缺一个即中止构建**——直接用 `pyinstaller CredentialVault.spec` 时同样会停，逃生口是 `CV_ALLOW_MISSING_DEPS=1`（`--allow-missing-deps` 会自动设上） |
+| 构建期 | `scripts/build.py` / `Keyrealm.spec` | 构建前按 `requirements.txt`（**含 extras 展开**）核对当前环境，缺包就打印清单并**中止**（`--allow-missing-deps` 可放行），提示 `pip install -r requirements.txt`；spec 自己还会再核对一遍那四个「静态分析看不到」的依赖（socksio / PySocks / telethon / python-socks），**缺一个即中止构建**——直接用 `pyinstaller Keyrealm.spec` 时同样会停，逃生口是 `CV_ALLOW_MISSING_DEPS=1`（`--allow-missing-deps` 会自动设上） |
 | 诊断 | `backend/proxy_test.py` | `proxy_config.needs_socks()` + `socks_available()` 提前判定，socks 代理 + 缺依赖时**不发请求直接短路**，给出 `fail` 结论与中文处理办法（伪造一份代理侧探测结构，界面两列卡片照常渲染） |
 | 插件 | `backend/plugin_base.py` | `_friendly_error()` 把异常文本里的 socksio 报错换成中文处理办法；原始异常仍完整写入日志，不缺排查线索 |
 
@@ -361,7 +388,7 @@ plugins/
 `_build_mcp_app()`（构造工具）、`start_server()`（起 uvicorn）里；鉴权中间件 `BearerAuthMiddleware`
 也挪进 `_make_asgi_app()` 内部定义——它要继承 starlette 的 `BaseHTTPMiddleware`，类体在导入期就得
 解析基类，留在模块顶层会把 starlette 一起拽进常驻内存。**注意**：`main.py` / `api.py` 仍照常
-`import mcp_server`，无需改动；打包侧 `CredentialVault.spec` 用 `collect_all()` 显式收了这三个包，
+`import mcp_server`，无需改动；打包侧 `Keyrealm.spec` 用 `collect_all()` 显式收了这三个包，
 不受延迟导入影响，新增重依赖时照此办理。
 
 **监听地址可配**：`settings` 的 `mcp_host` / `mcp_port`（默认 `127.0.0.1` / `8765`）。
@@ -375,7 +402,7 @@ plugins/
 ```
 Agent 发起 SSE 连接
     │
-    ▼ HTTP Header: Authorization: Bearer cv_<32位hex>
+    ▼ HTTP Header: Authorization: Bearer kr_<32位hex>
     │
     ▼ [MCP Server] 计算 SHA-256(token)，查询 mcp_tokens 表
     │
@@ -390,7 +417,7 @@ Agent 发起 SSE 连接
             ▼ 更新 last_used_at
 ```
 
-**Token 格式**：`cv_` + 32 位随机十六进制（共 35 字符），数据库中只存 SHA-256 哈希，明文仅在创建 / 轮换时展示一次。
+**Token 格式**：`kr_` + 32 位随机十六进制（共 35 字符），数据库中只存 SHA-256 哈希，明文仅在创建 / 轮换时展示一次。
 
 MCP 全局只保留**一个活跃 Token**，且**默认即存在**（无则自动创建），仅提供「轮换」
 （作废旧 Token 并签发新 Token，明文仅展示一次）。
@@ -508,7 +535,7 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
 
 ### 2.9 日志模块（logger.py）
 
-**职责**：统一日志配置，写入 `<app_dir>/data/logs/credential_vault.log`，并可按用户选择调整级别。
+**职责**：统一日志配置，写入 `<app_dir>/data/logs/keyrealm.log`，并可按用户选择调整级别。
 
 **实现**：`logging` + `RotatingFileHandler`（单文件约 1 MB × 5 份备份），多行堆栈按时间戳归组。
 

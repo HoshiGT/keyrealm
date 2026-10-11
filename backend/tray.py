@@ -99,7 +99,7 @@ def _update_icon():
         port = status.get("mcp_port", 8765)
         tokens = status.get("active_tokens", 0)
         locked = "已锁定" if status.get("is_locked") else "已解锁"
-        _tray_icon.title = f"Credential Vault | MCP: {mcp} :{port} | Token: {tokens} | {locked}"
+        _tray_icon.title = f"Keyrealm | MCP: {mcp} :{port} | Token: {tokens} | {locked}"
 
 
 def _on_show(icon, item):
@@ -148,9 +148,9 @@ def start_tray(
         return
 
     _tray_icon = pystray.Icon(
-        name="CredentialVault",
+        name="Keyrealm",
         icon=_make_icon_image(_get_icon_color()),
-        title="Credential Vault",
+        title="Keyrealm",
         menu=_build_menu(),
     )
 

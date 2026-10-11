@@ -2,7 +2,7 @@
   "name": "AWS",
   "version": "1.0.0",
   "credential_type": "cloud_aws",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 AWS Access Key 有效性（STS GetCallerIdentity）",
   "icon": "logo.svg",
   "fields": [

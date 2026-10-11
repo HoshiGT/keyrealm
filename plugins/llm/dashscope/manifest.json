@@ -2,7 +2,7 @@
   "name": "阿里云百炼 DashScope",
   "version": "1.0.0",
   "credential_type": "llm_dashscope",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 阿里云百炼 DashScope API Key 有效性",
   "icon": "logo.png",
   "fields": [

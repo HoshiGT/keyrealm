@@ -2,7 +2,7 @@
   "name": "百度文心",
   "version": "1.0.0",
   "credential_type": "llm_wenxin",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 百度文心 API Key 有效性（凭证格式 API_KEY|SECRET_KEY）",
   "icon": "logo.png",
   "fields": [

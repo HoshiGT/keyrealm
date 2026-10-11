@@ -2,7 +2,7 @@
   "name": "短信服务商",
   "version": "1.0.0",
   "credential_type": "sms_gateway",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "短信网关/接码服务商凭据；字段名按各厂商叫法通用化，有只读接口的联网校验，没有的如实报「未验证」",
   "icon": "📲",
   "batch_verify": false,

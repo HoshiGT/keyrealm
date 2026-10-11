@@ -2,7 +2,7 @@
   "name": "QQ 频道机器人",
   "version": "1.0.0",
   "credential_type": "im_qq_bot",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 QQ 频道机器人 AppID / ClientSecret 有效性",
   "icon": "logo.png",
   "fields": [

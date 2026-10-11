@@ -271,7 +271,7 @@ CREATE TABLE mcp_tokens (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     name          TEXT NOT NULL,             -- Token 备注名，如 "Claude Desktop"
     token_hash    TEXT NOT NULL UNIQUE,      -- SHA-256(token)，不存明文
-    token_prefix  TEXT NOT NULL,             -- Token 前 8 位，用于列表展示（如 "cv_a3f2"）
+    token_prefix  TEXT NOT NULL,             -- Token 前 8 位，用于列表展示（如 "kr_a3f2"）
     tools_allowed TEXT DEFAULT '[]',         -- JSON 数组：允许调用的工具名；空数组 = 继承全局权限
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_used_at  TIMESTAMP,
@@ -283,18 +283,18 @@ CREATE TABLE mcp_tokens (
 CREATE INDEX idx_mcp_tokens_hash ON mcp_tokens(token_hash);
 ```
 
-**Token 格式**：`cv_` + 32 位随机十六进制，共 35 字符。
+**Token 格式**：`kr_` + 32 位随机十六进制，共 35 字符。
 
 ```
-cv_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7
+kr_a3f2b1c9d8e7f6a5b4c3d2e1f0a9b8c7
    └────────────── 32 hex ──────────────┘
 ```
 
 **鉴权流程**：
 ```
-Agent 请求 Header: Authorization: Bearer cv_a3f2...
+Agent 请求 Header: Authorization: Bearer kr_a3f2...
     │
-    ▼ SHA-256("cv_a3f2...") → token_hash
+    ▼ SHA-256("kr_a3f2...") → token_hash
     │
     ▼ SELECT * FROM mcp_tokens WHERE token_hash=? AND revoked=0
     │

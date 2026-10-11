@@ -2,7 +2,7 @@
   "name": "火山引擎",
   "version": "1.0.0",
   "credential_type": "cloud_volcengine",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证火山引擎 AK/SK 有效性（ECS DescribeRegions，只读），并提供身份、地域、可用区、云服务器与镜像的只读查询操作",
   "icon": "logo.svg",
   "fields": [

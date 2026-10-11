@@ -2,7 +2,7 @@
   "name": "华为云",
   "version": "1.0.0",
   "credential_type": "cloud_huaweicloud",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证华为云 AK/SK 有效性（OBS ListBuckets，只读），并提供身份、区域、云主机与对象存储的只读查询操作",
   "icon": "logo.svg",
   "fields": [

@@ -1,6 +1,6 @@
 # 插件开发指南
 
-Credential Vault 的插件用于**验证一类凭据的有效性**（如某家 LLM 厂商的 API Key）。
+Keyrealm 的插件用于**验证一类凭据的有效性**（如某家 LLM 厂商的 API Key）。
 每个服务是一个独立插件，放入 `plugins/` 目录即自动加载，删除即卸载。没有安装器、也没有
 「插件商店」——`plugins/` 就是插件的**唯一事实来源**；「插件管理」页只做一件事：
 **禁用 / 启用**插件（状态写 `plugins/.state.json`，见 §1.1）。要彻底卸载某个插件，自己删掉
@@ -173,7 +173,7 @@ plugins/
   "name": "DeepSeek",
   "version": "1.0.0",
   "credential_type": "llm_deepseek",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 DeepSeek API Key 有效性",
   "icon": "🐋",
   "batch_verify": true,
@@ -318,8 +318,8 @@ def proxy():
 > `requirements.txt`（含 extras 展开，所以 `httpx[socks]` → `socksio` 会被查出来）核对环境**，
 > 缺包就打印清单并中止，提示 `pip install -r requirements.txt`（`--allow-missing-deps` 可强行继续，
 > 该 flag 会以 `CV_ALLOW_MISSING_DEPS=1` 透传给 spec）；
-> **`CredentialVault.spec` 自己还会再核对一遍** socksio / PySocks / telethon / python-socks
-> 这四个「静态分析看不到」的依赖，**缺一个即中止构建**（直接 `pyinstaller CredentialVault.spec`
+> **`Keyrealm.spec` 自己还会再核对一遍** socksio / PySocks / telethon / python-socks
+> 这四个「静态分析看不到」的依赖，**缺一个即中止构建**（直接 `pyinstaller Keyrealm.spec`
 > 同样会停；逃生口就是那个环境变量）。
 
 注意：SMTP / IMAP 走的是**裸 TCP**，不吃 HTTP 代理那一套，但可以走 SOCKS / HTTP CONNECT 隧道

@@ -2,7 +2,7 @@
   "name": "GitHub",
   "version": "1.0.0",
   "credential_type": "dev_github",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 GitHub 令牌有效性",
   "icon": "logo.svg",
   "fields": [

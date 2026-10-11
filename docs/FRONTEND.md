@@ -329,8 +329,9 @@ App.vue
 └── 关闭确认弹窗（el-dialog）
 ```
 
-> 侧边栏展开宽度 **176px**、折叠 64px；顶栏 62px。宽度是为容下完整品牌名定的
-> （152px 时 `Credential Vault` 会被截断）。
+> 侧边栏展开宽度 **176px**、折叠 64px；顶栏 62px。176px 是按**改名前的旧品牌名**
+> （`Credential Vault`，17 字符）定的——152px 时那个名字会被截断。现名 `Keyrealm` 只有 8 字符，
+> 富余明显，**收窄与否未定**（侧栏宽度另有几处引用，要改得连着一起来）。
 
 > **侧边栏顺序可自定义**：按住菜单项拖拽到目标位置即可（拖动中显示插入线，被拖项半透明，
 > 展开态悬停菜单项右侧浮现抓手圆点）。顺序存入 `localStorage['vault.layout.navOrder']`
@@ -357,7 +358,7 @@ App.vue
 
 ```
 ┌─────────────────────────────────┐
-│         🔐 Credential Vault     │
+│         🔐 Keyrealm     │
 │                                 │
 │   设置主密码（首次使用）          │
 │   ┌─────────────────────────┐   │
@@ -376,7 +377,7 @@ App.vue
 
 ```
 ┌─────────────────────────────────┐
-│         🔐 Credential Vault     │
+│         🔐 Keyrealm     │
 │                                 │
 │   ┌─────────────────────────┐   │
 │   │  输入主密码              │   │
@@ -767,15 +768,15 @@ store 随后重拉分组 / 插件。**不走「前端 for 循环调单条删除�
 │  监听地址  [ 127.0.0.1 ] : [ 8765 ]  [ 保存并重启 ]          │
 │  默认 127.0.0.1:8765；端口被占用会报错且不自动更换           │
 │                                                             │
-│  访问 Token  cv_a3f2…  明文仅轮换时展示   [ 轮换 Token ]    │
+│  访问 Token  kr_a3f2…  明文仅轮换时展示   [ 轮换 Token ]    │
 │                                                             │
 │  [ 停止服务 ]   [ 复制客户端配置 ]                           │
 │                                                             │
 │  ── 客户端配置示例（点击复制）──                            │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ { "mcpServers": { "credential-vault": {             │   │
+│  │ { "mcpServers": { "keyrealm": {             │   │
 │  │     "url": "http://localhost:8765/sse",             │   │
-│  │     "headers": { "Authorization": "Bearer cv_..." } │   │
+│  │     "headers": { "Authorization": "Bearer kr_..." } │   │
 │  │ } } }                                               │   │
 │  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
@@ -822,7 +823,7 @@ store 随后重拉分组 / 插件。**不走「前端 for 循环调单条删除�
 │                                     │
 │  ⚠️ 请立即复制，关闭后无法再次查看  │
 │  ┌─────────────────────────────┐   │
-│  │ cv_a3f2b1c9d8e7f6a5b4c3...  │ 📋 │
+│  │ kr_a3f2b1c9d8e7f6a5b4c3...  │ 📋 │
 │  └─────────────────────────────┘   │
 │                                     │
 │            [ 我已保存，关闭 ]       │
@@ -927,9 +928,9 @@ store 随后重拉分组 / 插件。**不走「前端 for 循环调单条删除�
 DOM 与 JS 堆；再从托盘「打开窗口」时后端 `load_url(<file:// 入口>)` 重新加载前端。
 
 **「开机自启动」**（`backend/autostart.py`）：**只碰系统侧、不落 `settings`**。开关的取值来自
-`get_autostart()` 现读的操作系统自启条目（Windows `HKCU\…\Run` 值名 `CredentialVault`、
-Linux `$XDG_CONFIG_HOME/autostart/credential-vault.desktop`、macOS
-`~/Library/LaunchAgents/com.credentialvault.app.plist`），开启 = 写条目、关闭 = 删条目。
+`get_autostart()` 现读的操作系统自启条目（Windows `HKCU\…\Run` 值名 `Keyrealm`、
+Linux `$XDG_CONFIG_HOME/autostart/keyrealm.desktop`、macOS
+`~/Library/LaunchAgents/com.keyrealm.app.plist`），开启 = 写条目、关闭 = 删条目。
 **库里刻意不存副本**：用户手动删掉系统条目后两边就长期不一致，且没有时机能可靠重同步。
 启动命令由 `launch_argv()` 按**冻结与否**推导（冻结 → 执行 exe 本身；源码 → `<python> main.py`），
 不写死本机路径。开关旁显示系统落点（`target`）；平台不支持或写失败时面板置灰 / 报错（`AutostartError`
@@ -969,7 +970,7 @@ Linux `$XDG_CONFIG_HOME/autostart/credential-vault.desktop`、macOS
 │  │ 日志配置                                            │   │
 │  │ 日志级别 [ INFO ▾ ] [ 应用 ]                        │   │
 │  │ ─────────────────────────────────────────────────── │   │
-│  │ 日志文件：/…/data/logs/credential_vault.log         │   │
+│  │ 日志文件：/…/data/logs/keyrealm.log         │   │
 │  │ 当前显示：128 条（已过滤）                          │   │
 │  └─────────────────────────────────────────────────────┘   │
 │  ┌─────────────────────────────────────────────────────┐   │

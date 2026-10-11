@@ -2,7 +2,7 @@
   "name": "Google API 凭据",
   "version": "1.0.0",
   "credential_type": "google_api_credentials",
-  "author": "Credential Vault",
+  "author": "Keyrealm",
   "description": "验证 Google API Key / Google OAuth 客户端密钥有效性（只读探测）",
   "icon": "logo.svg",
   "fields": [
