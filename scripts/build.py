@@ -43,6 +43,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+# 中文 Windows 控制台默认 cp1252/GBK，打印中文与 ✓/✅ 会 UnicodeEncodeError（CI 的 Windows runner 上真踩到过：
+# 「目标平台 : …」这行直接抛异常、构建整步失败）。与其它脚本（check_schema / migrate_* / 更新脚本）同一套处理：
+# 把 stdout / stderr 钉成 UTF-8（errors="replace" 兜底，宁可显示成问号也别崩）。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001 - 无 stdout（windowed）等场景忽略
+        pass
+
 ROOT = Path(__file__).resolve().parent.parent
 SPEC = ROOT / "Keyrealm.spec"
 REQUIREMENTS = ROOT / "requirements.txt"
@@ -277,6 +286,10 @@ def run_pyinstaller(console: bool, allow_missing: bool = False) -> None:
         )
 
     env = dict(os.environ)
+    # PyInstaller 进程里会 exec Keyrealm.spec（有中文 print）——Windows 上默认 cp1252 会 UnicodeEncodeError，
+    # 故给子进程钉 UTF-8（与 run_capture 同一套；spec 自己也 reconfigure 了一道，双保险）。
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     if console:
         env["CV_CONSOLE"] = "1"
     else:

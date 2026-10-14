@@ -21,6 +21,14 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
+# 中文 Windows 控制台默认 cp1252/GBK，而本 spec 有多处中文 print（"[spec] 应用图标：…" 等）——
+# 不钉 UTF-8 会在 Windows 上抛 UnicodeEncodeError（无论经 scripts/build.py 还是直接 pyinstaller Keyrealm.spec）。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        pass
+
 # spec 文件所在目录 = 项目根
 ROOT = Path(SPECPATH).resolve()
 

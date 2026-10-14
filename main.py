@@ -623,6 +623,12 @@ if __name__ == "__main__":
     # 冻结 exe 与源码运行都用这条路径（后者是 `python main.py --self-update <kind>`）。
     if "--self-update" in sys.argv:
         from backend import updater
+        # Windows 控制台默认非 UTF-8，自更新全程要打中文——先钉成 UTF-8，否则一开打就 UnicodeEncodeError。
+        for _stream in (sys.stdout, sys.stderr):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                pass
         _idx = sys.argv.index("--self-update")
         _kind = sys.argv[_idx + 1] if len(sys.argv) > _idx + 1 else "formal"
         sys.exit(0 if updater.apply_update(_kind).get("ok") else 1)
