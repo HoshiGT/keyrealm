@@ -32,8 +32,7 @@ plugins/
 │   ├── coze/
 │   ├── dify/
 │   ├── fofa/
-│   ├── google_api_credentials/
-│   └── gateway/
+│   └── google_api_credentials/
 ├── dns/                        # 类别目录（域名解析）
 │   ├── category.json
 │   ├── dnspod/
@@ -81,10 +80,11 @@ plugins/
 │   ├── category.json
 │   ├── okx/
 │   └── binance/
-├── mail/                       # 类别目录（邮箱）
+├── mail/                       # 类别目录（邮箱 / 短信）
 │   ├── category.json
 │   ├── mail_common.py          # 类别共享模块：仅本类别特有的辅助（SOCKS 解析、TunneledSMTP/IMAP）
-│   └── smtp/
+│   ├── smtp/                   # 通用 SMTP 邮箱
+│   └── gateway/                # 短信网关 / 接码服务商
 └── my_flat_plugin/             # 也支持根级平铺插件（无类别）
     ├── manifest.json
     └── plugin.py
@@ -1022,13 +1022,8 @@ sensenova（商汤日日新，OpenAI 兼容）、codebuddy（腾讯 CodeBuddy �
 > ——**1.0 之前不考虑向下兼容（含旧版本数据库）**，旧的 `llm_glm_anthropic` /
 > `llm_anthropic_compatible` 类型不再有对应插件，那类凭据直接在界面上删掉、按新插件重建即可。
 
-**api/ 类别（9 个）**：firecrawl（网页抓取）、tavily（搜索）、metaso（秘塔 AI 搜索）、fofa（FOFA 网络空间测绘）、
-coze（字节扣子）、dify（Dify 应用 / 工作流）、google_api_credentials（Google API，一对 key/secret）、baidu_face（百度人脸，人脸识别）、
-gateway（短信网关 / 接码服务商，
-字段按各厂商叫法通用化——`app_key` / `app_secret` 装不下的一律塞 `extra_params`；有可用只读校验接口的
-厂商：Engagelab、Infobip、CM、laaffic、nxcloud、buka、Ultramsg——Infobip 印度节点 200 有效、香港节点在该
-入口 403「无权限」故判 `error`；Ultramsg 域名对任意实例 / 口令都返回同一段文案，只能报「未验证」；其余厂商
-没有只读接口，一律如实报「未验证」）。
+**api/ 类别（8 个）**：firecrawl（网页抓取）、tavily（搜索）、metaso（秘塔 AI 搜索）、fofa（FOFA 网络空间测绘）、
+coze（字节扣子）、dify（Dify 应用 / 工作流）、google_api_credentials（Google API，一对 key/secret）、baidu_face（百度人脸，人脸识别）。
 
 **dns/ 类别（4 个）**：dnspod、duckdns、godaddy、cloudflare（从 cloud/ 移入：它就是域名解析类）。
 
@@ -1086,14 +1081,20 @@ tencent（腾讯位置服务 WebService Key，选填 SK 密钥 —— Key 开了
 
 **exchange/ 类别（2 个）**：okx、binance。
 
-**mail/ 类别（1 个）**：smtp（通用 SMTP，覆盖 Gmail / QQ / 163 / 126 等）。TLS **默认最低 1.2**——
+**mail/ 类别（2 个）**：smtp（通用 SMTP，覆盖 Gmail / QQ / 163 / 126 等）、
+gateway（短信网关 / 接码服务商——字段按各厂商叫法通用化，`app_key` / `app_secret` 装不下的一律塞
+`extra_params`；有可用只读校验接口的厂商：Engagelab、Infobip、CM、laaffic、nxcloud、buka、Ultramsg——
+Infobip 印度节点 200 有效、香港节点在该入口 403「无权限」故判 `error`；Ultramsg 对任意实例 / 口令都返回
+同一段文案，只能报「未验证」；其余厂商没有只读接口，一律如实报「未验证」）。
+
+smtp 的 TLS **默认最低 1.2**——
 服务器只开 **TLS 1.1**（老校内邮件常见）时会报「SSL/TLS 握手失败」（服务端回 `protocol version` 告警），
 勾选凭据里的「**允许旧版 TLS**」（`allow_legacy_tls`，默认关）即可；降级会让授权码走在更弱的信道上，
 所以默认不开、须用户确认服务器可信后自行开启。SMTP 与 IMAP 两条路径共用这个开关。
 
 > 说明：标记 `batch_verify: false`（只能手动单个验证）的共**五个**：
 > `dns/duckdns` 的校验本身是写操作（先写入 `1.1.1.1` 确认生效再还原原值）；
-> `im/telegram_apihash` 与 `api/gateway`（`credential_type` 仍为历史的 `sms_gateway`）则是判定常为
+> `im/telegram_apihash` 与 `mail/gateway`（`credential_type` 仍为历史的 `sms_gateway`）则是判定常为
 > 「未验证」（前者要登录态、后者多数厂商没有只读接口），批量跑会把人工判定的状态刷成「未验证」；
 > `im/wechat_mp` 与 `im/wechat_miniprogram` 是因为 **access_token 是账号级的**——
 > 批量并发取 token 会互相作废、还可能打断同一账号下其它正在运行的系统
@@ -1229,7 +1230,7 @@ tencent（腾讯位置服务 WebService Key，选填 SK 密钥 —— Key 开了
   > 在 163 与 126 邮箱上验证过：不发 `ID` 必现该错，发出后正常打开 INBOX。
 
 > 以上按**声明了操作（`actions()`）**的插件列举。以下 9 个**未定义 `actions()`**、
-> 目前只做凭据验证：`api/fofa`、`api/gateway`、`api/google_api_credentials`（原 `api/app_secret`）、
+> 目前只做凭据验证：`api/fofa`、`mail/gateway`、`api/google_api_credentials`（原 `api/app_secret`）、
 > `cloud/gcp`、`dev/npm`、`im/dingtalk`、`im/qq_bot`、`im/telegram_apihash`、`im/wecom`
 > （dingtalk / wecom 拆分自原 `im/webhook`）。
 

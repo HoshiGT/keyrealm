@@ -154,7 +154,7 @@ plugins/
 │   │   └── plugin.py
 │   ├── deepseek/
 │   └── …                     # 共 18 个 LLM 子插件
-├── api/                      # API 服务类别：firecrawl / tavily / metaso / fofa / coze / dify / google_api_credentials / gateway / baidu_face（共 9 个）
+├── api/                      # API 服务类别：firecrawl / tavily / metaso / fofa / coze / dify / google_api_credentials / baidu_face（共 8 个）
 ├── dns/                      # 域名解析：dnspod / duckdns / godaddy / cloudflare
 ├── dev/                      # 开发者平台：github / huggingface / wandb / npm
 ├── im/                       # 即时通讯：feishu / dingtalk / wecom / telegram / telegram_apihash / discord / qq_bot / wechat_ilink / wechat_mp / wechat_miniprogram（dingtalk、wecom 为「应用 / Webhook 双形态」）
@@ -162,10 +162,10 @@ plugins/
 ├── map/                      # 地图：amap（高德）/ baidu（百度）/ tencent（腾讯位置服务）
 ├── exchange/                 # 交易所：okx / binance
 ├── storage/                  # 对象存储：s3（任意 S3 兼容 / MinIO）/ anon（匿名桶探测）（另含 storage_s3v4.py、storage_common.py 类别共享模块）
-└── mail/                     # 邮箱：smtp（通用 SMTP，覆盖 Gmail/QQ/163/126）
+└── mail/                     # 邮箱 / 短信：smtp（通用 SMTP）/ gateway（短信网关 / 接码服务商）
 ```
 
-> `api/gateway` 是短信网关 / 接码服务商（一个插件内按 manifest 的 `vendor` 分派校验），它调用的就是普通
+> `mail/gateway` 是短信网关 / 接码服务商（一个插件内按 manifest 的 `vendor` 分派校验），它调用的就是普通
 > HTTPS API，与 api/ 其余服务同形，故并入 api/ 而不单开类别——新建类别**不再**需要连带克隆一份
 > `*_common.py`（通用工具已上收 `backend/plugin_sdk.py`），但单开一类的归类代价仍大于收益。
 
@@ -197,7 +197,7 @@ plugins/
   `<img>` 加 `.icon-lift`，`base.css` 的白板规则据此限定——避免给彩色标套上白框（见 docs/FRONTEND.md）。
   **服务专属逻辑在各子插件内自带，新增插件无需改动共享模块。**
 - **同步流程**：启动时 `sync_plugins()` 扫描两层结构 → upsert plugins 表（含 category / category_name / batch_verify）→ 清理已消失插件的记录与模块缓存。
-- **批量验证开关**：manifest 的 `batch_verify`（默认 true）落库到 plugins.batch_verify；调度器与前端批量时跳过为 false 的类型——**有写副作用或无法自动化**的（如 duckdns / wechat_ilink），以及**判定常为「未验证」、批量会刷掉人工结论**的（telegram_apihash / api/gateway）。前端在批量勾选弹窗中禁用其勾选，但单条手动验证仍可用。
+- **批量验证开关**：manifest 的 `batch_verify`（默认 true）落库到 plugins.batch_verify；调度器与前端批量时跳过为 false 的类型——**有写副作用或无法自动化**的（如 duckdns / wechat_ilink），以及**判定常为「未验证」、批量会刷掉人工结论**的（telegram_apihash / mail/gateway）。前端在批量勾选弹窗中禁用其勾选，但单条手动验证仍可用。
 
 **插件模块约定**：必须暴露 `verify(data)`；可选 `validate(data)`、`get_display_summary(data)`。
 `verify` 返回值鸭子类型兼容 VerifyResult / dataclass / dict。
