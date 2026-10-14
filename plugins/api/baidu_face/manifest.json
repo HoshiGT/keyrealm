@@ -1,10 +1,10 @@
 {
   "name": "百度人脸",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "credential_type": "api_baidu_face",
   "author": "Keyrealm",
   "description": "验证 百度人脸（人脸识别）API Key / Secret Key 有效性，并可浏览人脸库分组",
-  "icon": "🙂",
+  "icon": "logo.png",
   "fields": [
     {
       "key": "base_url",
