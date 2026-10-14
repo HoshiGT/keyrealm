@@ -911,7 +911,7 @@ onMounted(() => refreshAll(false))
 
       <el-alert
         v-if="updateResult"
-        class="mb-12"
+        class="update-alert"
         :type="updateResult.ok === false ? 'warning'
           : (updateResult.has_update ? 'info' : 'success')"
         :title="updateResult.ok === false
@@ -942,7 +942,7 @@ onMounted(() => refreshAll(false))
 
       <el-alert
         v-if="updating"
-        class="mb-12"
+        class="update-alert"
         type="warning"
         :title="!updatePrepareTask || updatePrepareTask.status === 'running'
           ? '正在准备更新（准备好后程序会自动关闭并重启）'
@@ -970,7 +970,7 @@ onMounted(() => refreshAll(false))
 
       <el-alert
         v-if="updateFailed"
-        class="mb-12"
+        class="update-alert"
         type="error"
         :title="`更新失败：${updateFailed}`"
         show-icon
@@ -979,7 +979,7 @@ onMounted(() => refreshAll(false))
 
       <el-alert
         v-if="dbMigration && dbMigration.needs_migration"
-        class="mb-12"
+        class="update-alert"
         type="info"
         :title="`数据库结构需要更新：${dbMigration.disk} → ${dbMigration.app}`"
         :closable="false"
@@ -990,6 +990,7 @@ onMounted(() => refreshAll(false))
 
       <el-alert
         v-if="updateLastStatus && updateLastStatus.finished_at"
+        class="update-alert"
         :type="updateLastStatus.ok ? 'success' : 'warning'"
         :title="`上次更新：${updateLastStatus.message || ''}`
           + (updateLastStatus.from ? `（${updateLastStatus.from} → ${updateLastStatus.to || '?'}）` : '')"
@@ -1250,6 +1251,14 @@ onMounted(() => refreshAll(false))
 }
 
 .mb-12 {
+  margin-bottom: 12px;
+}
+
+/* 更新卡片里的提示条：它上面那一行的末尾是「出网：…」，没有上边距会贴在一起。
+   （行与行之间本来由 el-divider 隔开 ≈24px；这里给 20px 与之呼应。
+   相邻提示条的外边距会**折叠**，所以叠放时仍是 20px，不会双倍。） */
+.update-alert {
+  margin-top: 20px;
   margin-bottom: 12px;
 }
 
