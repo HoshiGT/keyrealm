@@ -32,6 +32,7 @@
 from __future__ import annotations
 
 import ast
+import errno
 import hashlib
 import json
 import os
@@ -1456,6 +1457,41 @@ def _status_stage(root: Optional[Any], kind: str, stages: list, name: str,
     })
 
 
+def _exe_bak_name() -> str:
+    """更新时旧 exe 让位用的临时名。**与 ``scripts/build.py`` 的构建回滚副本同名**
+    （都是「被替换掉的旧 exe」），同目录只留一份、互为覆盖，不额外清理。"""
+    return _exe_name() + ".old"
+
+
+def _replace_exe(src: Path, root: Path) -> None:
+    """把 ``src`` 装成 ``root/<exe>``。**先把旧文件改名腾位**，再放新的。
+
+    Windows 上「正在运行的 exe」既不能删除、也不能原地覆盖（覆盖会 `WinError 32`），
+    但**可以改名**（映像文件是以带 `FILE_SHARE_DELETE` 的句柄打开的）。而交棒进程自己就跑在
+    这个 exe 上（``_self_update_argv`` 用 ``sys.executable``），所以 `copy` 覆盖必然失败——
+    这正是「构建成功却替换不了、重启还是旧版本」的根因。改名后旧文件仍被交棒进程映射，
+    但路径已让出，新 exe 直接放进去即可；旧的那份就留在 ``<exe>.old`` 当回滚副本。
+    """
+    dst = root / _exe_name()
+    bak = root / _exe_bak_name()
+    if bak.exists():
+        try:
+            bak.unlink()                 # 上一次更新/构建留下的，覆盖它（同目录只留一份）
+        except OSError:
+            pass
+    if dst.exists():
+        os.replace(dst, bak)             # 改名：不会触发 WinError 32
+    shutil.copy2(src, dst)
+
+
+def _busy_hint(exc: OSError) -> str:
+    """「文件被占用」的可操作提示：Windows `WinError 32` / POSIX `ETXTBSY`、`EBUSY`。
+    交棒进程自身占用已被 `_replace_exe` 的改名腾位绕开，走到这里多半是别处的残留进程。"""
+    if getattr(exc, "winerror", None) == 32 or exc.errno in (errno.ETXTBSY, errno.EBUSY):
+        return "（文件被占用：可能另有 Keyrealm 进程没退干净，或被杀软/同步盘锁定；关掉后重试）"
+    return ""
+
+
 def _install_staged(staging: Any, root: Path) -> dict:
     """把 staging 里构建好的产物安装进程序目录（换可执行文件 + 覆盖 ``plugins/``）。"""
     staging, root = Path(staging), Path(root)
@@ -1464,9 +1500,9 @@ def _install_staged(staging: Any, root: Path) -> dict:
     exe_src = staging / _exe_name()
     if exe_src.is_file():
         try:
-            shutil.copy2(exe_src, root / _exe_name())
+            _replace_exe(exe_src, root)
         except OSError as exc:
-            return {"ok": False, "message": f"替换可执行文件失败：{exc}"}
+            return {"ok": False, "message": f"替换可执行文件失败：{exc}{_busy_hint(exc)}"}
     plugins_src = staging / "plugins"
     if plugins_src.is_dir():
         try:
