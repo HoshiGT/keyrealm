@@ -23,9 +23,11 @@ ensure_python() {
     "$PY" -m venv "$ROOT/.venv" || { echo "创建 venv 失败" >&2; return 2; }
     PY="$ROOT/.venv/bin/python"
   fi
-  echo "安装 / 校验依赖 …"
-  "$PY" -m pip install -q -r "$ROOT/requirements.txt" || { echo "安装 requirements 失败" >&2; return 2; }
+  echo "安装 / 校验依赖 …（失败不中止：稍后由更新器按代理重试）"
+  "$PY" -m pip install -q -r "$ROOT/requirements.txt" \
+    || echo "提示：requirements 未装成功，稍后由更新器按代理重试" >&2
   # PyInstaller 不在 requirements.txt 里，构建单独需要
-  "$PY" -m pip install -q pyinstaller || { echo "安装 pyinstaller 失败" >&2; return 2; }
+  "$PY" -m pip install -q pyinstaller \
+    || echo "提示：pyinstaller 未装成功，稍后由更新器按代理重试" >&2
   return 0
 }

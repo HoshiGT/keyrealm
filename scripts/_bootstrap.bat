@@ -22,9 +22,11 @@ if not exist "%PY%" (
   %BOOT% -m venv "%ROOT%\.venv" || (echo 创建 venv 失败 1>&2 & exit /b 2)
 )
 
-echo 安装 / 校验依赖 ...
-"%PY%" -m pip install -q -r "%ROOT%\requirements.txt" || (echo 安装 requirements 失败 1>&2 & exit /b 2)
-"%PY%" -m pip install -q pyinstaller || (echo 安装 pyinstaller 失败 1>&2 & exit /b 2)
+echo 安装 / 校验依赖 ...（失败不中止：稍后由更新器按代理重试）
+"%PY%" -m pip install -q -r "%ROOT%\requirements.txt"
+if errorlevel 1 echo 提示：requirements 未装成功，稍后由更新器按代理重试 1>&2
+"%PY%" -m pip install -q pyinstaller
+if errorlevel 1 echo 提示：pyinstaller 未装成功，稍后由更新器按代理重试 1>&2
 
 rem 让中文与符号在控制台正常显示
 chcp 65001 >nul 2>&1

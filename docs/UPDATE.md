@@ -23,6 +23,14 @@ Keyrealm 可以在程序内检查并一键更新：应用内从 GitHub 查最新
   源码运行且工作区有未提交改动时，本地 commit 会带 `-dirty`；比较时**忽略** `-dirty` 后缀，
   因此「只改了自己本地文件、没拉新提交」不会误报。
 
+> **代理**：检查与更新（`git` / `pip` / `npm`）会**复用「设置 → 网络与代理」里的全局默认代理**
+> —— 本机访问 GitHub / PyPI 需要代理时，**配一次默认代理即可**。也可用环境变量
+> `KEYREALM_UPDATE_PROXY` 覆盖（设为 `direct` 强制直连）；shell 里已显式设置的
+> `https_proxy` / `all_proxy` 同样优先。实际走哪个出口，**检查更新后会在卡片里显示**。
+> 对 `git` 而言代理是经 **`git -c http.proxy=…`** 注入的，**会覆盖 git 全局配置里的
+> `http.proxy`**（否则用户已有的 git 代理配置会把它盖掉，环境变量对它无效）；`pip` / `npm`
+> 则走 `http_proxy` / `all_proxy` 环境变量。
+
 ---
 
 ## 2. 在应用里更新
@@ -161,7 +169,7 @@ scripts/restart.sh --wait                    # 先等应用完全退出再重启
 | 现象 | 原因与处理 |
 |---|---|
 | 检查更新报「未安装 git」 | `check_update` 依赖 `git`（用浅克隆读远端版本）。装 git 后重试。 |
-| 检查更新报「无法访问远端仓库」 | 网络不可达。检查网络/代理；也可用 `KEYREALM_UPDATE_REMOTE` 指向可达的镜像。 |
+| 检查更新/更新报「无法访问远端仓库」或「Could not resolve host」 | 本机访问 GitHub 需要代理。到「设置 → 网络与代理」配好**默认代理**（更新会复用它）后重试；也可用 `KEYREALM_UPDATE_PROXY` 临时覆盖，或 `KEYREALM_UPDATE_REMOTE` 指向可达镜像。 |
 | 提示有更新但「立即更新」不可用 | 当前不是源码仓库（无 `.git`）。请从 Releases 获取分发包，或在源码目录里运行。 |
 | 更新卡在「工作区有未提交改动」 | 有本地改动。先 commit/stash，或加 `--force`（会先 `git stash` 再合并）。 |
 | 构建失败 | 多为缺依赖 / 缺 npm 或 `frontend/node_modules` / `build.py` 的建表自检未过。看终端输出；`.sh`/`.bat` 会自动补 Python 依赖（但不含 Node）。 |

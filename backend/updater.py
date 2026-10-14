@@ -65,6 +65,55 @@ def _remote_url() -> str:
     return os.environ.get("KEYREALM_UPDATE_REMOTE", "").strip() or REPO_URL
 
 
+# 明确表示「强制直连、不要走全局默认代理」的取值
+_NO_PROXY = ("direct", "none", "off", "0", "false")
+
+# 会被代理覆盖的标准环境变量（小写 + 大写都设，覆盖 git / pip / npm 各家读法）
+_PROXY_ENV_KEYS = ("http_proxy", "https_proxy", "all_proxy",
+                   "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+
+
+def update_proxy() -> Optional[str]:
+    """更新（git / pip / 构建）走哪个代理。优先级：
+
+    1. 环境变量 ``KEYREALM_UPDATE_PROXY``（可设为 ``direct``/``none`` 强制直连）；
+    2. shell 里已显式设置的标准代理变量（``https_proxy`` / ``all_proxy`` …）——尊重用户环境；
+    3. **复用「代理列表」里的全局默认代理**（「设置 → 网络与代理」）。
+
+    都没有则返回 ``None``（直连）。这样校验走的代理与更新走的代理是同一套来源，用户配一次即可。
+    """
+    raw = os.environ.get("KEYREALM_UPDATE_PROXY", "").strip()
+    if raw:
+        return None if raw.lower() in _NO_PROXY else raw
+    for key in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            return value
+    try:
+        from . import proxy_store
+        return proxy_store.global_url() or None
+    except Exception:  # noqa: BLE001 - 取不到就当直连
+        return None
+
+
+def proxy_env() -> dict:
+    """把本次更新该用的代理铺成一组环境变量，交给所有子进程（git / pip / npm）。
+
+    没有代理时返回空 dict（子进程沿用自身环境）。``no_proxy`` 保证 localhost 不走代理。
+    """
+    url = update_proxy()
+    if not url:
+        return {}
+    env = {key: url for key in _PROXY_ENV_KEYS}
+    env["no_proxy"] = env["NO_PROXY"] = "localhost,127.0.0.1,::1"
+    return env
+
+
+def _child_env(extra: Optional[dict] = None) -> dict:
+    """子进程环境 = 当前环境 + 更新代理（+ 额外项）。"""
+    return {**os.environ, **proxy_env(), **(extra or {})}
+
+
 def _short(text: Any, limit: int = 200) -> str:
     s = " ".join(str(text or "").split())
     return s[:limit]
@@ -171,12 +220,22 @@ def git_available() -> bool:
 
 
 def _git(args: list[str], cwd: Optional[Path] = None, timeout: float = 60) -> subprocess.CompletedProcess:
+    # 代理**必须经 ``-c http.proxy`` 传**：git 的 ``http.proxy`` 配置优先级**高于**
+    # ``http_proxy``/``all_proxy`` 环境变量——用户全局 git 配置里若已有 ``http.proxy``，
+    # 光设环境变量会被它盖掉，更新代理就形同虚设（本机就踩到过：全局配了 127.0.0.1:10809）。
+    # 故这里统一注入命令级 ``-c http.proxy=<本次解析出的代理或空>``，让 git 严格按我们的解析走
+    # （空值 = 强制直连，同样压过全局配置）。环境变量仍保留，供 pip / npm 等其它子进程使用。
+    proxy = update_proxy()
     return subprocess.run(
-        ["git", *args],
+        ["git", "-c", f"http.proxy={proxy or ''}", *args],
         cwd=str(cwd) if cwd else None,
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=timeout,
+        env=_child_env(),
     )
+
+
+_NET_HINT = "；若本机访问 GitHub 需要代理，请在「设置 → 网络与代理」配置默认代理（更新会复用该代理）后重试"
 
 
 def remote_info(*, branch: str = DEFAULT_BRANCH, root: Optional[Any] = None,
@@ -193,10 +252,10 @@ def remote_info(*, branch: str = DEFAULT_BRANCH, root: Optional[Any] = None,
     try:
         ls = _git(["ls-remote", url, f"refs/heads/{branch}"], timeout=timeout)
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "network", "message": "访问远端仓库超时（网络不可用？）"}
+        return {"ok": False, "error": "network", "message": "访问远端仓库超时（网络不可用？）" + _NET_HINT}
     if ls.returncode != 0:
         return {"ok": False, "error": "network",
-                "message": f"无法访问远端仓库：{_short(ls.stderr) or '未知错误'}"}
+                "message": f"无法访问远端仓库：{_short(ls.stderr) or '未知错误'}" + _NET_HINT}
     line = (ls.stdout or "").strip().splitlines()
     commit = line[0].split()[0][:7] if line and line[0].split() else ""
     if not commit:
@@ -208,14 +267,14 @@ def remote_info(*, branch: str = DEFAULT_BRANCH, root: Optional[Any] = None,
                    "--branch", branch, url, str(tmp)], timeout=max(timeout, 90))
         if cl.returncode != 0:
             return {"ok": False, "error": "clone",
-                    "message": f"浅克隆失败：{_short(cl.stderr) or '未知错误'}"}
+                    "message": f"浅克隆失败：{_short(cl.stderr) or '未知错误'}" + _NET_HINT}
         vfile = tmp / "backend" / "version.py"
         text = vfile.read_text(encoding="utf-8", errors="replace") if vfile.is_file() else ""
         app, schema = _read_version_module(text)
         return {"ok": True, "version": app or "", "schema_version": schema or "",
                 "commit": commit, "via": "git"}
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "network", "message": "拉取远端源码超时"}
+        return {"ok": False, "error": "network", "message": "拉取远端源码超时" + _NET_HINT}
     except Exception as exc:  # noqa: BLE001 - 检查边界，绝不抛
         return {"ok": False, "error": "error", "message": f"检查更新失败：{type(exc).__name__}"}
     finally:
@@ -248,7 +307,8 @@ def check_update(kind: str = "formal", *, branch: str = DEFAULT_BRANCH,
     remote = remote_info(branch=branch, root=root, timeout=timeout)
     if not remote.get("ok"):
         return {"ok": False, "kind": kind, "current": local,
-                "error": remote.get("error"), "message": remote.get("message")}
+                "error": remote.get("error"), "message": remote.get("message"),
+                "proxy": update_proxy() or ""}
     cmp = compare(kind, local, remote)
     dbst = db_status(root=root)
     return {
@@ -260,6 +320,7 @@ def check_update(kind: str = "formal", *, branch: str = DEFAULT_BRANCH,
         "db_change": bool(dbst.get("needs_migration")),
         "db_chain": dbst.get("chain", []),
         "source_ok": local["source_ok"],
+        "proxy": update_proxy() or "",
     }
 
 
@@ -550,12 +611,37 @@ def run_build(*, root: Optional[Any] = None, frontend: bool = True,
     cmd += list(extra_args or [])
     _log.info("开始构建：%s", " ".join(cmd))
     try:
-        rc = subprocess.run(cmd, cwd=str(root)).returncode
+        # 构建里的 npm install / npm run build 也要走更新代理
+        rc = subprocess.run(cmd, cwd=str(root), env=_child_env()).returncode
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "message": f"构建无法启动：{exc}"}
     if rc != 0:
         return {"ok": False, "returncode": rc, "message": f"构建失败（退出码 {rc}）"}
     return {"ok": True, "returncode": 0, "message": "构建完成"}
+
+
+def ensure_deps(*, root: Optional[Any] = None, extra: tuple = ("pyinstaller",)) -> dict:
+    """确保当前解释器里装好 ``requirements.txt`` 与构建额外依赖（``pyinstaller``）。
+
+    **走更新代理**（见 ``proxy_env``）——否则本机访问 PyPI 需要代理时，引导脚本里的 pip 会失败。
+    已满足依赖时 pip 只会快速校验、几乎无耗时。
+    """
+    root = repo_root(root)
+    env = _child_env()
+    commands: list[list[str]] = []
+    req = root / "requirements.txt"
+    if req.is_file():
+        commands.append([sys.executable, "-m", "pip", "install", "-q", "-r", str(req)])
+    commands.append([sys.executable, "-m", "pip", "install", "-q", *extra])
+    for cmd in commands:
+        try:
+            r = subprocess.run(cmd, cwd=str(root), env=env,
+                               capture_output=True, text=True, encoding="utf-8", errors="replace")
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "message": f"依赖安装失败：{exc}"}
+        if r.returncode != 0:
+            return {"ok": False, "message": f"依赖安装失败：{_short(r.stderr or r.stdout)}"}
+    return {"ok": True, "message": "依赖已就绪"}
 
 
 # ── 进程：脱离 / 等待退出 / 重启 ───────────────────────────
@@ -674,7 +760,7 @@ def apply_update(kind: str = "formal", *, root: Optional[Any] = None, frontend: 
     req = read_request(root)
     kind = (req.get("kind") or kind) if req else kind
     kind = kind if kind in CHANNELS else "formal"
-    stages = ["backup", "fetch", "build", "migrate", "restart"]
+    stages = ["backup", "fetch", "deps", "build", "migrate", "restart"]
 
     if dry_run:
         log("演练：将依次执行 " + " → ".join(stages))
@@ -715,6 +801,13 @@ def apply_update(kind: str = "formal", *, root: Optional[Any] = None, frontend: 
             result = {"ok": False, "message": fr.get("message")}
             return _finish(root, kind, frm, result, stages)
         say(fr.get("message", "源码已更新"))
+
+        stage("deps", "检查 / 安装构建依赖（走更新代理）…")
+        dp = ensure_deps(root=root)
+        if not dp.get("ok"):
+            result = {"ok": False, "message": dp.get("message")}
+            return _finish(root, kind, frm, result, stages)
+        say(dp.get("message", "依赖已就绪"))
 
         stage("build", "重新编译（scripts/build.py --frontend）…")
         bd = run_build(root=root, frontend=frontend)
@@ -778,9 +871,10 @@ def _spawn_updater(root: Path, terminal: str) -> int:
     if os.name == "nt":
         # cmd /c start "" cmd /k <script>：新控制台窗口（满足「打开 CMD 窗口」）
         argv = ["cmd", "/c", "start", "Keyrealm 更新", "cmd", "/k", str(script)]
-        return spawn_detached(argv, cwd=root)
+        return spawn_detached(argv, cwd=root, env=proxy_env())
     log = root / "data" / "logs" / f"update-{time.strftime('%Y%m%d-%H%M%S')}.log"
-    return spawn_detached(["bash", str(script)], cwd=root, log=log)
+    # 把更新代理注入到脚本进程：引导脚本里的 pip、以及后续 git/pip/npm 全都据此出网
+    return spawn_detached(["bash", str(script)], cwd=root, log=log, env=proxy_env())
 
 
 def start_update(kind: str = "formal", *, root: Optional[Any] = None,

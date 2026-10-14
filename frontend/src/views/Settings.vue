@@ -600,7 +600,11 @@ onMounted(() => refreshAll(false))
             </template>
             <template v-else>
               检查 GitHub 上 main 分支是否有新版本（只读，不改动本机源码）。
+              检查与更新复用「设置 → 网络与代理」里的默认代理出网。
             </template>
+          </div>
+          <div v-if="updateResult && updateResult.ok" class="setting-path">
+            出网：{{ updateResult.proxy ? updateResult.proxy : '直连（未配置代理）' }}
           </div>
         </div>
         <el-button :icon="Refresh" :loading="updateChecking" @click="checkUpdate">检查更新</el-button>
