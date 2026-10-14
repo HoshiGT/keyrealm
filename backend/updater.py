@@ -534,17 +534,31 @@ def _zip_schema(zip_path: Path) -> str:
 
 
 def extract_release_zip(zip_path: Path, app_dir: Path) -> dict:
-    """把发布包解压覆盖到程序目录：**剥离顶层目录**、**跳过 ``data/``**（绝不覆盖用户数据）。"""
+    """把发布包解压覆盖到程序目录：**剥离顶层目录**、**跳过 ``data/``**（绝不覆盖用户数据）。
+
+    交棒进程自己就跑在 ``<exe>`` 上，而 Windows 下**运行中的 exe 不能原地覆盖**
+    （`WinError 32`，Python 里是 `PermissionError` / `Errno 13`）、**但可以改名**。所以包里
+    带 exe 时先把它挪到 ``<exe>.old`` 让出路径再解压；中途失败就挪回来——宁可停在旧版本，
+    也不能把程序目录弄成「没有 exe」。
+    """
     app_dir = Path(app_dir)
+    exe_name = _exe_name()
+    aside: Optional[Path] = None
     try:
         with zipfile.ZipFile(zip_path) as zf:
             infos = zf.infolist()
             tops = {i.filename.split("/", 1)[0] for i in infos if "/" in i.filename}
             strip = (next(iter(tops)) + "/") if len(tops) == 1 else ""
-            for info in infos:
+
+            def _rel(info) -> str:
                 name = info.filename
-                if strip and name.startswith(strip):
-                    name = name[len(strip):]
+                return name[len(strip):] if strip and name.startswith(strip) else name
+
+            names = [_rel(i) for i in infos]
+            if exe_name in names:                   # 包里有 exe 才让位（没有就别动能跑的程序）
+                aside = _move_exe_aside(app_dir)
+
+            for info, name in zip(infos, names):
                 if not name or name.endswith("/"):
                     continue
                 if name.split("/", 1)[0] == "data":     # 用户数据目录原样保留
@@ -560,6 +574,11 @@ def extract_release_zip(zip_path: Path, app_dir: Path) -> dict:
                     except OSError:
                         pass
     except Exception as exc:  # noqa: BLE001
+        if aside is not None:                       # 让了位却没装成 → 把旧的挪回来
+            try:
+                os.replace(aside, app_dir / exe_name)
+            except OSError:
+                pass
         return {"ok": False, "message": f"解压失败：{exc}"}
     return {"ok": True}
 
@@ -1524,25 +1543,34 @@ def _exe_bak_name() -> str:
     return _exe_name() + ".old"
 
 
-def _replace_exe(src: Path, root: Path) -> None:
-    """把 ``src`` 装成 ``root/<exe>``。**先把旧文件改名腾位**，再放新的。
+def _move_exe_aside(root: Path) -> Optional[Path]:
+    """把 ``root/<exe>`` 改名成 ``<exe>.old`` 让出路径；返回备份路径，没让成返回 ``None``。
 
-    Windows 上「正在运行的 exe」既不能删除、也不能原地覆盖（覆盖会 `WinError 32`），
-    但**可以改名**（映像文件是以带 `FILE_SHARE_DELETE` 的句柄打开的）。而交棒进程自己就跑在
-    这个 exe 上（``_self_update_argv`` 用 ``sys.executable``），所以 `copy` 覆盖必然失败——
-    这正是「构建成功却替换不了、重启还是旧版本」的根因。改名后旧文件仍被交棒进程映射，
-    但路径已让出，新 exe 直接放进去即可；旧的那份就留在 ``<exe>.old`` 当回滚副本。
+    Windows 下**运行中的 exe 既不能删除、也不能原地覆盖**（覆盖报 `WinError 32`），
+    但**可以改名**（映像文件是以带 ``FILE_SHARE_DELETE`` 的句柄打开的）。而交棒进程自己就跑在
+    这个 exe 上（``_self_update_argv`` 用 ``sys.executable``）——这正是「替换失败、重启还是
+    旧版本」的根因。改名后旧文件仍被交棒进程映射，但路径已让出，新文件直接放进去即可。
     """
-    dst = root / _exe_name()
+    live = root / _exe_name()
+    if not live.exists():
+        return None
     bak = root / _exe_bak_name()
     if bak.exists():
         try:
             bak.unlink()                 # 上一次更新/构建留下的，覆盖它（同目录只留一份）
         except OSError:
             pass
-    if dst.exists():
-        os.replace(dst, bak)             # 改名：不会触发 WinError 32
-    shutil.copy2(src, dst)
+    try:
+        os.replace(live, bak)
+    except OSError:
+        return None
+    return bak
+
+
+def _replace_exe(src: Path, root: Path) -> None:
+    """把 ``src`` 装成 ``root/<exe>``：先让位（见 `_move_exe_aside`）再放新的。"""
+    _move_exe_aside(root)
+    shutil.copy2(src, root / _exe_name())
 
 
 def _busy_hint(exc: OSError) -> str:
