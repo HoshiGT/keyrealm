@@ -63,7 +63,8 @@ cd frontend && npm run dev
 
 ## 3. 打包为可执行文件
 
-输出到 `release/`。**PyInstaller 不能跨平台编译，要得到 Windows exe 必须在 Windows 上构建。**
+**默认输出到仓库根（`.git` 同级）**，可用 `--output DIR` 改（`--output release` 即旧行为）。
+**PyInstaller 不能跨平台编译，要得到 Windows exe 必须在 Windows 上构建。**
 
 ```bash
 pip install pyinstaller
@@ -73,6 +74,7 @@ python scripts/build.py --frontend
 | 选项 | 作用 |
 |---|---|
 | `--frontend` | 先跑 `npm run build` 再打包 |
+| `--output` / `-o` | 产物落点目录（默认仓库根，即 `.git` 同级；传 `release` 即旧行为） |
 | `--console` | 保留控制台窗口（调试用） |
 | `--smoke` | 构建后跑 `--print-paths` 校验冻结路径（隐含 `--console`） |
 | `--allow-missing-deps` | 依赖缺失时仍继续构建（默认中止） |
@@ -165,9 +167,11 @@ keyrealm/
 │   ├── vault_proxy_ctx.py   # 按调用生效的代理上下文
 │   ├── logger.py            # 日志配置（轮转 + 级别可调 + 关键词搜索）
 │   ├── tray.py              # 系统托盘
+│   ├── updater.py           # 程序内更新（检查 / 备份 / 构建 / 逐级迁移 / 重启，唯一实现）
 │   └── mcp_server.py        # MCP Server（SSE）
 ├── assets/                  # 应用图标资源（由 scripts/make_icon.py 生成）
-├── scripts/                 # 构建与生成脚本（build / pack_source / check_schema / gen_mock_assets …）
+├── scripts/                 # 构建与生成脚本（build / pack_source / check_schema / gen_mock_assets；
+│                            #   程序内更新：check_version / build_update / db_update / restart + migrations/）
 ├── plugins/                 # 插件源码（打包时作为外部目录，不进 exe）
 ├── frontend/                # Vue 3 前端
 │   ├── src/{views,components,stores,api}/
@@ -191,7 +195,37 @@ keyrealm/
   事件名、`VAULT_*` 环境变量、`data/`、`credentials.db`、`master.key`、插件 `credential_type`。
   详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §1.1。
 
-## 7. 插件开发
+## 7. 程序内更新（从源码编译）
+
+应用内「设置 → 更新」可检查并一键更新（**面向源码运行的部署**；打包分发的 exe 走 Releases）。
+核心实现在 **`backend/updater.py`**（唯一实现），被**应用内**（`backend/api.py` 转发）与
+**四个独立脚本**共用；脚本只做 argparse → 转发。
+
+| 能力 | 脚本 | 说明 |
+|---|---|---|
+| 版本检查 | `scripts/check_version.py` + `.sh`/`.bat` | 只读：`git clone --depth 1` 到临时目录读远端版本，**不碰工作区** |
+| 构建更新 | `scripts/build_update.py` + `.sh`/`.bat` | 等应用退出 → 备份 → `git fetch --depth 1`+`merge --ff-only` → `build.py --frontend` → 迁移 → 重启 |
+| 数据库更新 | `scripts/db_update.py` + `.sh`/`.bat` | 逐级迁移（默认演练，`--apply` 才写） |
+| 程序重启 | `scripts/restart.py` + `.sh`/`.bat` | 脱离终端重启应用 |
+
+- **两个更新档**：正式版按 `APP_VERSION` 比大小；测试版按「版本号 **或** commit」任一不同。
+  两档都跟踪 `main`。渠道存 `settings.update_channel`。
+- **`.sh`/`.bat` 只做「找 / 装 Python」**（`.venv` 不存在就 `python -m venv`，再装
+  `requirements.txt` + `pyinstaller`），随后 `exec` 调同名 `.py`。**全程无交互**。
+- **交棒顺序**：应用内 `start_update()` 先把更新脚本起成**脱离进程**、再关程序；
+  脚本首步 `wait_for_app_exit()`（借 `single_instance` 锁判断应用是否已退）。
+  重启新应用前必须 `single_instance.release()`，否则新进程会把自己当第二实例退出。
+- **备份**：可执行文件 + `plugins/` + `data/` 打成一个 zip，落在 `backups/`（gitignored、
+  含真实密钥、0600）。**只留一份**——写新备份前删旧的。
+
+### 7.1 数据库逐级迁移
+
+`scripts/migrations/` 下放**结构**迁移脚本，命名 `m_<from>__to_<to>.py`，**只提供「低一级 →
+高一级」**（如 `m_1.0.0__to_1.1.0.py`），每个暴露 `FROM_VERSION`/`TO_VERSION`/`preview(conn)`/
+`apply(conn)`。运行器把链串起来一层层升，**绝不跨级**；断链会点名缺哪一跳。详见
+`scripts/migrations/README.md`。结构有变时**除了写迁移脚本，还要提升 `SCHEMA_VERSION`**。
+
+## 8. 插件开发
 
 完整规范见 **[docs/PLUGIN_GUIDE.md](docs/PLUGIN_GUIDE.md)**（目录结构、`manifest.json` 字段、
 `plugin.py` 接口、可选「操作」、签名器校准、新增插件的检查清单）。要点：
@@ -201,7 +235,7 @@ keyrealm/
   同名模块会因 `sys.modules` 互相顶掉，拿到别家的实现且一路不报错。
 - docstring 末尾用 `参考文档：` 附官方文档链接（只写官方页，不写转述页）。
 
-## 8. 提交约定
+## 9. 提交约定
 
 - **提交信息用中文**，沿用 conventional 前缀（`feat` / `fix` / `docs` / `chore` / `refactor` /
   `perf` / `style`）。

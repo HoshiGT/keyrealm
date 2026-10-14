@@ -627,6 +627,48 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
 pywebview 没有「再次显示」事件可挂（`Form.Shown` 只触发一次，`Activated` 不映射任何事件），所以
 兜底是**占位页自己写明怎么恢复**。（理论上可另起 Win32 `IsWindowVisible` 轮询，未做。）
 
+### 2.12 程序内更新（updater.py）
+
+**职责**：应用内检查 GitHub 最新源码并一键更新（备份 → 从源码重编译 → 逐级迁移数据库 → 重启）。
+
+**唯一实现放 `backend/updater.py`**：应用内（`backend/api.py` 转发 → `main.py::VaultApi`）与四个
+独立脚本（`scripts/{check_version,build_update,db_update,restart}.py` + 各自 `.sh`/`.bat` 薄引导）
+**共用同一份**。之所以放 `backend/` 而不放 `scripts/`：冻结 exe 只打包 `main.py` 的 import 图，
+`scripts/` 不进 exe —— 应用内的 `check_update()` 必须在 exe 内可调用。updater 只依赖标准库级的
+内部模块（`paths`/`version`/`database`/`single_instance`），因此**任何 Python 3.11+ 都能 import
+它**（含 venv 尚未创建时），四个脚本据此复用。
+
+**两档口径**（都跟踪 `main`）：**正式版**比较 `APP_VERSION`（远端更高才算有更新）；**测试版**
+比较「版本号 **或** commit」（去 `-dirty` 后任一不同即算）。渠道存 `settings.update_channel`。
+
+**检查只读**：`check_update()` 用 `git clone --depth 1` 到**临时目录**读远端 `backend/version.py`
+（`ast` 解析，不 `eval`）与 commit，用完删临时目录——**不碰当前工作区**。真正前进工作区的是
+`fetch_latest()`（`git fetch --depth 1` + `merge --ff-only`；脏工作区默认拒绝，`--force` 才先
+`stash`）。
+
+**交棒时序（顺序不可颠倒）**：应用内 `start_update()` → 写 `data/.update-request.json` →
+`spawn_detached()` 把 `scripts/build_update.{sh,bat}` 起成**脱离进程**（Windows
+`DETACHED_PROCESS` + `cmd start` 开独立 CMD 窗口；POSIX `start_new_session`）→ **确认子进程起来
+之后**才调 `_close_quit_cb()`（= `main._quit_app`）退出。脚本首步 `wait_for_app_exit()` 轮询
+`single_instance.acquire()`（拿不到锁 = 应用还在跑）；它同时**占住锁**保证更新期间没人能启动
+应用，**重启新应用前必须 `single_instance.release()`**（`backend/single_instance.py` 为此新增了
+`release()`）。
+
+**跨进程 / 跨重启通信**：全程写 `data/.update-status.json`（阶段、成败、from/to）；新应用启动后
+由前端「设置 → 更新」卡片读取展示。
+
+**备份**：可执行文件 + `plugins/` + `data/`（DB 走 `sqlite3 backup()` 一致性快照，`logs/` 排除）
+打成一个 zip 落 `backups/`（gitignored、0600、**含真实密钥**），**只留一份**。构建失败不覆盖旧
+产物（`assemble_release` 覆盖前留 `Keyrealm.old` 供回滚）。
+
+**数据库逐级迁移**：`scripts/migrations/m_<from>__to_<to>.py`（接口 `FROM_VERSION` /
+`TO_VERSION` / `preview(conn)` / `apply(conn)`），运行器串链**逐级**升、**绝不跨级**，每跳留
+SQLite 快照，`--apply` 前抢单实例锁。
+
+**`scripts/build.py` 的输出**：默认落**仓库根**（`.git` 同级，`--output` 可改）。输出=仓库根时
+`assemble_release` **跳过 `plugins/` 自我复制**（否则会把活的源目录删掉再自我复制），也不清
+`data/installed_plugins`（那已是用户真实数据目录）。
+
 ---
 
 ## 3. 数据流
