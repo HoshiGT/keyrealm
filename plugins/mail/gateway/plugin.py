@@ -75,7 +75,7 @@ NETWORK_VENDORS = frozenset({
 # 需要「标识 + 密钥」成对的服务商（其余三类只需标识）
 PAIRED_VENDORS = frozenset({VENDOR_ENGAGELAB, VENDOR_LAAFFIC, VENDOR_NXCLOUD, VENDOR_BUKA, VENDOR_ULTRAMSG})
 
-# 仅用于拼提示语；键与 manifest 的 select options 一一对应
+# 仅用于拼提示语；含已从下拉移除的历史厂商（老凭据仍能报到名字）
 VENDOR_LABELS = {
     "kmi": "kmi",
     "nxcloud": "nxcloud",
@@ -436,24 +436,23 @@ def _verify_ultramsg(instance: str, token: str) -> VerifyResult:
     # 该域名对任意路径/实例/口令都回同一段「实例因欠费停止」文案，区分不出真伪
     return VerifyResult(
         status="unknown",
-        message="Ultramsg 未作判定：该域名对任意路径与任意 instance/token 都返回同一段「实例因欠费停止」"
-                f"文案（HTTP {response.status_code}），凭据真伪无法区分。请在 Ultramsg 后台确认实例状态。",
+        message=f"Ultramsg 未作判定：该域名对任意实例 / 口令都返回同一段文案"
+                f"（HTTP {response.status_code}），无法区分凭据真伪。",
     )
 
 
-# ── 其余 8 家：如实报「未验证」──────────────────────────
+# ── 未指定 / 历史遗留的服务商：如实报「未验证」──────────
 
 def _unverifiable(vendor: str) -> VerifyResult:
     label = VENDOR_LABELS.get(vendor)
     if not label:
         return VerifyResult(
             status="unknown",
-            message="未指定服务商，无法选择只读校验接口，未做联网校验",
+            message="未指定服务商，未做联网校验。",
         )
     return VerifyResult(
         status="unknown",
-        message=f"{label}：未找到可用的只读校验接口，未做联网校验（其发送接口把参数校验放在鉴权之前，"
-                f"探活只能得到「参数错误」；真发短信又有费用与风控副作用），故不下结论。",
+        message=f"{label}：没有可用的只读校验接口，未做联网校验。",
         account_info={"vendor": vendor},
     )
 
