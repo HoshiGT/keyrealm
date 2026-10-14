@@ -73,24 +73,68 @@ _PROXY_ENV_KEYS = ("http_proxy", "https_proxy", "all_proxy",
                    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
 
 
+# 更新代理的三种模式（与应用内「使用代理」同一套语义）
+MODE_GLOBAL = "global"    # 跟随「网络与代理」的全局默认代理
+MODE_DIRECT = "direct"    # 强制直连
+MODE_PROXY = "proxy"      # 指定「代理列表」里的某个代理
+_MODES = (MODE_GLOBAL, MODE_DIRECT, MODE_PROXY)
+
+SETTING_PROXY_MODE = "update_proxy_mode"
+SETTING_PROXY_ID = "update_proxy_id"
+
+
+def get_update_proxy() -> dict:
+    """当前「更新代理」选择：``{"mode", "proxy_id", "resolved"}``。
+
+    ``resolved`` 是解析后的实际代理地址（``""`` = 直连），供界面显示。
+    """
+    mode = (db.get_setting(SETTING_PROXY_MODE, "") or "").strip().lower()
+    if mode not in _MODES:
+        mode = MODE_GLOBAL
+    pid = (db.get_setting(SETTING_PROXY_ID, "") or "").strip() if mode == MODE_PROXY else ""
+    return {"mode": mode, "proxy_id": pid, "resolved": update_proxy() or ""}
+
+
+def set_update_proxy(mode: str, proxy_id: str = "") -> dict:
+    """设置更新走哪个代理。``mode`` ∈ global / direct / proxy（== 指定 ``proxy_id``）。"""
+    mode = (mode or "").strip().lower()
+    if mode not in _MODES:
+        return {"ok": False, "message": f"无效的更新代理模式：{mode or '(空)'}"}
+    pid = (proxy_id or "").strip()
+    if mode == MODE_PROXY:
+        try:
+            from . import proxy_store
+            if not proxy_store.get_proxy_url(pid):
+                return {"ok": False, "message": "指定的代理不存在"}
+        except Exception:  # noqa: BLE001
+            return {"ok": False, "message": "读取代理列表失败"}
+    db.set_setting(SETTING_PROXY_MODE, mode)
+    db.set_setting(SETTING_PROXY_ID, pid if mode == MODE_PROXY else "")
+    return {"ok": True, **get_update_proxy()}
+
+
 def update_proxy() -> Optional[str]:
-    """更新（git / pip / 构建）走哪个代理。优先级：
+    """本次更新（git / pip / npm）实际走哪个代理，返回代理 URL 或 ``None``（直连）。
 
-    1. 环境变量 ``KEYREALM_UPDATE_PROXY``（可设为 ``direct``/``none`` 强制直连）；
-    2. shell 里已显式设置的标准代理变量（``https_proxy`` / ``all_proxy`` …）——尊重用户环境；
-    3. **复用「代理列表」里的全局默认代理**（「设置 → 网络与代理」）。
+    优先级：
+    1. 环境变量 ``KEYREALM_UPDATE_PROXY``（可设为 ``direct`` 强制直连）——CLI / 排障逃生口；
+    2. 应用内「更新代理」选择（``settings.update_proxy_mode`` / ``update_proxy_id``）：
+       ``global`` 跟随「网络与代理」的全局默认代理、``direct`` 直连、``proxy`` 指定某个代理。
 
-    都没有则返回 ``None``（直连）。这样校验走的代理与更新走的代理是同一套来源，用户配一次即可。
+    引用了已被删掉的代理 → 回落到直连（``proxy_store.get_proxy_url`` 返回 None）。
     """
     raw = os.environ.get("KEYREALM_UPDATE_PROXY", "").strip()
     if raw:
         return None if raw.lower() in _NO_PROXY else raw
-    for key in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
-        value = os.environ.get(key, "").strip()
-        if value:
-            return value
+    mode = (db.get_setting(SETTING_PROXY_MODE, "") or "").strip().lower()
+    if mode not in _MODES:
+        mode = MODE_GLOBAL
     try:
         from . import proxy_store
+        if mode == MODE_DIRECT:
+            return None
+        if mode == MODE_PROXY:
+            return proxy_store.get_proxy_url(db.get_setting(SETTING_PROXY_ID, "")) or None
         return proxy_store.global_url() or None
     except Exception:  # noqa: BLE001 - 取不到就当直连
         return None
@@ -99,12 +143,11 @@ def update_proxy() -> Optional[str]:
 def proxy_env() -> dict:
     """把本次更新该用的代理铺成一组环境变量，交给所有子进程（git / pip / npm）。
 
-    没有代理时返回空 dict（子进程沿用自身环境）。``no_proxy`` 保证 localhost 不走代理。
+    **直连时把各变量置空串**，以压掉从 shell 继承来的同名变量——否则用户 shell 里若有
+    ``http_proxy``，选了「直连」也仍会走它。``no_proxy`` 保证 localhost 不走代理。
     """
     url = update_proxy()
-    if not url:
-        return {}
-    env = {key: url for key in _PROXY_ENV_KEYS}
+    env = {key: (url or "") for key in _PROXY_ENV_KEYS}
     env["no_proxy"] = env["NO_PROXY"] = "localhost,127.0.0.1,::1"
     return env
 

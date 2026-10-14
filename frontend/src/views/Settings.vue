@@ -344,6 +344,35 @@ const updateLastStatus = ref(null) // 上次更新的结果（data/.update-statu
 const dbMigration = ref(null)      // { disk, app, needs_migration, chain }
 const updating = ref(false)
 
+// 更新代理：与应用内每凭据的「使用代理」同一套语义，但这里是**全局**一份。
+// 选择值 = 'global' | 'direct' | <某代理 id>。
+const updateProxySpec = ref('global')
+const updateProxyResolved = ref('')
+
+async function loadUpdateProxy() {
+  try {
+    const res = await api.getUpdateProxy()
+    if (res && res.ok !== false) {
+      updateProxySpec.value = res.mode === 'proxy' ? (res.proxy_id || 'global') : (res.mode || 'global')
+      updateProxyResolved.value = res.resolved || ''
+    }
+  } catch { /* 容错：不阻塞其它卡片 */ }
+}
+
+async function applyUpdateProxy(value) {
+  try {
+    const res = value === 'global' || value === 'direct'
+      ? await api.setUpdateProxy(value, '')
+      : await api.setUpdateProxy('proxy', value)
+    if (res && res.resolved !== undefined) updateProxyResolved.value = res.resolved || ''
+    updateResult.value = null   // 代理变了，上一次的检查结果就作废了
+    ElMessage.success('更新代理已更新')
+  } catch (err) {
+    ElMessage.error(err.message || '保存更新代理失败')
+    await loadUpdateProxy()
+  }
+}
+
 async function loadUpdateChannel() {
   try {
     const res = await api.getUpdateChannel()
@@ -426,6 +455,7 @@ async function refreshAll(showSpinner = true) {
       loadLightMode(),
       loadAutostart(),
       loadUpdateChannel(),
+      loadUpdateProxy(),
       loadUpdateStatus(),
       loadDbMigrationStatus(),
       proxyStore.fetch().catch(() => {}),
@@ -586,6 +616,31 @@ onMounted(() => refreshAll(false))
           <el-radio-button value="formal">正式版</el-radio-button>
           <el-radio-button value="test">测试版</el-radio-button>
         </el-radio-group>
+      </div>
+
+      <el-divider />
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">更新代理</div>
+          <div class="setting-desc">
+            检查与更新（git / pip / npm）走哪个出口。可跟随「网络与代理」的全局默认、强制直连，
+            或**指定下面的某个代理**——本机直连 GitHub 不通时，在这里选一个代理即可。
+          </div>
+          <div v-if="updateProxySpec !== 'direct'" class="setting-path">
+            当前出网：{{ updateProxyResolved || '直连（未配置代理）' }}
+          </div>
+        </div>
+        <el-select v-model="updateProxySpec" class="proxy-input" @change="applyUpdateProxy">
+          <el-option value="global" label="跟随全局默认" />
+          <el-option value="direct" label="直连（不使用代理）" />
+          <el-option
+            v-for="item in proxyStore.items"
+            :key="item.id"
+            :value="item.id"
+            :label="`${item.name}（${item.url}）`"
+          />
+        </el-select>
       </div>
 
       <el-divider />

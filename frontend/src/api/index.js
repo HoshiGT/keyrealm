@@ -308,6 +308,9 @@ export const api = {
   // 渠道：formal=正式版（看版本号）/ test=测试版（看版本号 + commit）。存后端 settings。
   getUpdateChannel: () => call('get_update_channel'),
   setUpdateChannel: (channel) => call('set_update_channel', channel),
+  // 更新走哪个代理：{mode: global|direct|proxy, proxy_id, resolved}。顺序同 VaultApi.set_update_proxy(mode, proxy_id)
+  getUpdateProxy: () => call('get_update_proxy'),
+  setUpdateProxy: (mode, proxyId = '') => call('set_update_proxy', mode, proxyId),
   // 检查更新：{ok, kind, has_update, reason, current, latest, db_change, db_chain, source_ok}
   checkUpdate: (kind = 'formal') => call('update_check', kind),
   // 上一次更新的结果（读 data/.update-status.json；无则 {}）

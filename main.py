@@ -306,6 +306,12 @@ class VaultApi:
     def set_update_channel(self, channel: str):
         return api.set_update_channel(channel)
 
+    def get_update_proxy(self):
+        return api.get_update_proxy()
+
+    def set_update_proxy(self, mode: str, proxy_id: str = ""):
+        return api.set_update_proxy(mode, proxy_id)
+
     def start_update(self, kind: str = "formal", restart: bool = True, terminal: str = "auto"):
         return api.start_update(kind, restart, terminal)
 

@@ -1526,6 +1526,21 @@ def set_update_channel(channel: str) -> dict:
     return updater.set_channel(channel)
 
 
+def get_update_proxy() -> dict:
+    """更新走哪个代理（跟随全局默认 / 直连 / 指定某个代理）与解析后的地址。
+
+    与应用内每凭据的「使用代理」同一套语义，但这里是**全局**的（更新对所有凭据一视同仁）。
+    """
+    try:
+        return {"ok": True, **updater.get_update_proxy()}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"读取更新代理失败：{type(e).__name__}"}
+
+
+def set_update_proxy(mode: str, proxy_id: str = "") -> dict:
+    return updater.set_update_proxy(mode, proxy_id)
+
+
 def start_update(kind: str = "formal", restart: bool = True, terminal: str = "auto") -> dict:
     """「立即更新」：先把更新脚本起成脱离进程，再关闭程序（交棒）。
 

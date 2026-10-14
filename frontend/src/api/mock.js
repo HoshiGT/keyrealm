@@ -989,6 +989,14 @@ export function createMockApi() {
       state.updateChannel = channel === 'test' ? 'test' : 'formal'
       return { ok: true, channel: state.updateChannel }
     },
+    async get_update_proxy() {
+      await delay(40)
+      return { ok: true, mode: 'global', proxy_id: '', resolved: '' }
+    },
+    async set_update_proxy(mode, proxyId = '') {
+      await delay(40)
+      return { ok: true, mode, proxy_id: proxyId, resolved: '' }
+    },
     async update_check(kind = 'formal') {
       await delay(400)
       return {
