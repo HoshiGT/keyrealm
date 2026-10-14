@@ -342,6 +342,10 @@ const updateChannel = ref('formal')
 const updateChecking = ref(false)
 const updateResult = ref(null)     // check_update 的结果
 const updateLastStatus = ref(null) // 上次更新的结果（data/.update-status.json）
+// 「上次更新」框可被用户关掉：记住被关掉那次的 finished_at，关掉后跨重启也不再自动冒出来，
+// 直到出现**新的**更新结果（finished_at 变了）才重新显示。
+const UPDATE_LAST_SEEN_KEY = 'vault.update.lastSeen'
+const dismissedUpdateAt = ref(localStorage.getItem(UPDATE_LAST_SEEN_KEY) || '')
 const dbMigration = ref(null)      // { disk, app, needs_migration, chain }
 const updating = ref(false)            // 正在准备 / 等待交棒
 const updatePrepareTask = ref(null)    // 准备阶段的后台任务快照（vault:tasks，kind==='update'）
@@ -362,6 +366,20 @@ function updateTransition(status) {
   if (!status || !status.from) return ''
   const one = (v, c) => `${v || '?'}${c ? ` (${c})` : ''}`
   return `（${one(status.from, status.from_commit)} → ${one(status.to, status.to_commit)}）`
+}
+
+// 「上次更新」是否该显示：有结果，且不是用户已关掉的那一次。
+const lastUpdateVisible = computed(() => {
+  const st = updateLastStatus.value
+  return !!(st && st.finished_at && st.finished_at !== dismissedUpdateAt.value)
+})
+
+/** 关掉「上次更新」框：按 finished_at 记住，新的更新结果（不同 finished_at）会重新显示。 */
+function dismissUpdateStatus() {
+  const at = updateLastStatus.value && updateLastStatus.value.finished_at
+  if (!at) return
+  dismissedUpdateAt.value = at
+  try { localStorage.setItem(UPDATE_LAST_SEEN_KEY, at) } catch { /* 存不了也无妨，仅本次会话生效 */ }
 }
 
 // 准备进度：total<=0（总量未知，如构建）走不定态
@@ -989,12 +1007,12 @@ onMounted(() => refreshAll(false))
       </el-alert>
 
       <el-alert
-        v-if="updateLastStatus && updateLastStatus.finished_at"
+        v-if="lastUpdateVisible"
         class="update-alert"
         :type="updateLastStatus.ok ? 'success' : 'warning'"
         :title="`上次更新：${updateLastStatus.message || ''}${updateTransition(updateLastStatus)}`"
-        :closable="false"
         show-icon
+        @close="dismissUpdateStatus"
       >
         <div v-if="(updateLastStatus.report || []).length" class="report-list">
           <div v-for="(s, i) in updateLastStatus.report" :key="i" class="report-item">
