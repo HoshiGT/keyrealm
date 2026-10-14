@@ -193,9 +193,22 @@ function onTasksChanged(event) {
   applyTaskCountSnapshot(snapshot)
 }
 
+// 侧栏品牌旁的版本号（取 get_version 的 version，形如 1.4.1）
+const appVersion = ref('')
+
+async function loadAppVersion() {
+  try {
+    const info = await api.getVersion()
+    appVersion.value = (info && info.version) || ''
+  } catch {
+    // 拿不到就不显示：装饰性信息，不打扰用户
+  }
+}
+
 onMounted(() => {
   window.addEventListener(EVENTS.tasksChanged, onTasksChanged)
   refreshTaskCount()
+  loadAppVersion()
 })
 
 onBeforeUnmount(() => {
@@ -278,6 +291,7 @@ async function handleMinimize() {
           <img src="/favicon.svg" class="brand-logo" alt="Keyrealm" />
         </span>
         <span v-show="!collapsed" class="brand-text v-grad-text">Keyrealm</span>
+        <span v-show="!collapsed && appVersion" class="brand-version">v{{ appVersion }}</span>
       </div>
 
       <!-- 预留位：后续功能按钮加在这里 -->
@@ -467,6 +481,15 @@ async function handleMinimize() {
   font-weight: 750;
   font-size: 12.5px;
   letter-spacing: -0.02em;
+}
+
+/* 品牌名右侧的版本号：小字、灰、不参与截断（窄了先挤品牌名） */
+.brand-version {
+  flex-shrink: 0;
+  margin-left: -4px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--v-text-3);
 }
 
 .brand.is-collapsed {
