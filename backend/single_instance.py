@@ -100,3 +100,35 @@ def focus_existing() -> bool:
         return True
     except Exception:
         return False
+
+
+def release() -> None:
+    """主动释放已持有的单实例锁（**仅供更新器**在重启应用前调用）。
+
+    正常进程存活期间靠内核/文件锁自动释放，不需要手动调；但更新器会先 `acquire()` 占住锁
+    （保证更新期间没人能启动应用），到重启新应用之前必须**先释放**，否则新应用会把自己当成
+    「第二实例」而退出。
+    """
+    global _mutex_handle, _lock_file
+    if sys.platform == "win32":
+        if _mutex_handle:
+            try:
+                import ctypes
+
+                ctypes.WinDLL("kernel32").CloseHandle(_mutex_handle)
+            except Exception:  # noqa: BLE001 - 释放失败也不该打断更新
+                pass
+            _mutex_handle = None
+        return
+    if _lock_file is not None:
+        try:
+            import fcntl
+
+            fcntl.flock(_lock_file, fcntl.LOCK_UN)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            _lock_file.close()
+        except Exception:  # noqa: BLE001
+            pass
+        _lock_file = None

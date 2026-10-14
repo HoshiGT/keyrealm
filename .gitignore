@@ -11,6 +11,11 @@ env/
 
 # 打包产物（PyInstaller 输出 + 源码归档，不入库；Keyrealm.spec 与 scripts/*.py 是构建配置，保留追踪）
 release/
+# 构建产物默认落**仓库根**（.git 同级）：可执行文件本身，以及覆盖前的回滚副本 .old。
+# 注意：Keyrealm* 也会匹配 Keyrealm.spec，但该文件已被追踪，gitignore 不影响已追踪文件。
+Keyrealm*
+# 更新备份目录（zip 内含 credentials.db 与真实密钥，绝不可入库）
+backups/
 
 # 中间产物目录（不入库）
 tmp/

@@ -303,6 +303,20 @@ export const api = {
   cancelTask: (taskId) => call('cancel_task', taskId),
   // 清掉已结束（已完成/失败/已取消）的记录，进行中的不动。
   clearFinishedTasks: () => call('clear_finished_tasks'),
+
+  // ── 程序内更新（从源码编译）──────────────────────────────
+  // 渠道：formal=正式版（看版本号）/ test=测试版（看版本号 + commit）。存后端 settings。
+  getUpdateChannel: () => call('get_update_channel'),
+  setUpdateChannel: (channel) => call('set_update_channel', channel),
+  // 检查更新：{ok, kind, has_update, reason, current, latest, db_change, db_chain, source_ok}
+  checkUpdate: (kind = 'formal') => call('update_check', kind),
+  // 上一次更新的结果（读 data/.update-status.json；无则 {}）
+  updateStatus: () => call('update_status'),
+  // 磁盘数据库结构版本与源码版本的差异：{ok, disk, app, needs_migration, chain}
+  dbMigrationStatus: () => call('db_migration_status'),
+  // 立即更新：起更新进程后关闭程序。顺序须与 VaultApi.start_update(kind, restart, terminal) 一致。
+  startUpdate: (kind = 'formal', restart = true, terminal = 'auto') =>
+    call('start_update', kind, restart, terminal),
 }
 
 export default api

@@ -290,6 +290,25 @@ class VaultApi:
     def open_log_file(self, name: str):
         return api.open_log_file(name)
 
+    # ── 程序内更新 ────────────────────────────────────────
+    def update_check(self, kind: str = "formal"):
+        return api.update_check(kind)
+
+    def update_status(self):
+        return api.update_status()
+
+    def db_migration_status(self):
+        return api.db_migration_status()
+
+    def get_update_channel(self):
+        return api.get_update_channel()
+
+    def set_update_channel(self, channel: str):
+        return api.set_update_channel(channel)
+
+    def start_update(self, kind: str = "formal", restart: bool = True, terminal: str = "auto"):
+        return api.start_update(kind, restart, terminal)
+
 
 # ── 窗口与托盘 ────────────────────────────────────────────
 

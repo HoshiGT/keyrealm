@@ -334,6 +334,82 @@ async function applyAutostart(value) {
   }
 }
 
+/* ── 程序内更新（从源码编译）──────────────────────────────
+   检查只读：后端用 git 浅克隆读远端版本，不改本机工作区。
+   「立即更新」是交棒动作——后端起更新进程后关闭程序，前端点完切到提示态即可。 */
+const updateChannel = ref('formal')
+const updateChecking = ref(false)
+const updateResult = ref(null)     // check_update 的结果
+const updateLastStatus = ref(null) // 上次更新的结果（data/.update-status.json）
+const dbMigration = ref(null)      // { disk, app, needs_migration, chain }
+const updating = ref(false)
+
+async function loadUpdateChannel() {
+  try {
+    const res = await api.getUpdateChannel()
+    if (res && res.channel) updateChannel.value = res.channel
+  } catch { /* 容错：不阻塞其它卡片 */ }
+}
+
+async function applyUpdateChannel(value) {
+  updateResult.value = null
+  try {
+    await api.setUpdateChannel(value)
+  } catch (err) {
+    ElMessage.error(err.message || '保存更新渠道失败')
+    await loadUpdateChannel()
+  }
+}
+
+async function loadUpdateStatus() {
+  try {
+    updateLastStatus.value = await api.updateStatus()
+  } catch {
+    updateLastStatus.value = null
+  }
+}
+
+async function loadDbMigrationStatus() {
+  try {
+    const res = await api.dbMigrationStatus()
+    dbMigration.value = res && res.ok !== false ? res : null
+  } catch {
+    dbMigration.value = null
+  }
+}
+
+async function checkUpdate() {
+  updateChecking.value = true
+  updateResult.value = null
+  try {
+    updateResult.value = await api.checkUpdate(updateChannel.value)
+  } catch (err) {
+    updateResult.value = { ok: false, message: err.message || '检查更新失败' }
+  } finally {
+    updateChecking.value = false
+  }
+}
+
+async function doUpdate() {
+  try {
+    await ElMessageBox.confirm(
+      '将关闭程序，在终端中备份并重新构建，完成后自动重启。构建需要几分钟，期间请勿手动打开程序。是否继续？',
+      '立即更新',
+      { type: 'warning', confirmButtonText: '立即更新', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  updating.value = true
+  try {
+    await api.startUpdate(updateChannel.value, true, 'auto')
+    // 成功时后端会在约 0.6 秒后关闭程序，界面停在「更新进行中」提示即可。
+  } catch (err) {
+    updating.value = false
+    ElMessage.error(err.message || '无法开始更新')
+  }
+}
+
 const refreshing = ref(false)
 
 /**
@@ -349,6 +425,9 @@ async function refreshAll(showSpinner = true) {
       loadAutoLock(),
       loadLightMode(),
       loadAutostart(),
+      loadUpdateChannel(),
+      loadUpdateStatus(),
+      loadDbMigrationStatus(),
       proxyStore.fetch().catch(() => {}),
       appStore.refreshTray().catch(() => {}),
     ])
@@ -490,6 +569,98 @@ onMounted(() => refreshAll(false))
           @change="applyAutostart"
         />
       </div>
+    </el-card>
+
+    <el-card shadow="never">
+      <template #header><span>更新</span></template>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">更新渠道</div>
+          <div class="setting-desc">
+            正式版以版本号为准；测试版以版本号 + commit 为准（每次都更到 main 最新提交）。
+            更新方式为「从源码编译」：关闭程序后在终端里备份并重新构建，完成后自动重启。
+          </div>
+        </div>
+        <el-radio-group v-model="updateChannel" @change="applyUpdateChannel">
+          <el-radio-button value="formal">正式版</el-radio-button>
+          <el-radio-button value="test">测试版</el-radio-button>
+        </el-radio-group>
+      </div>
+
+      <el-divider />
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">检查更新</div>
+          <div class="setting-desc">
+            <template v-if="updateResult && updateResult.ok">
+              当前版本 {{ updateResult.current && updateResult.current.version }}
+              （{{ updateResult.current && updateResult.current.commit }}）。
+            </template>
+            <template v-else>
+              检查 GitHub 上 main 分支是否有新版本（只读，不改动本机源码）。
+            </template>
+          </div>
+        </div>
+        <el-button :icon="Refresh" :loading="updateChecking" @click="checkUpdate">检查更新</el-button>
+      </div>
+
+      <el-alert
+        v-if="updateResult"
+        class="mb-12"
+        :type="updateResult.ok === false ? 'warning'
+          : (updateResult.has_update ? 'info' : 'success')"
+        :title="updateResult.ok === false
+          ? (updateResult.message || '检查更新失败')
+          : (updateResult.has_update
+            ? `发现新版本 ${updateResult.latest && updateResult.latest.version}`
+            : '已是最新版本')"
+        :closable="false"
+        show-icon
+      >
+        <template v-if="updateResult.ok">
+          <div>{{ updateResult.reason }}</div>
+          <div v-if="updateResult.db_change">
+            数据库结构将逐级迁移：{{ (updateResult.db_chain || []).join(' → ') }}
+          </div>
+          <div v-if="updateResult.source_ok === false">
+            当前不是源码仓库（未检测到 .git），无法从源码重建；请从 Releases 获取分发包。
+          </div>
+          <div v-if="updateResult.has_update && updateResult.source_ok !== false" class="update-action">
+            <el-button type="primary" :loading="updating" @click="doUpdate">立即更新</el-button>
+          </div>
+        </template>
+      </el-alert>
+
+      <el-alert
+        v-if="updating"
+        class="mb-12"
+        type="warning"
+        title="更新进行中：程序即将关闭并在终端中重建，完成后自动重启。"
+        :closable="false"
+        show-icon
+      />
+
+      <el-alert
+        v-if="dbMigration && dbMigration.needs_migration"
+        class="mb-12"
+        type="info"
+        :title="`数据库结构需要更新：${dbMigration.disk} → ${dbMigration.app}`"
+        :closable="false"
+        show-icon
+      >
+        <div>下次更新时会自动逐级迁移（{{ (dbMigration.chain || []).join(' → ') }}）。</div>
+      </el-alert>
+
+      <el-alert
+        v-if="updateLastStatus && updateLastStatus.finished_at"
+        :type="updateLastStatus.ok ? 'success' : 'warning'"
+        :title="`上次更新：${updateLastStatus.message || ''}`
+          + (updateLastStatus.from ? `（${updateLastStatus.from} → ${updateLastStatus.to || '?'}）` : '')"
+        :closable="false"
+        show-icon
+      />
     </el-card>
 
     <el-card shadow="never">
@@ -736,6 +907,10 @@ onMounted(() => refreshAll(false))
 
 .mb-12 {
   margin-bottom: 12px;
+}
+
+.update-action {
+  margin-top: 8px;
 }
 
 .strength {

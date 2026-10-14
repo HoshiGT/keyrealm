@@ -978,6 +978,43 @@ export function createMockApi() {
       mockLog('backend.api', 'INFO', '日志已清空')
       return { ok: true, message: '日志已清空' }
     },
+
+    // ── 程序内更新（dev 桩：不跑 git / 网络，返回假数据）────
+    async get_update_channel() {
+      await delay(40)
+      return { channel: state.updateChannel || 'formal' }
+    },
+    async set_update_channel(channel) {
+      await delay(40)
+      state.updateChannel = channel === 'test' ? 'test' : 'formal'
+      return { ok: true, channel: state.updateChannel }
+    },
+    async update_check(kind = 'formal') {
+      await delay(400)
+      return {
+        ok: true,
+        kind,
+        has_update: false,
+        reason: 'dev mock：未联网，视为与远端一致',
+        current: { version: '1.3.0', commit: 'mock000', schema_version: '1.0.0', frozen: false, source_ok: true },
+        latest: { version: '1.3.0', commit: 'mock000', schema_version: '1.0.0' },
+        db_change: false,
+        db_chain: [],
+        source_ok: true,
+      }
+    },
+    async update_status() {
+      await delay(40)
+      return {}
+    },
+    async db_migration_status() {
+      await delay(40)
+      return { ok: true, disk: '1.0.0', app: '1.0.0', needs_migration: false, chain: [] }
+    },
+    async start_update() {
+      await delay(120)
+      return { ok: true, message: 'dev mock：已模拟发起更新（不会真的关闭程序）' }
+    },
   }
 }
 

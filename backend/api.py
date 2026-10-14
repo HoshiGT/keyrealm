@@ -30,6 +30,7 @@ from . import scheduler
 from . import tasks
 from . import version
 from . import tray
+from . import updater
 from . import verify_options
 from .crypto import (
     check_verify_token,
@@ -1485,6 +1486,56 @@ def import_backup() -> dict:
     result = apply_backup_doc(doc, source=path)
     if result.get("ok"):
         result["path"] = path
+    return result
+
+
+# ── 程序内更新（从源码编译）─────────────────────────────────
+# 实现在 backend/updater.py（应用内与四个独立脚本共用同一份）。这里只做薄转发 +
+# 应用内专属的「交棒」：起更新进程后，经 _close_quit_cb 关闭程序。
+
+def update_check(kind: str = "formal") -> dict:
+    """检查更新（只读，不改工作区）。正式版看版本号，测试版看版本号 + commit。"""
+    try:
+        return updater.check_update(kind)
+    except Exception as e:  # noqa: BLE001 - 检查边界兜底，不把栈甩给前端
+        _log.exception("检查更新失败")
+        return {"ok": False, "message": f"检查更新失败：{type(e).__name__}"}
+
+
+def update_status() -> dict:
+    """上一次更新的结果（读 data/.update-status.json；无则返回 {}）。"""
+    try:
+        return updater.read_status()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def db_migration_status() -> dict:
+    """磁盘数据库结构版本与源码版本的差异（是否需要逐级迁移）。"""
+    try:
+        return updater.db_status()
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"读取数据库版本失败：{type(e).__name__}"}
+
+
+def get_update_channel() -> dict:
+    return {"channel": updater.get_channel()}
+
+
+def set_update_channel(channel: str) -> dict:
+    return updater.set_channel(channel)
+
+
+def start_update(kind: str = "formal", restart: bool = True, terminal: str = "auto") -> dict:
+    """「立即更新」：先把更新脚本起成脱离进程，再关闭程序（交棒）。
+
+    退出走 `_close_quit_cb`（= main._quit_app），与「关闭窗口→直接退出」同一条路径，
+    因此停服务 / 停托盘 / 销毁窗口的表现一致。
+    """
+    result = updater.start_update(kind, restart=restart, terminal=terminal,
+                                  quit_cb=_close_quit_cb)
+    if result.get("ok"):
+        _log.info("已发起程序内更新（渠道=%s）", kind)
     return result
 
 

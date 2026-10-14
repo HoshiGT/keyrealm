@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""构建 Keyrealm 单文件可执行程序，输出到 release/。
+"""构建 Keyrealm 单文件可执行程序。
 
-跨平台：在 Windows 上产出 release/Keyrealm.exe，在 Linux/macOS 上产出
-release/Keyrealm。**要生成 Windows exe，必须在 Windows 上运行本脚本**
-（PyInstaller 不能跨平台交叉编译）。
+**默认输出到仓库根（`.git` 同级）**；用 `--output DIR` 可指定别处（`--output release`
+即旧行为）。跨平台：Windows 上产出 `Keyrealm.exe`，Linux/macOS 上产出 `Keyrealm`。
+**要生成 Windows exe，必须在 Windows 上运行本脚本**（PyInstaller 不能跨平台交叉编译）。
 
 打包边界
 --------
 - 进 exe：后端代码 + frontend/dist（只读资源）。
-- 不进 exe、以外部目录放在 release/ 下：
+- 不进 exe、以外部目录放在**输出目录**下：
     · plugins/  —— 插件**唯一事实来源**，用户可直接编辑（改完重启即生效）；打包源码，
                    但**不带 `.state.json`（启用/禁用）与 `.model_cache.json`（模型清单缓存）**
                    ——都是本机运行时状态，不入分发包
@@ -48,7 +48,6 @@ SPEC = ROOT / "Keyrealm.spec"
 REQUIREMENTS = ROOT / "requirements.txt"
 FRONTEND = ROOT / "frontend"
 FRONTEND_DIST = FRONTEND / "dist"
-RELEASE = ROOT / "release"
 DIST = ROOT / "dist"      # PyInstaller 产物中转（gitignored）
 WORK = ROOT / "build"     # PyInstaller 中间文件（gitignored）
 
@@ -306,30 +305,44 @@ def run_pyinstaller(console: bool, allow_missing: bool = False) -> None:
         sys.exit(f"PyInstaller 结束但未找到产物：{built}")
 
 
-def assemble_release() -> Path:
-    """把 dist/ 中的可执行文件与外部 plugins/ 组装进 release/。"""
+def assemble_release(out_dir: Path) -> Path:
+    """把 dist/ 中的可执行文件与外部 plugins/ 组装进 ``out_dir``。
+
+    ``out_dir`` 默认是**仓库根**（`.git` 同级）；``--output release`` 即旧行为。
+    """
     built = DIST / EXE_NAME
     if not built.exists():
         sys.exit(f"未找到构建产物：{built}")
 
-    # 不整体清空 release/：保留其中已存在的 data/（运行时数据）与
-    # keyrealm-src.zip（源码归档）等无关文件，只替换本脚本负责的 exe 与 plugins/。
-    RELEASE.mkdir(parents=True, exist_ok=True)
+    # 不整体清空 out_dir：保留其中已存在的 data/（运行时数据）、backups/ 等无关文件，
+    # 只替换本脚本负责的 exe（与、必要时、plugins/）。
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    exe_dest = RELEASE / EXE_NAME
+    exe_dest = out_dir / EXE_NAME
     if exe_dest.exists():
-        exe_dest.unlink()
+        # 覆盖前先留一份 .old：更新流程万一在后续步骤（迁移/重启）失败可据此回滚。
+        # Keyrealm* 已在 .gitignore 中，不会污染工作区。
+        old = out_dir / (EXE_NAME + ".old")
+        try:
+            old.unlink()
+        except OSError:
+            pass
+        exe_dest.replace(old)
     shutil.copy2(built, exe_dest)
 
     # 外部可改插件目录：复制源码形式的 plugins/（manifest.json + plugin.py）
     # 排除 __pycache__/*.pyc，避免把构建机的字节码带进分发包；
-    # 同时排除 .state.json*（启用/禁用状态）与 .model_cache.json*（模型清单缓存，见
-    # llm_protocols 的说明）——都是本机运行时状态，出厂时不该带。
-    src_plugins = ROOT / "plugins"
-    dest_plugins = RELEASE / "plugins"
-    if dest_plugins.exists():
-        shutil.rmtree(dest_plugins)
-    if src_plugins.exists():
+    # 同时排除 .state.json*（启用/禁用状态）与 .model_cache.json*（模型清单缓存）——都是本机运行时状态。
+    src_plugins = (ROOT / "plugins").resolve()
+    dest_plugins = (out_dir / "plugins").resolve()
+    at_repo_root = dest_plugins == src_plugins
+    # **关键守卫**：输出就在仓库根时，plugins/ 本就是活的源码目录——若照旧 rmtree 再 copytree，
+    # 等于先把源码删了再从自己复制（灾难）。这种情况直接跳过（源码即产物）。
+    if at_repo_root:
+        pass
+    elif src_plugins.exists():
+        if dest_plugins.exists():
+            shutil.rmtree(dest_plugins)
         shutil.copytree(
             src_plugins,
             dest_plugins,
@@ -337,32 +350,31 @@ def assemble_release() -> Path:
                                           ".state.json*", ".model_cache.json*"),
         )
     else:
-        print("警告：未找到 plugins/，release/ 将不含内置插件", file=sys.stderr)
+        print("警告：未找到 plugins/，产物将不含内置插件", file=sys.stderr)
 
-    # 约定：plugins/ 是插件的唯一事实来源；data/installed_plugins/ 是旧版本
-    # （zip 安装时代）遗留的运行期缓存，应用启动时由 migrate_legacy_installed_plugins()
-    # 一次性迁移/清理，不随发行包分发。若用户此前从 release/ 运行过、留下了该缓存
-    # 目录，此处精确删除它（绝不触碰 data/ 下其它内容，如 vault.db、logs/ 等）。
-    stale_cache = RELEASE / "data" / "installed_plugins"
-    if stale_cache.exists():
-        shutil.rmtree(stale_cache)
+    # 约定：plugins/ 是插件的唯一事实来源；data/installed_plugins/ 是旧版本（zip 安装时代）
+    # 遗留的运行期缓存。只在**非仓库根**输出下清理它——输出=仓库根时 data/ 是用户真实数据目录，不碰。
+    if not at_repo_root:
+        stale_cache = out_dir / "data" / "installed_plugins"
+        if stale_cache.exists():
+            shutil.rmtree(stale_cache)
 
     # data/ 其余内容不预建，应用首次运行时自动创建
     return exe_dest
 
 
-def smoke_test(exe: Path) -> None:
+def smoke_test(exe: Path, out_dir: Path) -> None:
     """运行 exe --print-paths 校验冻结后的路径解析（需控制台构建）。"""
     print("\n=== 冒烟校验：--print-paths ===", flush=True)
     result = run_capture([str(exe), "--print-paths"], timeout=120)
     print(result.stdout, end="")
     if result.stderr:
         print("[stderr]", result.stderr, end="")
-    # 校验关键路径落在 release/ 下、frontend 随包
+    # 校验关键路径落在 out_dir 下、frontend 随包
     ok = True
     out = result.stdout
-    if str(RELEASE) not in out:
-        print(f"✗ app_dir / db / plugins 未指向 release/（{RELEASE}）")
+    if str(out_dir) not in out:
+        print(f"✗ app_dir / db / plugins 未指向输出目录（{out_dir}）")
         ok = False
     if "frontend_index" in out and "_MEI" not in out.split("frontend_index", 1)[1].splitlines()[0]:
         # 冻结后 frontend 应来自 _MEIPASS（临时解压目录，路径含 _MEI）
@@ -386,8 +398,10 @@ def human_size(n: int) -> str:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="构建 Keyrealm 单文件可执行程序到 release/")
+    ap = argparse.ArgumentParser(description="构建 Keyrealm 单文件可执行程序（默认输出到仓库根）")
     ap.add_argument("--frontend", action="store_true", help="构建前先执行 npm run build")
+    ap.add_argument("--output", "-o", default=str(ROOT),
+                    help="产物落点目录（默认：仓库根，即 .git 同级；传 release 即旧行为）")
     ap.add_argument("--console", action="store_true", help="保留控制台窗口（调试）")
     ap.add_argument("--smoke", action="store_true", help="构建后运行 --print-paths 校验（隐含 --console）")
     ap.add_argument("--keep-intermediates", action="store_true", help="保留 dist/ 与 build/ 中间产物")
@@ -396,12 +410,14 @@ def main() -> None:
     args = ap.parse_args()
 
     console = args.console or args.smoke
+    out_dir = Path(args.output).expanduser().resolve()
 
     print("=" * 60)
     print(f"目标平台   : {platform.system()} {platform.machine()}")
     print(f"Python     : {sys.version.split()[0]}")
     print(f"解释器     : {sys.executable}")
     print(f"产物名     : {EXE_NAME}")
+    print(f"输出目录   : {out_dir}")
     print(f"控制台模式 : {console}")
     print("=" * 60)
 
@@ -413,45 +429,46 @@ def main() -> None:
     if args.frontend:
         build_frontend()
     run_pyinstaller(console, args.allow_missing_deps)
-    exe = assemble_release()
+    exe = assemble_release(out_dir)
 
     if not args.keep_intermediates:
         clean_intermediates()
 
     if args.smoke:
         try:
-            smoke_test(exe)
+            smoke_test(exe, out_dir)
         except Exception as e:
             print(f"冒烟校验执行失败（可忽略，多为无显示环境）：{e}", file=sys.stderr)
 
-    # 汇总 release/ 内容
+    # 汇总产物
+    at_root = out_dir == ROOT
     print("\n" + "=" * 60)
-    print(f"构建完成 → {RELEASE}")
+    print(f"构建完成 → {out_dir}")
     print("=" * 60)
-    total = 0
-    for p in sorted(RELEASE.rglob("*")):
-        if p.is_file():
-            total += p.stat().st_size
     print(f"  {EXE_NAME:<20s} {human_size(exe.stat().st_size)}")
-    plugins_dir = RELEASE / "plugins"
-    if plugins_dir.exists():
-        # 两层结构：类别目录（llm/、api/…）下挂服务子插件，根级也可能有平铺插件
-        flat, categories = [], []
-        for entry in sorted(plugins_dir.iterdir()):
-            if not entry.is_dir():
-                continue
-            if (entry / "manifest.json").exists():
-                flat.append(entry.name)
-            else:
-                subs = [d.name for d in sorted(entry.iterdir())
-                        if d.is_dir() and (d / "manifest.json").exists()]
-                categories.append(f"{entry.name}/（{len(subs)} 个服务）")
-        parts = categories + flat
-        print(f"  {'plugins/':<20s} 外部可改插件：{', '.join(parts)}")
-    print(f"  {'合计':<18s} {human_size(total)}")
+    if at_root:
+        print("  落点即仓库根：plugins/ 就是源码目录本身（未另存副本），data/ 为运行时数据目录。")
+    else:
+        plugins_dir = out_dir / "plugins"
+        if plugins_dir.exists():
+            # 两层结构：类别目录（llm/、api/…）下挂服务子插件，根级也可能有平铺插件
+            flat, categories = [], []
+            for entry in sorted(plugins_dir.iterdir()):
+                if not entry.is_dir():
+                    continue
+                if (entry / "manifest.json").exists():
+                    flat.append(entry.name)
+                else:
+                    subs = [d.name for d in sorted(entry.iterdir())
+                            if d.is_dir() and (d / "manifest.json").exists()]
+                    categories.append(f"{entry.name}/（{len(subs)} 个服务）")
+            parts = categories + flat
+            print(f"  {'plugins/':<20s} 外部可改插件：{', '.join(parts)}")
+        total = sum(p.stat().st_size for p in out_dir.rglob("*") if p.is_file())
+        print(f"  {'合计':<18s} {human_size(total)}")
     if IS_WINDOWS:
         print("\n运行前提：Windows 需已安装 WebView2 Runtime（Win10/11 通常已内置）。")
-    print("data/ 将在首次运行时自动创建于 release/ 下。")
+    print(f"data/ 将在首次运行时自动创建于 {out_dir} 下。")
 
 
 if __name__ == "__main__":
