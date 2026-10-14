@@ -896,8 +896,9 @@ store 随后重拉分组 / 插件。**不走「前端 for 循环调单条删除�
 **六张卡片**：外观 / 安全 / 窗口与关闭 / 启动 / 更新 / 网络与代理。
 
 **「更新」** 卡片（`api.getUpdateChannel` / `setUpdateChannel` / `getUpdateProxy` / `setUpdateProxy` /
-`checkUpdate` / `updateStatus` / `dbMigrationStatus` / `startUpdate`）：渠道二选一（正式版按版本号 /
-测试版按版本号 + commit）、**更新代理**三选一（跟随全局默认 / 直连 / 指定「代理列表」里的某个；
+`checkUpdate` / `updateStatus` / `dbMigrationStatus` / `startUpdate`）：渠道二选一（**正式版按 GitHub
+Release 标签、更新时下载预编译包替换；测试版按 `main` 的版本号 + commit、更新时从源码构建**）、
+**更新代理**三选一（跟随全局默认 / 直连 / 指定「代理列表」里的某个；
 `el-select`，选项来自 `proxyStore.items`，只有「指定」时才带 `proxy_id`）、「检查更新」按钮、
 结果 `el-alert`（有更新时给「立即更新」）、数据库结构待迁移提示、以及「上次更新」结果。
 点「立即更新」→ 二次确认 → 后端 `start_update`；**程序会自行关闭**，因此前端只切到「更新进行中」

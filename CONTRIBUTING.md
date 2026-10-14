@@ -240,8 +240,10 @@ keyrealm/
 - 矩阵：`windows-latest`（x64）、`macos-13`（Intel）、`macos-latest`（Apple Silicon）。
   **必须矩阵**——PyInstaller **不能跨平台编译**，每个平台只能在对应系统上构建。
 - 每个 runner：装 Python + Node → `pip install -r requirements.txt pyinstaller` → `npm ci` →
-  `python scripts/build.py --frontend --output release` → 把 `release/`（可执行文件 + `plugins/`）
-  打成 `Keyrealm-<版本>-<平台>.zip`（顶层一个干净目录，不散落）→ 挂到 Release。
+  `python scripts/build.py --frontend --output release` → 把 `release/`（可执行文件 + `plugins/`
+  + `.update-meta/`）打成 `Keyrealm-<版本>-<平台>.zip`（顶层一个干净目录，不散落）→ 挂到 Release。
+  > 包里的 `.update-meta/`（`version.json` 记 `schema_version`/`commit`，`migrations/` 是迁移脚本）
+  > 让程序内「正式版更新」在**没有源码**的机器上也能知道目标结构版本并逐级迁移——所以它必须随包走。
 - **手动触发**（Actions → Release → Run workflow）只产出构建产物、不发 Release，可用于验证。
 - 目标机前提：**Windows** 需 WebView2 Runtime（Win10/11 通常自带）；**macOS** 产物**未签名**，
   首次打开会被 Gatekeeper 拦，需右键→「打开」或 `xattr -dr com.apple.quarantine <文件>` 放行。

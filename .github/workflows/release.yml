@@ -58,6 +58,26 @@ jobs:
         # --output release：产物落到 release/（exe + plugins/），便于整目录打包。
         run: python scripts/build.py --frontend --output release
 
+      - name: 写入更新元数据（version.json + migrations/）
+        # 程序内「正式版更新」下载本包后，要靠 .update-meta/version.json 才知道目标数据库结构版本；
+        # 迁移脚本也随包分发，否则没源码的机器无法逐级迁移。
+        shell: python
+        run: |
+          import json, shutil, sys
+          from pathlib import Path
+          sys.path.insert(0, ".")
+          from backend import version
+          meta = Path("release/.update-meta")
+          (meta / "migrations").mkdir(parents=True, exist_ok=True)
+          (meta / "version.json").write_text(json.dumps({
+              "app_version": version.APP_VERSION,
+              "schema_version": version.SCHEMA_VERSION,
+              "commit": version.build_id(),
+          }, ensure_ascii=False, indent=2), encoding="utf-8")
+          for p in sorted(Path("scripts/migrations").glob("m_*.py")):
+              shutil.copy2(p, meta / "migrations" / p.name)
+          print("已写入", meta / "version.json", (meta / "version.json").read_text(encoding="utf-8"))
+
       - name: 打包 zip
         shell: python
         env:

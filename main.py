@@ -618,4 +618,13 @@ if __name__ == "__main__":
         print(f"db_path          : {db.DB_PATH}")
         print(f"plugins_dir      : {plugin_manager.PLUGINS_DIR}")
         sys.exit(0)
+
+    # 自更新入口：由 backend/updater.start_update 起成脱离进程；**不建窗口**，跑完即退。
+    # 冻结 exe 与源码运行都用这条路径（后者是 `python main.py --self-update <kind>`）。
+    if "--self-update" in sys.argv:
+        from backend import updater
+        _idx = sys.argv.index("--self-update")
+        _kind = sys.argv[_idx + 1] if len(sys.argv) > _idx + 1 else "formal"
+        sys.exit(0 if updater.apply_update(_kind).get("ok") else 1)
+
     main()

@@ -420,9 +420,12 @@ async function checkUpdate() {
 }
 
 async function doUpdate() {
+  const isFormal = updateChannel.value === 'formal'
+  const what = isFormal ? '下载预编译包并替换当前程序' : '从源码重新构建'
+  const cost = isFormal ? '' : '构建需要几分钟，'
   try {
     await ElMessageBox.confirm(
-      '将关闭程序，在终端中备份并重新构建，完成后自动重启。构建需要几分钟，期间请勿手动打开程序。是否继续？',
+      `将关闭程序，${what}，完成后自动重启。${cost}期间请勿手动打开程序。是否继续？`,
       '立即更新',
       { type: 'warning', confirmButtonText: '立即更新', cancelButtonText: '取消' },
     )
@@ -608,8 +611,8 @@ onMounted(() => refreshAll(false))
         <div class="setting-info">
           <div class="setting-label">更新渠道</div>
           <div class="setting-desc">
-            正式版以版本号为准；测试版以版本号 + commit 为准（每次都更到 main 最新提交）。
-            更新方式为「从源码编译」：关闭程序后在终端里备份并重新构建，完成后自动重启。
+            正式版：对比 GitHub Release 的最新正式版，**下载对应平台的预编译包替换当前程序**（不编译）。
+            测试版：跟到 main 最新提交，**从源码重新构建**（本机没有源码会先拉一份到程序目录）。
           </div>
         </div>
         <el-radio-group v-model="updateChannel" @change="applyUpdateChannel">
@@ -654,9 +657,9 @@ onMounted(() => refreshAll(false))
               （{{ updateResult.current && updateResult.current.commit }}）。
             </template>
             <template v-else>
-              检查 GitHub 上 main 分支是否有新版本（只读，不改动本机源码）。
-              检查与更新复用「设置 → 网络与代理」里的默认代理出网。
+              检查 GitHub 上是否有新版本（只读，不改动本机）。
             </template>
+            出网代理由上面的「更新代理」决定。
           </div>
           <div v-if="updateResult && updateResult.ok" class="setting-path">
             出网：{{ updateResult.proxy ? updateResult.proxy : '直连（未配置代理）' }}
@@ -683,10 +686,10 @@ onMounted(() => refreshAll(false))
           <div v-if="updateResult.db_change">
             数据库结构将逐级迁移：{{ (updateResult.db_chain || []).join(' → ') }}
           </div>
-          <div v-if="updateResult.source_ok === false">
-            当前不是源码仓库（未检测到 .git），无法从源码重建；请从 Releases 获取分发包。
+          <div v-if="updateResult.kind === 'formal' && updateResult.asset">
+            将下载：{{ updateResult.asset }}
           </div>
-          <div v-if="updateResult.has_update && updateResult.source_ok !== false" class="update-action">
+          <div v-if="updateResult.has_update" class="update-action">
             <el-button type="primary" :loading="updating" @click="doUpdate">立即更新</el-button>
           </div>
         </template>

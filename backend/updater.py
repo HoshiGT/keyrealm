@@ -15,15 +15,18 @@
   否则窗口一销毁就没机会再 spawn。更新脚本第一件事是 `wait_for_app_exit()`（借单实例锁判断
   应用是否已退）。
 
-两档更新口径（都以 main 为准）：
-- 正式版（formal）：远端 `APP_VERSION` **更高**才算有更新；
-- 测试版（test）：版本号**或** commit 任一不同即算有更新。
+两档更新方式**不同**：
+- **正式版（formal）**：对比 **GitHub Release 的最新正式版标签**（`vX.Y.Z`），有新版就**下载对应
+  平台的预编译包**（`Keyrealm-<版本>-<平台>.zip`）解压替换当前程序、迁移数据库、重启——**不编译**。
+- **测试版（test）**：跟到 `main` 最新提交（版本号 **或** commit 任一不同即算有更新），
+  **从源码构建**（本机没有源码会先拉一份到程序目录），再迁移、重启。
 """
 from __future__ import annotations
 
 import ast
 import json
 import os
+import platform
 import shutil
 import sqlite3
 import subprocess
@@ -189,8 +192,10 @@ def request_file(root: Optional[Any] = None) -> Path:
     return _data_dir(root) / ".update-request.json"
 
 
-def migrations_dir(root: Optional[Any] = None) -> Path:
-    return repo_root(root) / "scripts" / "migrations"
+def migrations_dirs(root: Optional[Any] = None) -> list:
+    """迁移脚本可能来自两处：源码树 ``scripts/migrations/`` 与下载包解出的 ``.update-meta/migrations/``。"""
+    root = repo_root(root)
+    return [root / "scripts" / "migrations", root / ".update-meta" / "migrations"]
 
 
 def _exe_name() -> str:
@@ -242,6 +247,142 @@ def _read_version_module(text: str) -> tuple[Optional[str], Optional[str]]:
             elif target.id == "SCHEMA_VERSION":
                 schema = _const(node.value)
     return app, schema
+
+
+# ── 平台 / 正式版 Release 资产 ────────────────────────────
+
+def platform_pkg() -> str:
+    """当前平台的发布包后缀，与 CI 产物命名一致：``windows-x64`` / ``macos-arm64`` / ``linux-x64``。"""
+    if os.name == "nt":
+        osname = "windows"
+    elif sys.platform == "darwin":
+        osname = "macos"
+    else:
+        osname = "linux"
+    machine = (platform.machine() or "").lower()
+    if machine in ("arm64", "aarch64"):
+        arch = "arm64"
+    elif machine in ("x86_64", "amd64", "x64"):
+        arch = "x64"
+    else:
+        arch = machine or "unknown"
+    return f"{osname}-{arch}"
+
+
+def release_asset_name(ver: str) -> str:
+    return f"Keyrealm-{ver}-{platform_pkg()}.zip"
+
+
+def release_asset_url(ver: str) -> str:
+    """按 CI 的命名约定拼出 Release 资产下载地址（无需 GitHub API，也就没有速率限制）。"""
+    tag = ver if ver.startswith("v") else f"v{ver}"
+    return f"https://github.com/{REPO_SLUG}/releases/download/{tag}/{release_asset_name(ver)}"
+
+
+def latest_release_tag(*, timeout: float = 30) -> dict:
+    """取远端**最新正式版标签**（``vX.Y.Z``），走 ``git ls-remote --tags``（受更新代理管辖）。
+
+    返回 ``{"ok": True, "version": "1.3.0", "tag": "v1.3.0"}``；无标签或失败时 ``ok=False``。
+    """
+    if not git_available():
+        return {"ok": False, "error": "no_git", "message": "本机未安装 git，无法检查更新"}
+    url = _remote_url()
+    try:
+        r = _git(["ls-remote", "--tags", url], timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "network", "message": "访问远端仓库超时" + _NET_HINT}
+    if r.returncode != 0:
+        return {"ok": False, "error": "network",
+                "message": f"无法访问远端仓库：{_short(r.stderr) or '未知错误'}" + _NET_HINT}
+    versions: list[str] = []
+    for line in (r.stdout or "").splitlines():
+        ref = line.split("\t", 1)[-1].strip()
+        if ref.endswith("^{}"):        # 标注 tag 的解引用附带行，跳过
+            continue
+        name = ref.rsplit("/", 1)[-1]
+        if name.startswith("v") and _parse_ver(name[1:]) != [0]:
+            versions.append(name[1:])
+    if not versions:
+        return {"ok": False, "error": "no_release",
+                "message": "远端还没有正式版标签（vX.Y.Z）——可能尚未发过 Release。"}
+    best = versions[0]
+    for v in versions[1:]:
+        if _semver_gt(v, best):
+            best = v
+    return {"ok": True, "version": best, "tag": f"v{best}"}
+
+
+def download_release_asset(url: str, dest: Path) -> dict:
+    """下载 Release 资产到 ``dest``（走更新代理，先写 .part 再原子替换）。"""
+    try:
+        import httpx
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "message": "缺少 httpx，无法下载预编译包"}
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with httpx.Client(proxy=update_proxy(),
+                          timeout=httpx.Timeout(connect=15.0, read=180.0, write=180.0, pool=15.0),
+                          follow_redirects=True, trust_env=False) as client:
+            resp = client.get(url)
+            if resp.status_code != 200:
+                return {"ok": False, "message": f"下载失败（HTTP {resp.status_code}）：{url}"}
+            tmp = dest.with_name(dest.name + ".part")
+            tmp.write_bytes(resp.content)
+            tmp.replace(dest)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"下载失败：{type(exc).__name__}"}
+    return {"ok": True, "bytes": dest.stat().st_size}
+
+
+def update_meta_dir(root: Optional[Any] = None) -> Path:
+    """下载包里的更新元数据目录（``version.json`` + ``migrations/``）。"""
+    return repo_root(root) / ".update-meta"
+
+
+def read_release_meta(directory: Path) -> dict:
+    """读 ``.update-meta/version.json``（``{app_version, schema_version, commit}``）；不存在返回 {}。"""
+    return _read_json(Path(directory) / "version.json") or {}
+
+
+def extract_release_zip(zip_path: Path, app_dir: Path) -> dict:
+    """把发布包解压覆盖到程序目录：**剥离顶层目录**、**跳过 ``data/``**（绝不覆盖用户数据）。"""
+    app_dir = Path(app_dir)
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            infos = zf.infolist()
+            tops = {i.filename.split("/", 1)[0] for i in infos if "/" in i.filename}
+            strip = (next(iter(tops)) + "/") if len(tops) == 1 else ""
+            for info in infos:
+                name = info.filename
+                if strip and name.startswith(strip):
+                    name = name[len(strip):]
+                if not name or name.endswith("/"):
+                    continue
+                if name.split("/", 1)[0] == "data":     # 用户数据目录原样保留
+                    continue
+                target = app_dir / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(info) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                mode = (info.external_attr >> 16) & 0o777   # 还原可执行位（macOS/Linux）
+                if mode:
+                    try:
+                        os.chmod(target, mode)
+                    except OSError:
+                        pass
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"解压失败：{exc}"}
+    return {"ok": True}
+
+
+def source_meta(root: Optional[Any] = None) -> dict:
+    """读程序目录里**源码**的 ``backend/version.py``（拉取后的新值），返回 app/schema 版本。"""
+    vf = repo_root(root) / "backend" / "version.py"
+    if not vf.is_file():
+        return {}
+    app, schema = _read_version_module(vf.read_text(encoding="utf-8", errors="replace"))
+    return {"app_version": app or "", "schema_version": schema or ""}
 
 
 # ── 观测：本地 / 远端 ─────────────────────────────────────
@@ -347,23 +488,41 @@ def check_update(kind: str = "formal", *, branch: str = DEFAULT_BRANCH,
                  timeout: float = 30, root: Optional[Any] = None) -> dict:
     kind = kind if kind in CHANNELS else "formal"
     local = local_info(root)
+    dbst = db_status(root=root)
+    proxy = update_proxy() or ""
+
+    if kind == "formal":
+        # 正式版比对「GitHub Release 的最新正式版标签」——更新时直接下载预编译包，不编译。
+        rel = latest_release_tag(timeout=timeout)
+        if not rel.get("ok"):
+            return {"ok": False, "kind": kind, "current": local,
+                    "error": rel.get("error"), "message": rel.get("message"), "proxy": proxy}
+        ver = rel["version"]
+        has = _semver_gt(ver, local["version"])
+        reason = (f"远端正式版更高（{local['version']} → {ver}）" if has else "已是最新正式版")
+        return {
+            "ok": True, "kind": kind, "has_update": has, "reason": reason,
+            "current": local,
+            "latest": {"version": ver, "commit": "", "schema_version": ""},
+            "asset": release_asset_name(ver), "platform": platform_pkg(),
+            "db_change": bool(dbst.get("needs_migration")), "db_chain": dbst.get("chain", []),
+            "source_ok": local["source_ok"], "proxy": proxy,
+        }
+
+    # 测试版：沿用源码口径（跟 main 的版本号 + commit），更新时从源码构建。
     remote = remote_info(branch=branch, root=root, timeout=timeout)
     if not remote.get("ok"):
         return {"ok": False, "kind": kind, "current": local,
-                "error": remote.get("error"), "message": remote.get("message"),
-                "proxy": update_proxy() or ""}
+                "error": remote.get("error"), "message": remote.get("message"), "proxy": proxy}
     cmp = compare(kind, local, remote)
-    dbst = db_status(root=root)
     return {
         "ok": True, "kind": kind,
         "has_update": cmp["has_update"], "reason": cmp["reason"],
         "current": local,
         "latest": {"version": remote.get("version", ""), "commit": remote.get("commit", ""),
                    "schema_version": remote.get("schema_version", "")},
-        "db_change": bool(dbst.get("needs_migration")),
-        "db_chain": dbst.get("chain", []),
-        "source_ok": local["source_ok"],
-        "proxy": update_proxy() or "",
+        "db_change": bool(dbst.get("needs_migration")), "db_chain": dbst.get("chain", []),
+        "source_ok": local["source_ok"], "proxy": proxy,
     }
 
 
@@ -396,26 +555,28 @@ def _load_module(path: Path):
     return mod
 
 
-def discover_migration_chain(frm: str, to: str, *, root: Optional[Any] = None) -> list[tuple]:
+def discover_migration_chain(frm: str, to: str, *, root: Optional[Any] = None,
+                             dirs: Optional[list] = None) -> list[tuple]:
     """串出「frm → to」的连续迁移链，返回 ``[(from, to, path), …]``。
 
     只提供「低一级 → 高一级」的脚本；本函数把它们串起来，**绝不跨级**。断链时返回已找到的
-    前缀（调用方据此报「缺哪一跳」）。
+    前缀（调用方据此报「缺哪一跳」）。脚本来自 ``migrations_dirs()``（源码树 + 下载包）。
     """
-    directory = migrations_dir(root)
-    if not directory.is_dir():
-        return []
+    directories = [Path(d) for d in (dirs if dirs is not None else migrations_dirs(root))]
     by_from: dict[str, tuple[str, Path]] = {}
-    for path in sorted(directory.glob("m_*__to_*.py")):
-        try:
-            mod = _load_module(path)
-        except Exception as exc:  # noqa: BLE001 - 坏脚本跳过，别拦整条链
-            _log.warning("迁移脚本无法加载 %s：%s", path.name, exc)
+    for directory in directories:
+        if not directory.is_dir():
             continue
-        f = getattr(mod, "FROM_VERSION", "")
-        t = getattr(mod, "TO_VERSION", "")
-        if f and t:
-            by_from.setdefault(f, (t, path))
+        for path in sorted(directory.glob("m_*__to_*.py")):
+            try:
+                mod = _load_module(path)
+            except Exception as exc:  # noqa: BLE001 - 坏脚本跳过，别拦整条链
+                _log.warning("迁移脚本无法加载 %s：%s", path.name, exc)
+                continue
+            f = getattr(mod, "FROM_VERSION", "")
+            t = getattr(mod, "TO_VERSION", "")
+            if f and t:
+                by_from.setdefault(f, (t, path))
     steps: list[tuple] = []
     cur = frm
     seen: set[str] = set()
@@ -462,32 +623,35 @@ def _snapshot_db(conn: sqlite3.Connection, db_path: Path, tag: str) -> Path:
 
 
 def run_migrations(*, root: Optional[Any] = None, apply: bool = False,
-                   guard: bool = True, backup: bool = True) -> dict:
+                   guard: bool = True, backup: bool = True,
+                   to: Optional[str] = None, dirs: Optional[list] = None) -> dict:
     """逐级应用数据库迁移。``apply=False``（默认）只演练。
 
-    ``guard=True`` 时先抢单实例锁（拒绝在应用运行时迁移）；``apply_update`` 已先占锁，
-    会传 ``guard=False`` 避免自锁。
+    ``to`` 为目标结构版本，缺省取**当前运行代码**的 ``SCHEMA_VERSION``；正式版更新时目标来自
+    下载包内的 ``version.json``、测试版来自拉取后的新源码，故由调用方显式传入。
+    ``guard=True`` 时先抢单实例锁（拒绝在应用运行时迁移）；``apply_update`` 已先占锁，传 ``False``。
     """
     root = repo_root(root)
     st = db_status(root=root)
     if not st.get("ok"):
         return {"ok": False, "message": st.get("message", "无法读取数据库版本")}
-    frm, to = st["disk"], st["app"]
+    frm = st["disk"]
+    to = (to or "").strip() or st["app"]
     if not frm:
         return {"ok": True, "steps": [], "message": "数据库尚未创建，无需迁移"}
     if frm == to:
         return {"ok": True, "steps": [], "message": f"数据库结构已是最新（{to}）"}
     if not _semver_gt(to, frm):
         return {"ok": True, "steps": [],
-                "message": f"磁盘版本 {frm} 不低于源码版本 {to}，无需迁移"}
+                "message": f"磁盘版本 {frm} 不低于目标版本 {to}，无需迁移"}
 
-    steps = discover_migration_chain(frm, to, root=root)
+    steps = discover_migration_chain(frm, to, root=root, dirs=dirs)
     labels = [f"{a}→{b}" for a, b, _ in steps]
     if not steps or steps[-1][1] != to:
         reached = steps[-1][1] if steps else frm
         return {"ok": False, "steps": labels,
-                "message": f"迁移链断档：缺少从 {reached} 升级的脚本（需 scripts/migrations/"
-                           f"m_{reached}__to_*.py）"}
+                "message": f"迁移链断档：缺少从 {reached} 升级的脚本（需 m_{reached}__to_*.py，"
+                           f"放在 scripts/migrations/ 或 .update-meta/migrations/）"}
     if not apply:
         return {"ok": True, "dry_run": True, "steps": labels,
                 "message": "演练：将逐级迁移 " + " → ".join([frm] + [b for _, b, _ in steps])}
@@ -643,12 +807,18 @@ def fetch_latest(*, root: Optional[Any] = None, branch: str = DEFAULT_BRANCH,
 # ── 构建 ──────────────────────────────────────────────────
 
 def run_build(*, root: Optional[Any] = None, frontend: bool = True,
-              extra_args: Optional[list] = None) -> dict:
+              extra_args: Optional[list] = None, python: Optional[str] = None) -> dict:
+    """跑 ``scripts/build.py``。``python`` 指定用哪个解释器（默认 ``sys.executable``）。
+
+    冻结 exe 里的自更新要**用 venv 的解释器**构建（``sys.executable`` 是 exe，跑不了脚本），
+    故由调用方传入 ``ensure_venv()`` 的路径。
+    """
     root = repo_root(root)
     build = root / "scripts" / "build.py"
     if not build.is_file():
-        return {"ok": False, "message": "未找到 scripts/build.py"}
-    cmd = [sys.executable, str(build)]
+        return {"ok": False, "message": "未找到 scripts/build.py（本机没有源码，无法从源码构建）"}
+    py = python or sys.executable
+    cmd = [py, str(build)]
     if frontend:
         cmd.append("--frontend")
     cmd += list(extra_args or [])
@@ -663,7 +833,8 @@ def run_build(*, root: Optional[Any] = None, frontend: bool = True,
     return {"ok": True, "returncode": 0, "message": "构建完成"}
 
 
-def ensure_deps(*, root: Optional[Any] = None, extra: tuple = ("pyinstaller",)) -> dict:
+def ensure_deps(*, root: Optional[Any] = None, extra: tuple = ("pyinstaller",),
+                python: Optional[str] = None) -> dict:
     """确保当前解释器里装好 ``requirements.txt`` 与构建额外依赖（``pyinstaller``）。
 
     **走更新代理**（见 ``proxy_env``）——否则本机访问 PyPI 需要代理时，引导脚本里的 pip 会失败。
@@ -671,11 +842,12 @@ def ensure_deps(*, root: Optional[Any] = None, extra: tuple = ("pyinstaller",)) 
     """
     root = repo_root(root)
     env = _child_env()
+    py = python or sys.executable
     commands: list[list[str]] = []
     req = root / "requirements.txt"
     if req.is_file():
-        commands.append([sys.executable, "-m", "pip", "install", "-q", "-r", str(req)])
-    commands.append([sys.executable, "-m", "pip", "install", "-q", *extra])
+        commands.append([py, "-m", "pip", "install", "-q", "-r", str(req)])
+    commands.append([py, "-m", "pip", "install", "-q", *extra])
     for cmd in commands:
         try:
             r = subprocess.run(cmd, cwd=str(root), env=env,
@@ -685,6 +857,58 @@ def ensure_deps(*, root: Optional[Any] = None, extra: tuple = ("pyinstaller",)) 
         if r.returncode != 0:
             return {"ok": False, "message": f"依赖安装失败：{_short(r.stderr or r.stdout)}"}
     return {"ok": True, "message": "依赖已就绪"}
+
+
+def _venv_python(root: Optional[Any] = None) -> Path:
+    """项目下虚拟环境的解释器路径（Linux `.venv/bin/python` / Windows `.venv\\Scripts\\python.exe`）。"""
+    base = repo_root(root) / ".venv"
+    return base / ("Scripts" / "python.exe" if os.name == "nt" else "bin" / "python")
+
+
+def ensure_venv(root: Optional[Any] = None) -> dict:
+    """确保项目下有可用的虚拟环境，返回其解释器路径（没有就现建一个，离线可完成）。"""
+    root = repo_root(root)
+    venv_py = _venv_python(root)
+    if venv_py.is_file():
+        return {"ok": True, "python": str(venv_py)}
+    sys_py = shutil.which("python3") or shutil.which("python") or sys.executable
+    try:
+        r = subprocess.run([sys_py, "-m", "venv", str(root / ".venv")], cwd=str(root),
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"创建虚拟环境失败：{exc}"}
+    if r.returncode != 0 or not venv_py.is_file():
+        return {"ok": False, "message": f"创建虚拟环境失败：{_short(r.stderr) or '未知错误'}"}
+    return {"ok": True, "python": str(venv_py)}
+
+
+def ensure_source(*, root: Optional[Any] = None, branch: str = DEFAULT_BRANCH,
+                  force: bool = False) -> dict:
+    """确保程序目录是一份（最新的）源码：是仓库就快进，不是就就地初始化并检出。
+
+    供**测试版**（从源码构建）用——从 Releases 装的二进制版本机没有源码，这里把它转成源码部署
+    （``git init`` + ``fetch`` + ``checkout -f``）；``data/``、可执行文件等未跟踪文件原样保留。
+    """
+    root = repo_root(root)
+    if not git_available():
+        return {"ok": False, "message": "未安装 git，无法从源码构建"}
+    if is_source_checkout(root):
+        return fetch_latest(root=root, branch=branch, force=force)
+    url = _remote_url()
+    try:
+        _git(["init"], cwd=root)
+        _git(["remote", "remove", "origin"], cwd=root)
+        if _git(["remote", "add", "origin", url], cwd=root).returncode != 0:
+            return {"ok": False, "message": "配置 git 远端失败"}
+        fe = _git(["fetch", "--depth", str(CLONE_DEPTH), "origin", branch], cwd=root, timeout=180)
+        if fe.returncode != 0:
+            return {"ok": False, "message": f"拉取源码失败：{_short(fe.stderr)}"}
+        co = _git(["checkout", "-f", "-B", branch, "FETCH_HEAD"], cwd=root)
+        if co.returncode != 0:
+            return {"ok": False, "message": f"检出源码失败：{_short(co.stderr)}"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "message": "拉取源码超时（网络不可用？）"}
+    return {"ok": True, "message": "已把源码拉取到程序目录（转为源码部署）"}
 
 
 # ── 进程：脱离 / 等待退出 / 重启 ───────────────────────────
@@ -736,15 +960,26 @@ def wait_for_app_exit(*, root: Optional[Any] = None, timeout: float = 90,
         time.sleep(poll)
 
 
-def relaunch_app(*, root: Optional[Any] = None) -> dict:
-    """重启应用（脱离当前更新进程）。优先重启构建出的可执行文件，否则回退 ``python main.py``。"""
+def relaunch_app(*, root: Optional[Any] = None, prefer: str = "auto") -> dict:
+    """重启应用（脱离当前更新进程）。
+
+    ``prefer``：``"exe"`` 跑预编译二进制（正式版更新后）、``"source"`` 跑 ``python main.py``
+    （测试版在源码部署下）、``"auto"`` 按当前形态（冻结→exe，源码→main.py）。
+    """
     root = repo_root(root)
     exe = root / _exe_name()
-    log = root / "data" / "logs" / f"relaunch-{time.strftime('%Y%m%d-%H%M%S')}.log"
-    if exe.is_file():
+    main_py = root / "main.py"
+    if prefer == "auto":
+        prefer = "source" if (not is_frozen() and main_py.is_file()) else "exe"
+    if prefer == "source" and main_py.is_file():
+        argv = [sys.executable, str(main_py)]
+    elif exe.is_file():
         argv = [str(exe)]
+    elif main_py.is_file():
+        argv = [sys.executable, str(main_py)]
     else:
-        argv = [sys.executable, str(root / "main.py")]
+        return {"ok": False, "message": "找不到可启动的程序（既无可执行文件，也无 main.py）"}
+    log = root / "data" / "logs" / f"relaunch-{time.strftime('%Y%m%d-%H%M%S')}.log"
     try:
         pid = spawn_detached(argv, cwd=root, log=log)
     except Exception as exc:  # noqa: BLE001
@@ -791,98 +1026,158 @@ def _relaunch_spec(root: Path) -> dict:
     return {"frozen": False, "exe": sys.executable, "argv": [str(root / "main.py")], "cwd": str(root)}
 
 
+def _stages_for(kind: str) -> list:
+    if kind == "formal":
+        return ["backup", "download", "migrate", "restart"]
+    return ["backup", "source", "deps", "build", "migrate", "restart"]
+
+
 def apply_update(kind: str = "formal", *, root: Optional[Any] = None, frontend: bool = True,
                  do_backup: bool = True, do_migrate: bool = True, do_restart: bool = True,
                  force: bool = False, dry_run: bool = False,
                  log: Callable[[str], None] = print) -> dict:
-    """更新主流程：等应用退出 → 备份 → 取源码 → 构建 → 迁移 → 重启（全程写状态文件）。
+    """更新主流程：等应用退出 → 按渠道执行 → 迁移 → 重启（全程写状态文件）。
 
-    由 ``scripts/build_update.py`` 在应用退出后调用。
+    - **正式版**：下载对应平台的预编译包 → 解压替换 → 迁移 → 重启（**不编译**）。
+    - **测试版**：获取/拉取源码 → 装依赖 → 构建 → 迁移 → 重启。
+
+    由 ``main.py --self-update``（应用内交棒）或 ``scripts/build_update.py`` 调用。
     """
     root = repo_root(root)
     req = read_request(root)
     kind = (req.get("kind") or kind) if req else kind
     kind = kind if kind in CHANNELS else "formal"
-    stages = ["backup", "fetch", "deps", "build", "migrate", "restart"]
+    stages = _stages_for(kind)
 
     if dry_run:
-        log("演练：将依次执行 " + " → ".join(stages))
-        return {"ok": True, "dry_run": True, "stages": stages}
+        log(f"演练（{kind}）：将依次执行 " + " → ".join(stages))
+        return {"ok": True, "dry_run": True, "kind": kind, "stages": stages}
 
     _write_status(root, {"phase": "waiting", "ok": None, "kind": kind, "stages": stages,
                          "message": "等待应用退出…"})
     if not wait_for_app_exit(root=root):
-        _write_status(root, {"phase": "failed", "ok": False, "kind": kind,
-                             "message": "等待应用退出超时", "stages": stages})
+        _write_status(root, {"phase": "failed", "ok": False, "kind": kind, "stages": stages,
+                             "message": "等待应用退出超时"})
         return {"ok": False, "message": "等待应用退出超时"}
 
-    log_capture: list[str] = []
-
-    def say(text: str) -> None:
-        log(text)
-        log_capture.append(text)
-
-    def stage(name: str, message: str) -> None:
-        _write_status(root, {"phase": name, "ok": None, "kind": kind,
-                             "stages": stages, "message": message})
-
-    from . import version as _v
-    frm = _v.APP_VERSION
-    result: dict = {"ok": True, "kind": kind, "from": frm}
+    frm = version.APP_VERSION
     try:
-        if do_backup:
-            stage("backup", "备份旧产物…")
-            bk = make_backup(root=root, kind=kind)
-            if not bk.get("ok"):
-                result = {"ok": False, "message": bk.get("message", "备份失败")}
-                return _finish(root, kind, frm, result, stages)
-            say(f"已备份 → {bk['path']}（{bk['message']}）")
-
-        stage("fetch", "拉取最新源码…")
-        fr = fetch_latest(root=root, force=force)
-        if not fr.get("ok"):
-            result = {"ok": False, "message": fr.get("message")}
-            return _finish(root, kind, frm, result, stages)
-        say(fr.get("message", "源码已更新"))
-
-        stage("deps", "检查 / 安装构建依赖（走更新代理）…")
-        dp = ensure_deps(root=root)
-        if not dp.get("ok"):
-            result = {"ok": False, "message": dp.get("message")}
-            return _finish(root, kind, frm, result, stages)
-        say(dp.get("message", "依赖已就绪"))
-
-        stage("build", "重新编译（scripts/build.py --frontend）…")
-        bd = run_build(root=root, frontend=frontend)
-        if not bd.get("ok"):
-            result = {"ok": False, "message": bd.get("message")}
-            return _finish(root, kind, frm, result, stages)
-        say(bd.get("message", "构建完成"))
-
-        if do_migrate:
-            stage("migrate", "检查数据库结构…")
-            mg = run_migrations(root=root, apply=True, guard=False)
-            if not mg.get("ok"):
-                result = {"ok": False, "message": mg.get("message")}
-                return _finish(root, kind, frm, result, stages)
-            say(mg.get("message", "数据库已就绪"))
-
-        result["to"] = _v.APP_VERSION
+        if kind == "formal":
+            result = _apply_formal(root, do_backup=do_backup, do_migrate=do_migrate, log=log)
+        else:
+            result = _apply_test(root, frontend=frontend, do_backup=do_backup,
+                                 do_migrate=do_migrate, force=force, log=log)
     except Exception as exc:  # noqa: BLE001 - 编排边界兜底，如实报错
         _log.exception("更新流程异常")
         result = {"ok": False, "message": f"更新异常：{type(exc).__name__}"}
-        return _finish(root, kind, frm, result, stages)
-    finally:
-        # 到重启之前才释放单实例锁；失败路径也要释放，否则下次起不来
-        if not (do_restart and result.get("ok")):
-            single_instance.release()
 
+    prefer = result.pop("prefer_restart", "auto")
     if do_restart and result.get("ok"):
-        stage("restart", "重启程序…")
+        _write_status(root, {"phase": "restart", "ok": None, "kind": kind, "stages": stages,
+                             "message": "重启程序…"})
         single_instance.release()          # 必须先放锁，否则新应用会把自己当第二实例退出
-        rl = relaunch_app(root=root)
-        say(rl.get("message", f"已重启（pid={rl.get('pid')}）"))
+        rl = relaunch_app(root=root, prefer=prefer)
+        if rl.get("ok"):
+            log(f"已重启（pid={rl.get('pid')}）")
+        else:
+            result = {"ok": False, "message": rl.get("message", "重启失败")}
+    else:
+        single_instance.release()
     return _finish(root, kind, frm, result, stages)
+
+
+def _apply_formal(root: Path, *, do_backup: bool, do_migrate: bool,
+                  log: Callable[[str], None]) -> dict:
+    """正式版：查最新正式版 → 备份 → 下载预编译包 → 解压替换 → 迁移。重启偏好 ``exe``。"""
+    def stage(name: str, message: str) -> None:
+        _write_status(root, {"phase": name, "ok": None, "kind": "formal",
+                             "stages": _stages_for("formal"), "message": message})
+
+    stage("download", "查询最新正式版…")
+    rel = latest_release_tag()
+    if not rel.get("ok"):
+        return {"ok": False, "message": rel.get("message", "查询最新正式版失败")}
+    ver = rel["version"]
+    if not _semver_gt(ver, version.APP_VERSION):
+        return {"ok": True, "to": version.APP_VERSION, "prefer_restart": "exe",
+                "message": f"已是最新正式版（{version.APP_VERSION}）"}
+
+    if do_backup:
+        stage("backup", "备份旧产物…")
+        bk = make_backup(root=root, kind="formal")
+        if not bk.get("ok"):
+            return {"ok": False, "message": bk.get("message", "备份失败")}
+        log(f"已备份 → {bk['path']}（{bk['message']}）")
+
+    stage("download", f"下载预编译包 {release_asset_name(ver)}…")
+    tmp = backups_dir(root) / f"_asset-{ver}.zip"
+    dl = download_release_asset(release_asset_url(ver), tmp)
+    if not dl.get("ok"):
+        return {"ok": False, "message": f"{dl.get('message')}（该平台可能尚未发布对应包）"}
+    log(f"已下载（{dl.get('bytes', 0) // 1024} KB）")
+
+    ex = extract_release_zip(tmp, root)
+    tmp.unlink(missing_ok=True)
+    if not ex.get("ok"):
+        return {"ok": False, "message": ex.get("message")}
+
+    if do_migrate:
+        stage("migrate", "迁移数据库结构…")
+        to_schema = str(read_release_meta(update_meta_dir(root)).get("schema_version") or "")
+        if to_schema:
+            mg = run_migrations(root=root, apply=True, guard=False, to=to_schema)
+            if not mg.get("ok"):
+                return {"ok": False, "message": mg.get("message")}
+            log(mg.get("message", "数据库已就绪"))
+    return {"ok": True, "to": ver, "prefer_restart": "exe"}
+
+
+def _apply_test(root: Path, *, frontend: bool, do_backup: bool, do_migrate: bool,
+                force: bool, log: Callable[[str], None]) -> dict:
+    """测试版：备份 → 获取源码 → 建/补环境 → 构建 → 迁移。重启偏好按当前形态。"""
+    def stage(name: str, message: str) -> None:
+        _write_status(root, {"phase": name, "ok": None, "kind": "test",
+                             "stages": _stages_for("test"), "message": message})
+
+    if do_backup:
+        stage("backup", "备份旧产物…")
+        bk = make_backup(root=root, kind="test")
+        if not bk.get("ok"):
+            return {"ok": False, "message": bk.get("message", "备份失败")}
+        log(f"已备份 → {bk['path']}")
+
+    stage("source", "获取最新源码…")
+    src = ensure_source(root=root, force=force)
+    if not src.get("ok"):
+        return {"ok": False, "message": src.get("message")}
+    log(src.get("message", "源码已就绪"))
+
+    stage("deps", "准备构建环境（虚拟环境 + 依赖）…")
+    vn = ensure_venv(root=root)
+    if not vn.get("ok"):
+        return {"ok": False, "message": vn.get("message")}
+    py = vn["python"]
+    dp = ensure_deps(root=root, python=py)
+    if not dp.get("ok"):
+        return {"ok": False, "message": dp.get("message")}
+    log(dp.get("message", "依赖已就绪"))
+
+    stage("build", "从源码构建（scripts/build.py --frontend）…")
+    bd = run_build(root=root, frontend=frontend, python=py)
+    if not bd.get("ok"):
+        return {"ok": False, "message": bd.get("message")}
+    log(bd.get("message", "构建完成"))
+
+    meta = source_meta(root)                       # 新源码的版本（迁移目标）
+    if do_migrate and meta.get("schema_version"):
+        stage("migrate", "迁移数据库结构…")
+        mg = run_migrations(root=root, apply=True, guard=False, to=meta["schema_version"])
+        if not mg.get("ok"):
+            return {"ok": False, "message": mg.get("message")}
+        log(mg.get("message", "数据库已就绪"))
+
+    return {"ok": True, "to": meta.get("app_version") or version.APP_VERSION,
+            "prefer_restart": "exe" if is_frozen() else "source"}
 
 
 def _finish(root: Path, kind: str, frm: str, result: dict, stages: list) -> dict:
@@ -902,22 +1197,25 @@ def _finish(root: Path, kind: str, frm: str, result: dict, stages: list) -> dict
 
 # ── 应用内入口：交棒 ──────────────────────────────────────
 
-def _updater_script(root: Path) -> Path:
-    return root / "scripts" / ("build_update.bat" if os.name == "nt" else "build_update.sh")
+def _self_update_argv(root: Path, kind: str) -> list[str]:
+    """「自更新」进程的命令：冻结 exe 用 ``--self-update``（exe 内跑 updater），
+    源码运行用 ``python main.py --self-update``。两者都**不建窗口**，跑完即退。"""
+    if is_frozen():
+        return [sys.executable, "--self-update", kind]
+    return [sys.executable, str(root / "main.py"), "--self-update", kind]
 
 
-def _spawn_updater(root: Path, terminal: str) -> int:
-    """把「构建更新」脚本起成脱离进程。Windows 走独立 CMD 窗口；POSIX 走新会话。"""
-    script = _updater_script(root)
-    if not script.is_file():
-        raise FileNotFoundError(f"未找到更新脚本：{script}")
+def _spawn_updater(root: Path, kind: str, terminal: str) -> int:
+    """把「自更新」起成脱离进程。Windows 走独立 CMD 窗口；POSIX 走新会话并记日志。"""
+    argv = _self_update_argv(root, kind)
+    env = proxy_env()          # 把更新代理注入子进程（git / pip / npm 据此出网）
     if os.name == "nt":
-        # cmd /c start "" cmd /k <script>：新控制台窗口（满足「打开 CMD 窗口」）
-        argv = ["cmd", "/c", "start", "Keyrealm 更新", "cmd", "/k", str(script)]
-        return spawn_detached(argv, cwd=root, env=proxy_env())
+        # cmd /c start "" cmd /k <命令>：新控制台窗口（满足「打开 CMD 窗口」）
+        inner = subprocess.list2cmdline(argv)
+        return spawn_detached(["cmd", "/c", "start", "Keyrealm 更新", "cmd", "/k", inner],
+                              cwd=root, env=env)
     log = root / "data" / "logs" / f"update-{time.strftime('%Y%m%d-%H%M%S')}.log"
-    # 把更新代理注入到脚本进程：引导脚本里的 pip、以及后续 git/pip/npm 全都据此出网
-    return spawn_detached(["bash", str(script)], cwd=root, log=log, env=proxy_env())
+    return spawn_detached(argv, cwd=root, log=log, env=env)
 
 
 def start_update(kind: str = "formal", *, root: Optional[Any] = None,
@@ -925,15 +1223,13 @@ def start_update(kind: str = "formal", *, root: Optional[Any] = None,
                  quit_cb: Optional[Callable[[], None]] = None) -> dict:
     """应用内「立即更新」：写请求文件 → 起脱离进程 → 关程序（交棒）。
 
-    **顺序不可颠倒**：先把更新脚本起起来，确认进程起来了，再退出应用。
+    **顺序不可颠倒**：先把自更新进程起起来，确认起来了，再退出应用。
+    正式版只需能联网下载预编译包；测试版需要能拿到源码（有 git 即可，本机没源码会自动拉）。
     """
     root = repo_root(root)
-    if not is_source_checkout(root):
-        return {"ok": False, "message": "当前不是源码仓库（未检测到 .git），无法从源码重建；"
-                                        "请在源码目录中运行，或重新获取分发包。"}
-    if is_frozen() and not is_source_checkout(root):
-        return {"ok": False, "message": "当前为打包版且无源码，暂不支持程序内更新。"}
     kind = kind if kind in CHANNELS else "formal"
+    if kind == "test" and not git_available():
+        return {"ok": False, "message": "测试版需要从源码构建：本机未安装 git，无法拉取源码。"}
 
     req = {"kind": kind, "restart": bool(restart), "terminal": terminal or "auto",
            "requested_at": _now(), "relaunch": _relaunch_spec(root)}
@@ -942,7 +1238,7 @@ def start_update(kind: str = "formal", *, root: Optional[Any] = None,
     path.write_text(json.dumps(req, ensure_ascii=False, indent=2), encoding="utf-8")
 
     try:
-        pid = _spawn_updater(root, req["terminal"])
+        pid = _spawn_updater(root, kind, req["terminal"])
     except Exception as exc:  # noqa: BLE001 - 起不来就绝不退出应用
         _log.error("启动更新进程失败：%s", exc)
         return {"ok": False, "message": f"无法启动更新进程：{exc}"}
@@ -962,5 +1258,6 @@ def start_update(kind: str = "formal", *, root: Optional[Any] = None,
 
         threading.Thread(target=_later, daemon=True).start()
 
+    hint = "将下载预编译包并替换当前程序" if kind == "formal" else "将从源码重新构建"
     return {"ok": True, "pid": pid,
-            "message": "已开始更新：程序将关闭，在终端中备份并重建后自动重启。"}
+            "message": f"已开始更新：程序将关闭，{hint}，完成后自动重启。"}

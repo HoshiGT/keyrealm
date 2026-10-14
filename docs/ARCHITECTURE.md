@@ -638,8 +638,15 @@ pywebview 没有「再次显示」事件可挂（`Form.Shown` 只触发一次，
 内部模块（`paths`/`version`/`database`/`single_instance`），因此**任何 Python 3.11+ 都能 import
 它**（含 venv 尚未创建时），四个脚本据此复用。
 
-**两档口径**（都跟踪 `main`）：**正式版**比较 `APP_VERSION`（远端更高才算有更新）；**测试版**
-比较「版本号 **或** commit」（去 `-dirty` 后任一不同即算）。渠道存 `settings.update_channel`。
+**两档更新方式不同**：**正式版**对比 **GitHub Release 的最新正式版标签**，更新时**下载对应平台的
+预编译包**（`Keyrealm-<版本>-<平台>.zip`）**替换当前程序**、迁移数据库、重启——**不编译**（源码部署
+会因此切成二进制）。**测试版**跟 `main`（版本号 **或** commit 任一不同即算有更新），更新时**从源码
+构建**：程序目录是仓库就快进，否则 `git init` + `fetch` + `checkout` **就地转成源码部署**，再建/补
+`.venv`、装依赖、`scripts/build.py --frontend`。渠道存 `settings.update_channel`。
+
+**更新代理**（`settings.update_proxy_mode` / `update_proxy_id`）：跟随全局默认 / 直连 / 指定某个代理，
+环境变量 `KEYREALM_UPDATE_PROXY` 可覆盖。git 的代理经 `git -c http.proxy=…` 注入（**压过 git 全局
+配置里的 `http.proxy`**，环境变量对它无效）；pip / npm 走 `http_proxy` / `all_proxy`。
 
 **检查只读**：`check_update()` 用 `git clone --depth 1` 到**临时目录**读远端 `backend/version.py`
 （`ast` 解析，不 `eval`）与 commit，用完删临时目录——**不碰当前工作区**。真正前进工作区的是
@@ -647,9 +654,10 @@ pywebview 没有「再次显示」事件可挂（`Form.Shown` 只触发一次，
 `stash`）。
 
 **交棒时序（顺序不可颠倒）**：应用内 `start_update()` → 写 `data/.update-request.json` →
-`spawn_detached()` 把 `scripts/build_update.{sh,bat}` 起成**脱离进程**（Windows
-`DETACHED_PROCESS` + `cmd start` 开独立 CMD 窗口；POSIX `start_new_session`）→ **确认子进程起来
-之后**才调 `_close_quit_cb()`（= `main._quit_app`）退出。脚本首步 `wait_for_app_exit()` 轮询
+`spawn_detached()` 把**自更新进程**起成**脱离进程**（冻结 exe 用 `Keyrealm --self-update <渠道>`、
+源码运行用 `python main.py --self-update <渠道>`；Windows 用 `cmd start` 开独立 CMD 窗口，
+POSIX 走 `start_new_session`）→ **确认子进程起来之后**才调 `_close_quit_cb()`（= `main._quit_app`）退出。
+`main.py` 的 `--self-update` 分支不建窗口，直接跑 `updater.apply_update()`。脚本首步 `wait_for_app_exit()` 轮询
 `single_instance.acquire()`（拿不到锁 = 应用还在跑）；它同时**占住锁**保证更新期间没人能启动
 应用，**重启新应用前必须 `single_instance.release()`**（`backend/single_instance.py` 为此新增了
 `release()`）。
