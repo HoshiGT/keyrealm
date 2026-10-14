@@ -63,11 +63,17 @@ WORK = ROOT / "build"     # PyInstaller 中间文件（gitignored）
 IS_WINDOWS = platform.system() == "Windows"
 EXE_NAME = "Keyrealm.exe" if IS_WINDOWS else "Keyrealm"
 
+# 构建由**窗口化**的 exe（或应用内「准备阶段」）拉起时，进程本身没有控制台——
+# 此时 spawn 控制台子进程（npm / PyInstaller / git）Windows 会**新开一个黑框**。
+# 统一加 CREATE_NO_WINDOW 压掉；子进程再套子进程时它也一并继承（不再有新控制台）。
+_NO_WINDOW = 0x08000000 if IS_WINDOWS else 0   # CREATE_NO_WINDOW
+
 
 def _run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> None:
     """执行子进程，实时透传输出，失败即退出。"""
     print(f"\n$ {' '.join(str(c) for c in cmd)}\n", flush=True)
-    result = subprocess.run(cmd, cwd=str(cwd) if cwd else None, env=env)
+    result = subprocess.run(cmd, cwd=str(cwd) if cwd else None, env=env,
+                            creationflags=_NO_WINDOW)
     if result.returncode != 0:
         sys.exit(f"命令失败（退出码 {result.returncode}）：{' '.join(map(str, cmd))}")
 
@@ -172,6 +178,7 @@ def run_capture(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     """
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
     env.update(kwargs.pop("env", None) or {})
+    kwargs.setdefault("creationflags", _NO_WINDOW)
     return subprocess.run(cmd, capture_output=True, text=True,
                           encoding="utf-8", errors="replace", env=env, **kwargs)
 
@@ -252,12 +259,10 @@ def write_build_info() -> None:
     """
     commit = "unknown"
     try:
-        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
-                             capture_output=True, text=True, cwd=str(ROOT))
+        out = run_capture(["git", "rev-parse", "--short", "HEAD"], cwd=str(ROOT))
         if out.returncode == 0 and out.stdout.strip():
             commit = out.stdout.strip()
-            dirty = subprocess.run(["git", "status", "--porcelain"],
-                                   capture_output=True, text=True, cwd=str(ROOT))
+            dirty = run_capture(["git", "status", "--porcelain"], cwd=str(ROOT))
             if dirty.stdout.strip():
                 commit += "-dirty"
     except Exception as e:  # noqa: BLE001 - 万一没装 git：标 unknown，不拦构建
