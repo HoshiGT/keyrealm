@@ -1,7 +1,7 @@
 """百度文心 API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
 
 协议：POST {base}/oauth/2.0/token（client_credentials）。
-凭证格式为 API_KEY|SECRET_KEY（由子插件自行拆分）。
+凭证为 **API Key + Secret Key 两个字段**（旧版把两者拼在一个字段里、用 ``|`` 分隔，仍兼容）。
 
 参考文档：https://cloud.baidu.com/doc/WENXINWORKSHOP/index.html
 """
@@ -26,10 +26,19 @@ DEFAULT_BASE_URL = "https://aip.baidubce.com"
 PROTOCOL = "wenxin"
 
 
-def _split_key(api_key: str) -> tuple[str, str]:
-    """百度文心凭证格式为 API_KEY|SECRET_KEY。"""
-    parts = api_key.split("|", 1)
-    return parts[0].strip(), (parts[1].strip() if len(parts) > 1 else "")
+def _creds(data: dict) -> tuple[str, str]:
+    """取 (client_id, client_secret)。
+
+    新格式是两个独立字段 ``api_key`` / ``secret_key``；旧版把两者拼在一个字段里
+    （``API_KEY|SECRET_KEY``），这里继续认——``api_key`` 里出现 ``|`` 就地拆分，
+    于是老凭据不改动也仍然可用（用户重填这笔时自然分开即可）。
+    """
+    api_key = (data.get("api_key") or "").strip()
+    secret = (data.get("secret_key") or "").strip()
+    if "|" in api_key:
+        client_id, _, tail = api_key.partition("|")
+        return client_id.strip(), (tail.strip() or secret)
+    return api_key, secret
 
 
 def validate(data: dict) -> list[str]:
@@ -38,20 +47,17 @@ def validate(data: dict) -> list[str]:
         return ["配置数据为空"]
 
     errors: list[str] = []
-    api_key = (data.get("api_key") or "").strip()
-    if not api_key:
+    client_id, client_secret = _creds(data)
+    if not client_id:
         errors.append("API Key 不能为空")
+    if not client_secret:
+        errors.append("Secret Key 不能为空")
     if not DEFAULT_BASE_URL and not (data.get("base_url") or "").strip():
         errors.append(f"厂商「{NAME}」需要填写 Base URL")
-    if api_key:
-        client_id, client_secret = _split_key(api_key)
-        if not client_id or not client_secret:
-            errors.append("百度文心凭证格式应为 API_KEY|SECRET_KEY")
     return errors
 
 
-def _probe(base_url: str, api_key: str) -> VerifyResult:
-    client_id, client_secret = _split_key(api_key)
+def _probe(base_url: str, client_id: str, client_secret: str) -> VerifyResult:
     url = base_url.rstrip("/") + "/oauth/2.0/token"
     with make_client() as client:
         resp = client.post(
@@ -84,15 +90,15 @@ def _probe(base_url: str, api_key: str) -> VerifyResult:
 
 
 def _verify(data: dict) -> VerifyResult:
-    api_key = (data.get("api_key") or "").strip()
-    if not api_key:
-        return VerifyResult(status="invalid", message="API Key 为空")
+    client_id, client_secret = _creds(data)
+    if not client_id or not client_secret:
+        return VerifyResult(status="invalid", message="API Key / Secret Key 不完整")
 
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
     if not base_url:
         return VerifyResult(status="error", message=f"厂商「{NAME}」需要填写 Base URL")
 
-    return _probe(base_url, api_key)
+    return _probe(base_url, client_id, client_secret)
 
 
 @guarded
@@ -113,11 +119,10 @@ _CHAT_ENDPOINTS = {
 }
 
 
-def _get_access_token(base_url: str, api_key: str) -> tuple[Optional[str], Optional[str]]:
+def _get_access_token(base_url: str, client_id: str, client_secret: str) -> tuple[Optional[str], Optional[str]]:
     """OAuth 换取 access_token；返回 (token, error)。"""
-    client_id, client_secret = _split_key(api_key)
     if not client_id or not client_secret:
-        return None, "凭证格式应为 API_KEY|SECRET_KEY"
+        return None, "API Key / Secret Key 不完整"
     url = base_url.rstrip("/") + "/oauth/2.0/token"
     try:
         with make_client() as client:
@@ -144,8 +149,9 @@ def _get_access_token(base_url: str, api_key: str) -> tuple[Optional[str], Optio
 
 
 def actions(data: dict) -> list[dict]:
-    """声明可用操作（凭据含 API Key 时才提供简单对话）。"""
-    if not (data or {}).get("api_key"):
+    """声明可用操作（凭据含完整的 API Key / Secret Key 时才提供简单对话）。"""
+    client_id, client_secret = _creds(data or {})
+    if not client_id or not client_secret:
         return []
     return [{"id": "chat", "name": "简单对话", "kind": "chat", "model": ""}]
 
@@ -176,7 +182,8 @@ def run_action(action_id: str, params: dict, data: dict) -> dict:
             "error": f"不支持的文心模型：{model}（支持：{', '.join(_CHAT_ENDPOINTS)}）",
         }
 
-    token, err = _get_access_token(base_url, (data.get("api_key") or "").strip())
+    client_id, client_secret = _creds(data)
+    token, err = _get_access_token(base_url, client_id, client_secret)
     if err:
         return {"ok": False, "error": err}
 
@@ -210,7 +217,7 @@ def get_display_summary(data: dict) -> str:
 
 
 # ── 可选：欠费探测（鉴权格式非通用，因此不使用 make_quota_probe）────────
-# 文心需使用 API_KEY|SECRET_KEY 换取 access_token，且聊天端点按模型分路径，无法直接复用通用探测。
+# 文心需用 API Key / Secret Key 换 access_token，且聊天端点按模型分路径，无法直接复用通用探测。
 # 免费档模型（ernie-speed / lite / tiny）不计费，因此探测仅选择付费档。
 # 付费档由端点后缀与模型名是否一致推断，不额外维护模型名单。
 _PAID_MODELS = tuple(m for m, ep in _CHAT_ENDPOINTS.items() if ep != m)
@@ -230,9 +237,9 @@ def quota_probe(data: dict) -> Optional[dict]:
     if not probe_requested(data):
         return None
 
-    api_key = (data.get("api_key") or "").strip()
+    client_id, client_secret = _creds(data)
     base_url = (data.get("base_url") or "").strip() or DEFAULT_BASE_URL
-    if not api_key or not base_url:
+    if not client_id or not client_secret or not base_url:
         return None
 
     # 指定模型不在端点路由表中时无法探测。
@@ -244,7 +251,7 @@ def quota_probe(data: dict) -> Optional[dict]:
     if not candidates:
         return quota_unknown()
 
-    token, err = _get_access_token(base_url, api_key)
+    token, err = _get_access_token(base_url, client_id, client_secret)
     if err or not token:
         return quota_unknown()  # 换 token 失败不构成「欠费」结论（verify 已确认凭据有效）
 

@@ -450,7 +450,7 @@ def quota_probe(data: dict):
     return None                             # 其它情况一律不下结论
 ```
 
-实例：`plugins/llm/wenxin/plugin.py`——文心要用 `API_KEY|SECRET_KEY` 换 `access_token`、
+实例：`plugins/llm/wenxin/plugin.py`——文心要用 API Key + Secret Key 两个字段换 `access_token`、
 聊天端点还带模型后缀，通用实现拼不出来；另有一处特殊行为：**免费档模型（ernie-speed / lite / tiny）
 不计费，欠费时照样能对话**，所以自动选型只挑付费档（从端点表现推，见 `_PAID_MODELS`）。
 

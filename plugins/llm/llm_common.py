@@ -47,7 +47,7 @@ def plausible_amount(value) -> bool:
 #   {"message": "..."}            → 替换状态说明（用 quota_insufficient()）
 #
 # 绝大多数插件用 ``quota_probe = make_quota_probe(DEFAULT_BASE_URL, "<对话协议>")`` 一行接入；
-# **鉴权非通用格式的插件**（如百度文心要先拿 API_KEY|SECRET_KEY 换 access_token、聊天端点
+# **鉴权非通用格式的插件**（如百度文心要先拿 API Key + Secret Key 换 access_token、聊天端点
 # 还带模型后缀）在自己的 plugin.py 里实现 quota_probe，复用下面这些读取/结论辅助函数即可。
 
 def _truthy(value) -> bool:
