@@ -38,7 +38,9 @@ for stream in (sys.stdout, sys.stderr):
 from backend import database as db  # noqa: E402  (必须在 sys.path 调整之后导入)
 from backend.version import SCHEMA_VERSION  # noqa: E402
 
-# 建表脚本里应当出现的每一张表
+# 建表脚本里应当出现的每一张表。
+# **增删表时必须同步这里**——构建（scripts/build.py）的「建表自检」就是拿它核对的，
+# 漏改会在打包时直接 ✗ 缺表/多表被挡下（这是有意的护栏）。
 EXPECTED_TABLES = (
     "settings", "groups", "credentials", "plugins", "mcp_permissions",
     "schedules", "proxies", "preset_defaults",
