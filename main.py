@@ -648,6 +648,15 @@ if __name__ == "__main__":
     # 冻结 exe 与源码运行都用这条路径（后者是 `python main.py --self-update <kind>`）。
     if "--self-update" in sys.argv:
         from backend import updater
+
+        def _say(msg: str) -> None:
+            """往本进程的 stdout 写一行。**打不出来也绝不能让更新挂掉**
+            （窗口化进程里 stdout 可能是 None；正常路径已被 spawn 重定向到 update-*.log）。"""
+            try:
+                print(msg, flush=True)
+            except Exception:  # noqa: BLE001
+                pass
+
         # Windows 控制台默认非 UTF-8，自更新全程要打中文——先钉成 UTF-8，否则一开打就 UnicodeEncodeError。
         for _stream in (sys.stdout, sys.stderr):
             try:
@@ -656,6 +665,9 @@ if __name__ == "__main__":
                 pass
         _idx = sys.argv.index("--self-update")
         _kind = sys.argv[_idx + 1] if len(sys.argv) > _idx + 1 else "formal"
-        sys.exit(0 if updater.apply_update(_kind).get("ok") else 1)
+        _say(f"=== Keyrealm 自更新进程启动（渠道={_kind}，pid={os.getpid()}）===")
+        _ok = updater.apply_update(_kind).get("ok")
+        _say(f"=== 自更新进程结束：{'成功' if _ok else '失败'} ===")
+        sys.exit(0 if _ok else 1)
 
     main()

@@ -1231,19 +1231,31 @@ def spawn_detached(argv: list[str], *, cwd: Path, log: Optional[Path] = None,
 
 
 def wait_for_app_exit(*, root: Optional[Any] = None, timeout: float = 90,
-                      poll: float = 1.0) -> bool:
+                      poll: float = 1.0,
+                      log: Optional[Callable[[str], None]] = None) -> bool:
     """等下应用完全退出，并**顺手占住单实例锁**（更新期间不让应用启动）。
 
     判据就是单实例锁：应用还在跑 → `acquire()` 拿不到 → 继续等；拿到了说明应用已退。
     调用方（`apply_update`）在重启新应用前必须 `single_instance.release()`。
+
+    ``log`` 每 ~15 秒报一次「还在等」——交棒进程没有窗口，长等待期间日志一片空白
+    会让人以为卡死了。
     """
     deadline = time.monotonic() + timeout
+    waited = 0.0
+    next_report = 15.0
     while True:
         if single_instance.acquire():
+            if log and waited:
+                log(f"应用已退出（等待了 {int(waited)} 秒）")
             return True
         if time.monotonic() >= deadline:
             return False
+        if log and waited >= next_report:
+            log(f"仍在等待应用退出…（已等 {int(waited)}/{int(timeout)} 秒）")
+            next_report += 15.0
         time.sleep(poll)
+        waited += poll
 
 
 def relaunch_app(*, root: Optional[Any] = None, prefer: str = "auto") -> dict:
@@ -1615,6 +1627,11 @@ def apply_update(kind: str = "formal", *, root: Optional[Any] = None, frontend: 
     if not _validate_prepared(root, prepared):
         prepared = {}          # 缺失 / 过期 / sha256 不符 → 回落完整流程
 
+    # 交棒进程**没有窗口**，全程只能靠这份日志让人看懂「跑到哪、为什么停」——
+    # 每个里程碑都打一行，失败原因更不能只写状态文件。
+    _log.info("程序内更新开始：kind=%s prepared=%s", kind, bool(prepared))
+    log(f"=== Keyrealm 自更新开始（渠道={kind}，{'使用准备产物' if prepared else '无准备产物→完整流程'}）===")
+
     if dry_run:
         log(f"演练（{kind}）：将依次执行 " + " → ".join(stages)
             + ("（使用准备产物）" if prepared else "（无准备产物，走完整流程）"))
@@ -1622,10 +1639,15 @@ def apply_update(kind: str = "formal", *, root: Optional[Any] = None, frontend: 
 
     _write_status(root, {"phase": "waiting", "ok": None, "kind": kind, "stages": stages,
                          "message": "等待应用退出…"})
-    if not wait_for_app_exit(root=root):
+    log("等待应用完全退出…（最多 90 秒）")
+    if not wait_for_app_exit(root=root, log=log):
         _write_status(root, {"phase": "failed", "ok": False, "kind": kind, "stages": stages,
                              "message": "等待应用退出超时"})
+        log("✗ 等待应用退出超时——更新中止，**未改动任何文件**。"
+            "多半是程序没完全退出（托盘常驻/后台线程未停）或单实例锁没释放；"
+            "请彻底退出程序后再试。")
         return {"ok": False, "message": "等待应用退出超时"}
+    log("应用已退出，开始执行更新。")
 
     frm = version.APP_VERSION
     report: list = []
@@ -1655,7 +1677,12 @@ def apply_update(kind: str = "formal", *, root: Optional[Any] = None, frontend: 
     else:
         single_instance.release()
     _clear_prepared(root)
-    return _finish(root, kind, frm, result, stages, report=report)
+    final = _finish(root, kind, frm, result, stages, report=report)
+    log(("✓ " if final.get("ok") else "✗ ") + str(final.get("message", "")))
+    if not final.get("ok"):
+        log("（更新失败：本次**未替换程序文件**，原程序仍可用。"
+            "详情见本次日志与「设置 → 更新 → 上次更新」。）")
+    return final
 
 
 def _apply_formal(root: Path, *, do_backup: bool, do_migrate: bool, log: Callable[[str], None],
@@ -1739,6 +1766,7 @@ def _apply_test(root: Path, *, frontend: bool, do_backup: bool, do_migrate: bool
         if not vn.get("ok"):
             return {"ok": False, "message": vn.get("message")}
         _status_stage(root, "test", stages, "install", "安装新版本（构建产物就位）…", _done())
+        log(f"安装新版本到程序目录（来源：{prepared.get('staging_dir')}）…")
         ins = _install_staged(prepared.get("staging_dir"), root)
         if not ins.get("ok"):
             return {"ok": False, "message": ins.get("message")}

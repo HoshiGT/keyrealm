@@ -88,6 +88,25 @@ async function showUpdateNotice() {
   } catch { /* 通知失败无所谓，不影响使用 */ }
 }
 
+/** 上次更新**失败**了 → 弹一条通知（交棒阶段没有窗口，只能靠这里让用户看见）。
+ *  同一份结果只弹一次（按 `finished_at` 记在 localStorage 里）。 */
+async function showUpdateFailure() {
+  try {
+    const st = await api.updateStatus()
+    if (!st || st.ok !== false || !st.finished_at) return
+    const key = 'vault.update.failedSeen'
+    if (localStorage.getItem(key) === st.finished_at) return
+    localStorage.setItem(key, st.finished_at)
+    ElNotification({
+      title: '上次更新失败',
+      message: `${st.message || '未知原因'}${st.log ? `　·　日志：${st.log}` : ''}`,
+      type: 'error',
+      duration: 0,
+      onClick: () => router.push({ name: 'settings' }),
+    })
+  } catch { /* 通知失败无所谓，不影响使用 */ }
+}
+
 onMounted(() => {
   disposers.push(
     onEvent(EVENTS.credentialUpdated, (detail) => vaultStore.applyCredentialUpdated(detail)),
@@ -126,6 +145,8 @@ onMounted(() => {
   // 自动检测更新发现新版本 → 弹通知；同时补查一次（覆盖「检查在首屏前就完成」的情况）。
   disposers.push(onEvent(EVENTS.updateAvailable, () => { showUpdateNotice() }))
   showUpdateNotice()
+  // 上次更新**失败**也要让人看见（交棒阶段没有窗口）。
+  showUpdateFailure()
 
   const handleFocus = () => {
     handleActivity()
