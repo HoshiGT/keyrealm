@@ -385,6 +385,8 @@ def assemble_release(out_dir: Path) -> Path:
             shutil.rmtree(stale_cache)
 
     # data/ 其余内容不预建，应用首次运行时自动创建
+    if not exe_dest.is_file():
+        sys.exit(f"装配后未找到产物：{exe_dest}（输出目录是否被清理/占用？）")
     return exe_dest
 
 
@@ -470,7 +472,12 @@ def main() -> None:
     print("\n" + "=" * 60)
     print(f"构建完成 → {out_dir}")
     print("=" * 60)
-    print(f"  {EXE_NAME:<20s} {human_size(exe.stat().st_size)}")
+    if exe.is_file():
+        print(f"  {EXE_NAME:<20s} {human_size(exe.stat().st_size)}")
+    else:
+        # 走到这里说明装配之后产物又被删了（例如把 output 指到了会被清理的目录）。
+        # 明确报出来而不是在 stat() 上抛 FileNotFoundError。
+        sys.exit(f"✗ 产物不见了：{exe}")
     if at_root:
         print("  落点即仓库根：plugins/ 就是源码目录本身（未另存副本），data/ 为运行时数据目录。")
     else:

@@ -260,8 +260,13 @@ def prepared_file(root: Optional[Any] = None) -> Path:
 
 
 def staging_dir(root: Optional[Any] = None) -> Path:
-    """测试版构建的**落点**：不覆盖运行中的程序文件，交棒时再由 ``_install_staged`` 安装。"""
-    return repo_root(root) / "build" / "staged"
+    """测试版构建的**落点**：不覆盖运行中的程序文件，交棒时再由 ``_install_staged`` 安装。
+
+    **刻意不放在 ``build/`` 或 ``dist/`` 下**：那是 PyInstaller 的中间目录，``build.py`` 收尾会
+    ``clean_intermediates()`` **把整个 ``build/`` 删掉**——放里面会在装配完成后连同产物一起被清掉
+    （踩过：``build/staged/Keyrealm.exe`` 刚写好就被删，随后 ``exe.stat()`` 抛 FileNotFoundError）。
+    """
+    return repo_root(root) / ".update-staged"
 
 
 def migrations_dirs(root: Optional[Any] = None) -> list:
@@ -1456,6 +1461,7 @@ def _install_staged(staging: Any, root: Path) -> dict:
             shutil.copytree(plugins_src, root / "plugins", dirs_exist_ok=True)
         except OSError as exc:
             return {"ok": False, "message": f"安装插件失败：{exc}"}
+    shutil.rmtree(staging, ignore_errors=True)   # 装完即清，别把一份构建产物长期留在程序目录
     return {"ok": True}
 
 

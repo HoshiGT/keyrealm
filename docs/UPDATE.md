@@ -90,12 +90,12 @@ Keyrealm 可以在程序内检查并一键更新。**两种渠道的更新方式
    > **这一步是「提交点」**：源码一更新，工作区就前进了，而数据库还没迁移——所以此后**不再接受取消**，
    > 会直接进入构建并交棒。若交棒失败，用 `scripts/build_update.sh --kind test` 手动补完（回落流程会补做构建/迁移/替换）。
 3. **准备构建环境**：项目下没有 `.venv` 就现建一个，再装 `requirements.txt` + `pyinstaller`（全程走「更新代理」）。
-4. `python scripts/build.py --frontend --output build/staged` —— **构建到 `build/staged/`**，
+4. `python scripts/build.py --frontend --output .update-staged` —— **构建到 `.update-staged/`**，
    不触碰运行中的程序文件（默认落点会覆盖运行中的可执行文件）。
 5. 写**准备清单** `data/.update-prepared.json`（commit / `staging_dir` / venv 解释器 / 目标 `schema_version`）。
 
 **交棒阶段（应用退出后）**：
-6. **安装** `build/staged/`（可执行文件 + `plugins/`）到程序目录。
+6. **安装** `.update-staged/`（可执行文件 + `plugins/`）到程序目录。
 7. 读**新源码**的 `SCHEMA_VERSION` 与 `APP_VERSION`，逐级迁移数据库。
 8. 重启（源码部署重启 `python main.py`；二进制部署重启构建出的可执行文件）。
 
@@ -177,7 +177,7 @@ scripts/restart.sh --wait
 | `backups/*.zip` | 更新前备份（含密钥） | 忽略 |
 | `backups/_asset-*.zip` | 正式版下载的预编译包（就位后即删） | 忽略 |
 | `data/keyrealm-full-backup.json` | 更新前备份里随包的**全量导出**（原库损坏也能还原） | 忽略（`data/`） |
-| `build/staged/` | 测试版**准备阶段**的构建落点（交棒时安装进程序目录） | 忽略（`build/`） |
+| `.update-staged/` | 测试版**准备阶段**的构建落点（交棒时安装进程序目录，装完即清） | 忽略（`.update-staged/`） |
 | `.update-meta/` | 从预编译包解出的 `version.json` + `migrations/`（正式版更新后才有） | 忽略 |
 | `data/.update-request.json` | 应用交给交棒进程的请求（含 `prepared` 指针） | 忽略（`data/`） |
 | `data/.update-prepared.json` | **准备产物清单**（版本 / 包路径 / sha256 / staging / 目标 schema） | 忽略（`data/`） |
@@ -230,6 +230,6 @@ scripts/restart.sh --wait
 3. 启动应用 → 设置 → 更新 → **检查更新** → 有更新时点**立即更新**。
 4. 确认**准备阶段在应用内进行**（卡片显示进度条、可取消）；准备完成后程序自动关闭，
    **不再弹控制台窗口**，脱离进程完成替换/迁移/重启（输出落 `data\logs\update-*.log`）。
-5. 构建/替换产物 `Keyrealm.exe` 落在**仓库根**；`backups\` 里有且仅有一份 zip（正式版就位前还会短暂出现 `_asset-*.zip`）；测试版的构建落点在 `build\staged\`。
+5. 构建/替换产物 `Keyrealm.exe` 落在**仓库根**；`backups\` 里有且仅有一份 zip（正式版就位前还会短暂出现 `_asset-*.zip`）；测试版的构建落点在 `.update-staged\`。
 6. 更新完成后程序**自动重启**；设置页「上次更新」显示**逐阶段报告**（✓/✗ + 日志路径）。
 7. 应用运行期间再跑一次 `scripts\db_update.bat --apply` → 应被单实例闸门拒绝。

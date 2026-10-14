@@ -646,7 +646,7 @@ pywebview 没有「再次显示」事件可挂（`Form.Shown` 只触发一次，
 它**（含 venv 尚未创建时），脚本据此复用。
 
 **两段式**：应用内「立即更新」拆成 **准备**（`prepare_update()`，应用进程内、带进度、可取消：
-备份 + 下载预编译包 / 拉源码 + 装依赖 + 构建到 `build/staged/`，写 `data/.update-prepared.json`）
+备份 + 下载预编译包 / 拉源码 + 装依赖 + 构建到 `.update-staged/`，写 `data/.update-prepared.json`）
 与 **交棒**（`begin_handoff()` 发请求 + 起脱离进程；脱离进程 `apply_update()` 用准备产物走**快路径**，
 无产物则**回落完整流程**）。**构建 / 迁移 / 替换必须留在交棒阶段**——`build.py::assemble_release`
 会 `copy2` 覆盖运行中的可执行文件、`run_migrations` 要独占数据库，两者都要求应用已退出。
@@ -666,7 +666,7 @@ pywebview 没有「再次显示」事件可挂（`Form.Shown` 只触发一次，
 预编译包**（`Keyrealm-<版本>-<平台>.zip`）并算 SHA-256；交棒阶段校验后**替换当前程序**、迁移数据库、
 重启——**不编译**（源码部署会因此切成二进制）。**测试版**跟 `main`（版本号 **或** commit 任一不同即
 算有更新），准备阶段**从源码构建**：程序目录是仓库就快进，否则 `git init` + `fetch` + `checkout`
-**就地转成源码部署**，再建/补 `.venv`、装依赖、`scripts/build.py --frontend --output build/staged`；
+**就地转成源码部署**，再建/补 `.venv`、装依赖、`scripts/build.py --frontend --output .update-staged`；
 交棒阶段安装该产物、迁移、重启。渠道存 `settings.update_channel`。
 
 **更新代理**（`settings.update_proxy_mode` / `update_proxy_id`）：跟随全局默认 / 直连 / 指定某个代理，

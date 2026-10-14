@@ -201,7 +201,7 @@ keyrealm/
 **唯一实现在 `backend/updater.py`**，被应用内（`backend/api.py` → `main.py::VaultApi`）与命令行脚本共用。
 
 **两段式**：应用内「立即更新」= **准备（应用进程内，带进度、可取消）** + **交棒（脱离进程）**。
-`prepare_update()` 备份 + 下载预编译包 / 拉源码 + 装依赖 + 构建到 `build/staged/`；准备成功才
+`prepare_update()` 备份 + 下载预编译包 / 拉源码 + 装依赖 + 构建到 `.update-staged/`；准备成功才
 `begin_handoff()` 起脱离进程跑 `apply_update()`（解压替换 / 安装 + 迁移 + 重启）。
 **构建 / 迁移 / 替换必须留在交棒阶段**——`build.py` 会覆盖运行中的可执行文件、`run_migrations`
 要独占数据库，两者都要求应用已退出。
