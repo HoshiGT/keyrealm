@@ -129,7 +129,7 @@ CREATE TABLE plugins (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     name            TEXT NOT NULL,
     version         TEXT NOT NULL,
-    author          TEXT DEFAULT '',
+    author          TEXT DEFAULT '',       -- 留档：来自 manifest 的 author；当前无读取方（故意保留，别再当死列）
     description     TEXT DEFAULT '',
     credential_type TEXT NOT NULL UNIQUE,  -- 插件唯一标识，如 "llm_openai"
     icon            TEXT DEFAULT '🔑',     -- emoji 或插件目录内图片文件名（如 logo.png）
@@ -139,7 +139,7 @@ CREATE TABLE plugins (
     category_name   TEXT DEFAULT '',       -- 类别显示名（来自 category.json）
     enabled         INTEGER DEFAULT 1,    -- plugins/.state.json 的只读镜像（不是功能闸门，见「迁移策略」）
     batch_verify    INTEGER DEFAULT 1,    -- 1=参与批量验证；0=禁用（仅手动，v3 新增）
-    installed_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    installed_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP  -- 留档：安装时间；当前无读取方（故意保留）
 );
 ```
 
