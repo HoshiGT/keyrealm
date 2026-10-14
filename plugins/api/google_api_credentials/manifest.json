@@ -1,6 +1,6 @@
 {
-  "name": "Google API 凭据",
-  "version": "1.0.0",
+  "name": "Google API",
+  "version": "1.0.1",
   "credential_type": "google_api_credentials",
   "author": "Keyrealm",
   "description": "验证 Google API Key / Google OAuth 客户端密钥有效性（只读探测）",

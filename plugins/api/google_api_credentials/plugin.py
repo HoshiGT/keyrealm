@@ -1,4 +1,4 @@
-"""Google API 凭据验证插件（plugins/api/ 类别下的独立子插件）。
+"""Google API 验证插件（plugins/api/ 类别下的独立子插件）。
 
 参考文档：https://developers.google.com/identity/protocols/oauth2 （OAuth 客户端密钥）
           https://firebase.google.com/docs/reference/rest/auth （Identity Toolkit / API Key）
@@ -36,7 +36,7 @@ from backend.plugin_sdk import (
     safe_json,
 )
 
-NAME = "Google API 凭据"
+NAME = "Google API"
 DISPLAY_FIELD = "secret"
 
 IDENTITYTOOLKIT_URL = "https://identitytoolkit.googleapis.com/v1/projects"

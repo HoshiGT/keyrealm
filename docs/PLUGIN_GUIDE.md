@@ -1023,7 +1023,7 @@ sensenova（商汤日日新，OpenAI 兼容）、codebuddy（腾讯 CodeBuddy �
 > `llm_anthropic_compatible` 类型不再有对应插件，那类凭据直接在界面上删掉、按新插件重建即可。
 
 **api/ 类别（9 个）**：firecrawl（网页抓取）、tavily（搜索）、metaso（秘塔 AI 搜索）、fofa（FOFA 网络空间测绘）、
-coze（字节扣子）、dify（Dify 应用 / 工作流）、google_api_credentials（Google API 凭据，一对 key/secret）、baidu_face（百度人脸，人脸识别）、
+coze（字节扣子）、dify（Dify 应用 / 工作流）、google_api_credentials（Google API，一对 key/secret）、baidu_face（百度人脸，人脸识别）、
 gateway（短信网关 / 接码服务商，
 字段按各厂商叫法通用化——`app_key` / `app_secret` 装不下的一律塞 `extra_params`；有可用只读校验接口的
 厂商：Engagelab、Infobip、CM、laaffic、nxcloud、buka、Ultramsg——Infobip 印度节点 200 有效、香港节点在该
