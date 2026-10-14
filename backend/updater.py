@@ -179,6 +179,29 @@ def proxy_env() -> dict:
     return env
 
 
+# ``proxy_env()`` 会把上面那组变量**覆盖**掉，交棒进程因此记不住「更新前是什么」。
+# 起交棒进程时顺手把原值存进这个私有变量，重启新应用时用它还原（见 `_restored_proxy_env`）。
+ENV_RESTORE_PROXY = "KEYREALM_UPDATE_RESTORE_ENV"
+
+
+def _restored_proxy_env() -> Optional[dict]:
+    """重启新应用时该用的代理环境变量：**还原成更新前的原值**。
+
+    没有记录（交棒进程不是 ``_spawn_updater`` 起的，如手跑 ``--self-update``）时返回
+    ``None``——此时本进程的环境就是干净的，原样继承即可，不该拿空值去覆盖它。
+    """
+    raw = os.environ.get(ENV_RESTORE_PROXY, "").strip()
+    if not raw:
+        return None
+    try:
+        saved = json.loads(raw)
+    except ValueError:
+        return None
+    env = {key: str(saved.get(key) or "") for key in _PROXY_ENV_KEYS}
+    env[ENV_RESTORE_PROXY] = ""      # 私有变量不往新应用里带
+    return env
+
+
 # 私有仓库：GitHub 访问令牌（PAT）。
 # 取值优先级：显式入参 > 环境变量 ``ENV_TOKEN``。应用内由 ``backend/api.py`` 解密 settings 后
 # 写入本进程 env（见 ``api._sync_update_token``）；四个独立脚本（``scripts/*.py``）直接读环境变量。
@@ -1315,7 +1338,10 @@ def relaunch_app(*, root: Optional[Any] = None, prefer: str = "auto") -> dict:
         return {"ok": False, "message": "找不到可启动的程序（既无可执行文件，也无 main.py）"}
     log = root / "data" / "logs" / f"relaunch-{time.strftime('%Y%m%d-%H%M%S')}.log"
     try:
-        pid = spawn_detached(argv, cwd=root, log=log)
+        # 交棒进程是带着「更新代理」起的（`_spawn_updater` 传了 proxy_env()）；新应用若原样
+        # 继承，`plugin_sdk.proxy()` 的「未指定则回退环境变量」会把**全部插件请求**导到更新
+        # 代理上——用户界面里看不出任何设置。这里还原成更新前的原值（见 `_restored_proxy_env`）。
+        pid = spawn_detached(argv, cwd=root, log=log, env=_restored_proxy_env())
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "message": f"重启失败：{exc}"}
     return {"ok": True, "pid": pid, "argv": argv}
@@ -1951,6 +1977,10 @@ def _spawn_updater(root: Path, kind: str) -> int:
     """
     argv = _self_update_argv(root, kind)
     env = proxy_env()          # 把更新代理注入子进程（git / pip / npm 据此出网）
+    # `proxy_env()` 只造 dict、没动本进程环境，所以此刻 os.environ 还是「更新前」的原值 ——
+    # 存档给交棒进程，供它重启新应用时还原（否则新应用会一直带着更新代理）。
+    env[ENV_RESTORE_PROXY] = json.dumps(
+        {key: os.environ.get(key, "") for key in _PROXY_ENV_KEYS})
     log = root / "data" / "logs" / f"update-{time.strftime('%Y%m%d-%H%M%S')}.log"
     return spawn_detached(argv, cwd=root, log=log, env=env)
 
