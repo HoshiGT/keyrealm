@@ -1,4 +1,4 @@
-"""短信网关 / 接码服务商凭据验证插件（plugins/api/ 类别下的通用子插件）。
+"""短信网关 / 接码服务商凭据验证插件（plugins/mail/ 类别下的通用子插件）。
 
 **为什么字段是通用的**：这批服务商在同一件事上的叫法完全不同（accessKey / appKey / apiKey /
 account / clientId / productToken / instanceId …），一家一个插件既冗余又难维护，因此做成

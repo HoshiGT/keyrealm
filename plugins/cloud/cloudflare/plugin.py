@@ -1,4 +1,4 @@
-"""Cloudflare API Token / Global API Key 验证插件（plugins/dns/ 类别下的独立子插件）。
+"""Cloudflare API Token / Global API Key 验证插件（plugins/cloud/ 类别下的独立子插件）。
 
 自带全部实现：支持 token 与 global 两种认证模式，调用只读的
 /user 或 /user/tokens/verify 接口，不产生任何资源变更。

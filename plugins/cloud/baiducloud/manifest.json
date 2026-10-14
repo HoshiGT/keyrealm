@@ -29,7 +29,7 @@
       "required": false,
       "default": "bj",
       "placeholder": "bj",
-      "hint": "仅 BOS 对象存储操作需要：服务域名形如 <区域>.bcebos.com，可选 bj（华北-北京）、bd（华北-保定）、su（华东-苏州）、gz（华南-广州）、cd（西南-成都）、yq（阳泉）、hkg（中国香港）、fwh（华中-武汉）。留空按 bj。只读校验走 IAM（iam.bj.baidubce.com），与本栏无关。"
+      "hint": "仅 BOS 对象存储操作需要，域名形如 <区域>.bcebos.com（bj / bd / su / gz / cd / yq / hkg / fwh）。留空按 bj；只读校验走 IAM，与本栏无关。"
     },
     {
       "key": "notes",

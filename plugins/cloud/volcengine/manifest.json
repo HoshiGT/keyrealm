@@ -29,7 +29,7 @@
       "required": false,
       "default": "cn-beijing",
       "placeholder": "cn-beijing",
-      "hint": "火山引擎的 OpenAPI 网关是全局域名，业务落在哪个地域是由签名的 Credential Scope 决定的，故本栏即签名用的地域，也是各查询操作默认查的地域。留空按 cn-beijing。"
+      "hint": "签名用的地域（网关是全局域名，地域由签名的 Credential Scope 决定），也是各查询操作的默认地域。留空按 cn-beijing。"
     },
     {
       "key": "notes",

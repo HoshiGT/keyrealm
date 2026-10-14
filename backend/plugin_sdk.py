@@ -1,39 +1,19 @@
 """插件 SDK：框架向插件暴露的**唯一**接口层。
 
-框架把「与具体服务无关的通用能力」全部收在这里，插件只需 `import` 本模块 + 写自己的
-功能逻辑，无需在每个类别目录下各留一份逐字节相同的工具代码。
+提供：结果类型 `VerifyResult`；日志 `log`/`log_debug`；代理 `proxy` 与客户端 `make_client`；
+TLS 版本策略 `tls_version()`（`auto`/`1.0`/`1.1`/`1.2`/`1.3`，`make_client` 自动应用）；
+响应解析 `safe_json`/`body_snippet`；异常兜底 `guarded`；超时 `TIMEOUT`（默认值）与
+`timeout()`（实际生效值，读 `VAULT_TIMEOUT`）；写/列表辅助 `download_to_file`/`first_list`；
+脱敏 `mask_secret`（写日志/提示时用，**不要自己切字符串**）。
 
-提供的能力：
+**插件只允许 `import backend.plugin_sdk`，不得 import backend 的其它模块** —— 本模块是框架
+与插件之间唯一被承诺稳定的边界，backend 内部实现可自由重构而不影响插件。
 
-- 结果类型 `VerifyResult`
-- 日志 `log` / `log_debug`
-- 代理读取 `proxy`、HTTP 客户端 `make_client`
-- TLS 版本策略 `tls_version()`（`auto` / `1.0` / `1.1` / `1.2` / `1.3`，`make_client` 自动应用）
-- 响应解析 `safe_json` / `body_snippet`
-- 异常兜底 `guarded`
-- 超时 `TIMEOUT`（默认值）/ `timeout()`（实际生效值，读 `VAULT_TIMEOUT`）
-- 写/列表类操作的通用辅助 `download_to_file` / `first_list`
-- 凭据值脱敏 `mask_secret`（写日志/提示时用，**不要自己切字符串**）
+本模块是**叶子模块**：只依赖标准库与 httpx，不 import 任何 backend 模块——自包含、可单独
+拷出去用，也不会与 backend 内部形成循环依赖。
 
-用法::
-
-    from backend.plugin_sdk import VerifyResult, guarded, make_client, safe_json
-
-    @guarded
-    def verify(data):
-        with make_client() as client:
-            resp = client.get("https://api.example.com/me",
-                              headers={"Authorization": f"Bearer {data['api_key']}"})
-        ...
-
-**插件只允许 `import backend.plugin_sdk`，不得 import backend 的其它模块** —— 本模块是
-框架与插件之间唯一被承诺稳定的边界，backend 内部实现可以自由重构而不影响插件。
-
-本模块是**叶子模块**：只依赖标准库与 httpx，不 import 任何 backend 模块。因此它
-自包含、可单独拷出去用，也不会与 backend 内部形成循环依赖。
-
-插件需实现的接口（标「可选」的未实现即视为不支持，框架侧在 `backend/plugin_base.py`
-里统一做鸭子类型适配，签名对不上也不会报错）：
+插件需实现的接口（标「可选」的未实现即视为不支持，框架侧在 `backend/plugin_base.py` 做
+鸭子类型适配，签名对不上也不报错）：
 
 ============================== =================================================
 `verify(data) -> VerifyResult`  **必选**：验证凭据 → valid / invalid / error
@@ -80,13 +60,10 @@ TIMEOUT = 20.0
 
 
 def timeout(fallback: float = TIMEOUT) -> float:
-    """实际使用的超时秒数：``VAULT_TIMEOUT``（应用设置写入）> ``fallback``。
+    """实际使用的超时秒数：``VAULT_TIMEOUT`` > ``fallback``。
 
-    后端「批量验证」对话框里的超时设置经环境变量下发，每次发请求时读取——改完即时
-    生效，无需重启。变量缺失或非法时回退到 ``fallback``（默认 ``TIMEOUT``）。
-
-    ``fallback`` 供类别层用：邮箱类插件的默认超时是 15 秒而非 20 秒，它只需
-    ``def timeout(): return sdk.timeout(15.0)``，不必重复实现整个函数。
+    ``VAULT_TIMEOUT`` 每个请求现读，改完即时生效、无需重启；缺失或非法时用 ``fallback``。
+    ``fallback`` 供类别层复用（邮箱类默认 15 秒：``def timeout(): return sdk.timeout(15.0)``）。
     """
     raw = os.environ.get("VAULT_TIMEOUT")
     if raw:

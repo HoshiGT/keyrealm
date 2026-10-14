@@ -48,7 +48,7 @@
       "label": "允许旧版 TLS",
       "type": "checkbox",
       "required": false,
-      "hint": "服务器不支持 TLS 1.2+ 时（报「SSL/TLS 握手失败」、服务端回 protocol version 告警）才勾选。TLS 1.0/1.1 已被 RFC 8996 弃用，勾选后授权码会走在更弱的信道上——仅对确认可信的服务器开启。"
+      "hint": "服务器不支持 TLS 1.2+ 时才勾选（否则报握手失败）。TLS 1.0/1.1 已弃用，勾选后凭据走在更弱的信道上——只对确认可信的服务器开启。"
     },
     {
       "key": "notes",

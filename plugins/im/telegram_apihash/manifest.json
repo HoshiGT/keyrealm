@@ -40,7 +40,7 @@
       "required": false,
       "sensitive": true,
       "placeholder": "1BQANOE...（可选）",
-      "hint": "可选。只做本地解码（取 dc_id / 服务器 / auth_key 指纹），不会联网复用该会话——异地复用可能触发 Telegram 风控把会话踢掉。敏感字段会渲染成单行输入框，直接粘贴即可。"
+      "hint": "可选。只做本地解码（dc_id / 服务器 / auth_key 指纹），不联网复用该会话。单行框直接粘贴即可。"
     },
     {
       "key": "notes",

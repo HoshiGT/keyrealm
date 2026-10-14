@@ -1,21 +1,17 @@
 """GCP 服务账号验证插件（plugins/cloud/ 类别下的独立子插件）。
 
-判定分两步，全部只读：
+判定两步，全部只读：
 
-1. **换 token**（决定有效性）：用服务账号的邮箱 + 私钥签一份 RS256 的 JWT 断言，
-   到 token 端点换 access_token。换得到 ⇒ 这组凭据当前有效；
-   Google 明确回 ``invalid_grant`` + ``account not found`` / ``Invalid JWT Signature``
+1. **换 token**（决定有效性）：邮箱 + 私钥签 RS256 JWT 到 token 端点换 access_token。
+   换得到 ⇒ 有效；回 ``invalid_grant`` + ``account not found`` / ``Invalid JWT Signature``
    ⇒ 服务账号已删或私钥已轮换 ⇒ 无效。
 
 2. **探项目**（只作补充信息，不参与判定）：带 token 调 Resource Manager
-   ``GET /v1/projects/<project_id>``，回 200 就顺带给出项目号与生命周期状态。
-   这一步要额外权限，403/404 一律**不影响**第 1 步的结论。
+   ``GET /v1/projects/<project_id>``，200 时顺带给出项目号与生命周期状态。
+   需额外权限，403/404 一律**不影响**第 1 步结论。
 
-字段按「一行一项」拆平（邮箱 / 私钥 / 密钥 ID / 项目 ID），不接收整段 JSON：
-其中只有邮箱与私钥是必需的，密钥 ID 只进 JWT 头、项目 ID 只用于第 2 步。
-
-签名与换 token 的协议实现复用同目录的 ``google_sa``（与 Firebase 插件共用）。
-仅从框架层 backend.plugin_sdk 复用通用工具。
+字段按「一行一项」拆平（邮箱 / 私钥 / 密钥 ID / 项目 ID），不接收整段 JSON；只有邮箱与
+私钥必需，密钥 ID 只进 JWT 头、项目 ID 只用于第 2 步。协议实现复用同目录 ``google_sa``。
 
 参考文档：https://developers.google.com/identity/protocols/oauth2/service-account
 参考文档：https://docs.cloud.google.com/resource-manager/reference/rest/v1/projects/get

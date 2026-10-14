@@ -1,19 +1,17 @@
 """Google 服务账号（Service Account）JWT 断言的协议级工具模块。
 
-云类别下 `cloud/gcp` 与 `cloud/firebase` 两个子插件共用本模块：把服务账号的
-**邮箱 + 私钥**换成一枚 OAuth2 access_token，是 Google 全家（GCP / Firebase / FCM…）
-**完全一致**的一步，因此单独成模块，避免两处各写一份 RS256 签名。
+`cloud/gcp` 与 `cloud/firebase` 共用：**邮箱 + 私钥** → 一枚 OAuth2 access_token，
+是 Google 全家（GCP / Firebase / FCM…）完全一致的一步，故单独成模块。
 
-**输入不是 JSON**：一份服务账号 JSON 里真正有信息量的只有邮箱与私钥，其余
-（项目号、客户端 ID、各种 URL）要么是常量、要么只用于展示。所以字段按「一行一项」
-拆平——邮箱 / 私钥 / 密钥 ID / 项目 ID 各占一个单行输入框；私钥在单行框里会被压掉
-换行，`normalize_sa` 负责把它还原成合法 PEM。
+**输入不是 JSON**：服务账号 JSON 里只有邮箱与私钥有信息量，其余要么是常量、要么只用于
+展示。字段按「一行一项」拆平；私钥在单行框里换行会被压掉，`normalize_sa` 负责还原成
+合法 PEM。
 
-这里只放**协议本身**（归一化输入 / 签发 JWT / 换 token），不含任何服务级判定：
-「什么状态码算有效」写在各自 plugin.py 里。
+只放**协议本身**（归一化输入 / 签发 JWT / 换 token）；「什么状态码算有效」写在各自
+plugin.py 里。
 
-依赖 `cryptography`（见 requirements.txt）。缺失时不抛 ImportError 冒泡，而是抬
-`GoogleSAError` 给调用方展示——打包环境里少了这个包也能给出人话提示。
+依赖 `cryptography`（见 requirements.txt）。缺失时抬 `GoogleSAError` 给调用方展示，
+不让 ImportError 冒泡。
 
 本模块完全独立，不导入 backend 包。
 """

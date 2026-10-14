@@ -21,7 +21,7 @@
       "required": true,
       "sensitive": true,
       "placeholder": "-----BEGIN PRIVATE KEY-----MIIE…-----END PRIVATE KEY-----",
-      "hint": "adminsdk JSON 里 private_key 字段的值。单行输入框吃不下换行，插件会自己把换行还原、再按 64 列重新折行，所以「原样多行粘贴 / 被压成一行 / 带字面 \\n」都能收。因含私钥故加密存储、列表内打码。"
+      "hint": "服务账号 JSON 里 private_key 的值。单行框粘多行没问题——插件会把换行还原并按 64 列重折。含私钥，加密存储、列表打码。"
     },
     {
       "key": "private_key_id",

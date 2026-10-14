@@ -1,47 +1,22 @@
 """AWS AccessKey 验证插件（plugins/cloud/ 类别下的独立子插件）。
 
-验证只做一件事：**只读**调用 STS ``GetCallerIdentity``，用返回的 ARN 证明这组
-Access Key 当前有效、并给出它代表谁（root / IAM 用户 / 角色）。
+只读调用 STS ``GetCallerIdentity``，用返回的 ARN 证明密钥有效、并给出它代表谁
+（root / IAM 用户 / 角色）。用它而非列 S3 桶：``sts:GetCallerIdentity`` **不需要任何 IAM
+权限**，拿不到 ARN 才是真无效（列桶会把「有效但无权限」误判成无效）；端点全局、签名固定
+``us-east-1``，用户不必填地域。
 
-为什么用 STS 而不是列 S3 桶：
-- ``sts:GetCallerIdentity`` **不需要任何 IAM 权限**，任何有效密钥都能调用，
-  所以拿到 ARN 就等价于「密钥有效」；列桶则要求额外的权限，会把「密钥有效但无
-  权限」误判成无效。
-- 全局端点 ``sts.amazonaws.com`` 与账号所在地域无关，签名固定用 ``us-east-1``，
-  因此不需要用户填地域。
+自带完整实现（AWS SigV4 只在这里维护，不依赖类别共享模块）。三套调用形态：STS / EC2 走
+Query API（POST 表单）；S3 走 GET，且**空体的 SHA256 必须放进 ``x-amz-content-sha256``
+一起签**，规范查询串按 RFC3986 自拼（不能交给 httpx 的 ``params=``——实发串会与签名串不一致）。
 
-自带完整实现（AWS Signature Version 4 只在这里维护，不依赖类别共享模块）。
-签名函数全部参数化（method / host / path / query / region / service / 待签头），
-STS 只是其中一组取值。三套调用形态：
+操作（``actions``，id 与阿里云插件对齐）：``whoami`` · ``list_regions`` · ``list_instances`` ·
+``list_buckets`` · ``list_objects`` · ``download_object`` · ``download_prefix``。
+下载类走签名 GET 流式读取（上限见 ``MAX_ZIP_*``），声明了 ``progress``、支持取消。
 
-- **STS / EC2（Query API）**：POST + ``application/x-www-form-urlencoded`` 体；
-- **S3**：GET，且**必须把空体的 SHA256 放进 ``x-amz-content-sha256`` 一起签**，
-  规范查询串也按 RFC3986 自行拼接（不能交给 httpx 的 ``params=``——那会让实际发出的
-  查询串与签名用的规范串出现差异）。
-
-本插件提供的操作（``actions``，id 与阿里云插件完全对齐）：
-
-- ``whoami``           查看调用者身份（STS GetCallerIdentity + 只读权限探测）
-- ``list_regions``     区域列表（EC2 DescribeRegions，行内「实例」下钻）
-- ``list_instances``   云主机实例列表（EC2 DescribeInstances，``region`` 留空即并发扫描全部区域）
-- ``list_buckets``     对象存储桶列表（S3 ListBuckets，桶自带区域，缺则 ``?location`` 兜底）
-- ``list_objects``     对象预览（S3 ListObjectsV2 + delimiter，文件与文件夹分行）
-- ``download_object``  下载单个对象（``save_to``，前端弹「另存为」）
-- ``download_prefix``  把某个前缀（文件夹）下的对象并发拉取后打包成 zip 下载
-
-下载类操作全部走签名 GET 流式读取，磁盘上限见 ``MAX_ZIP_*``。
-两个下载操作都声明了 ``progress``，由 ``stream_action`` 边下边回调进度、并响应取消
-（``run_action`` 三个参数调用时不上报也不可取消，行为与以前一致）。
-
-全部调用均为只读，不产生任何资源变更。仅从框架层 backend.plugin_sdk 复用通用工具。
+全部调用只读，不产生任何资源变更。仅从框架层 backend.plugin_sdk 复用通用工具。
 
 参考文档：https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_aws-signing.html
 参考文档：https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html
-参考文档：https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeRegions.html
-参考文档：https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeInstances.html
-参考文档：https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html
-参考文档：https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
-参考文档：https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLocation.html
 """
 from __future__ import annotations
 

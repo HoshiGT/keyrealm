@@ -54,7 +54,7 @@
       "required": true,
       "sensitive": true,
       "placeholder": "b5aa20fd-41c2-4ca9-a8b7-351f57ead2ad",
-      "hint": "群机器人地址里 key= 后面那段 UUID。校验时会把它拼进官方 webhook 地址的查询串，故加密存储且不出现在任何提示文本里。发送接口无只读版本，校验用一条非法消息类型做探测，不会把内容投递到群里。",
+      "hint": "群机器人地址里 key= 后面那段 UUID。加密存储、不回显。发送接口没有只读版本——校验用一条非法消息类型探测，不会投递内容。",
       "show_if": {
         "kind": "webhook"
       }

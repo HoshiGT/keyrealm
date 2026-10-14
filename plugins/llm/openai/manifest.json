@@ -22,7 +22,7 @@
           "label": "ChatGPT 登录态（Codex）"
         }
       ],
-      "hint": "「API Key」= 用 API Key 调 api.openai.com；「ChatGPT 登录态（Codex）」= 用 Codex CLI 的登录态（~/.codex/auth.json）。选好后只显示该模式需要的字段。"
+      "hint": "「API Key」= 调 api.openai.com；「ChatGPT 登录态（Codex）」= 复用 Codex CLI 的 ~/.codex/auth.json。只显示所选模式需要的字段。"
     },
     {
       "key": "base_url",
@@ -79,7 +79,7 @@
       "required": false,
       "sensitive": true,
       "placeholder": "rt.1...（可选）",
-      "hint": "可选。auth.json 里 tokens.refresh_token（形如 rt.1.…）。只读校验不会用它；填了之后「操作」里会多出「刷新 access_token」，由你手动点、用它在过期后换一组新令牌（会轮换 refresh_token 并自动写回本凭据）。",
+      "hint": "可选。auth.json 里 tokens.refresh_token（形如 rt.1.…）。只读校验不用它；填了才会多出「刷新 access_token」操作（会轮换并写回本凭据）。",
       "show_if": {
         "auth_mode": "chatgpt"
       }
@@ -90,7 +90,7 @@
       "type": "text",
       "required": false,
       "placeholder": "留空则从 access_token 自动解析",
-      "hint": "可选。auth.json 里 tokens.account_id（一个 UUID），也就是联网头 chatgpt-account-id 的值。留空时从 access_token 的 JWT claim 里取，两处都没有就不带这个头——它不是必需的（个人账号下实测：带对、带错、不带，各接口表现一致）；多组织 / 工作区账号才靠它指定用哪个工作区。",
+      "hint": "可选。auth.json 里 tokens.account_id（一个 UUID），即联网头 chatgpt-account-id。留空时从 access_token 的 JWT claim 取；多组织 / 工作区账号才需要它。",
       "show_if": {
         "auth_mode": "chatgpt"
       }
@@ -101,7 +101,7 @@
       "type": "text",
       "required": false,
       "placeholder": "留空即可（可选）",
-      "hint": "可选。auth.json 顶层的 last_refresh（形如 2026-10-10T01:55:56.325203037Z），只在「登录态详情」里用来显示这份登录态有多旧，不参与校验。用户点「刷新 access_token」成功后会被写成当次时间。",
+      "hint": "可选。auth.json 顶层的 last_refresh，只在「登录态详情」里显示新旧，不参与校验。",
       "show_if": {
         "auth_mode": "chatgpt"
       }

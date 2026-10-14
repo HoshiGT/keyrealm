@@ -38,7 +38,7 @@
       "required": false,
       "sensitive": false,
       "placeholder": "选填，如 0a1b2c3d4e5f4a3b2c1d0e9f8a7b6c5d",
-      "hint": "仅「云主机实例列表」需要（华为 ECS 接口路径必须带 project_id）。留空时查 ECS 会先只读查询 IAM 项目列表，按区域自动推断，无副作用；也可从「区域列表」的「项目 ID」列复制。"
+      "hint": "仅「云主机实例列表」需要。留空时按区域只读推断（查 IAM 项目列表，无副作用），也可从「区域列表」的「项目 ID」列复制。"
     },
     {
       "key": "notes",

@@ -3,7 +3,7 @@
   "version": "1.1.0",
   "credential_type": "llm_ark",
   "author": "Keyrealm",
-  "description": "验证火山方舟（Volcengine Ark）API Key 有效性。方舟是字节的模型托管平台，同一把 key 可调豆包 / DeepSeek / 智谱 GLM / 阿里 Qwen 等多家模型",
+  "description": "验证火山方舟（Volcengine Ark）API Key。同一把 key 可调豆包 / DeepSeek / 智谱 GLM / 阿里 Qwen 等多家模型",
   "icon": "logo.png",
   "fields": [
     {
@@ -27,7 +27,7 @@
       "label": "余额未知时发一次对话探测",
       "type": "checkbox",
       "required": false,
-      "hint": "厂商无余额接口、或中转站令牌为「不限额度」时，验证会额外发一次 max_tokens=1 的对话请求实测账户是否可用（会消耗极少量额度）。默认关闭。方舟：候选来自你「刷新模型列表」看到的那份（已滤掉已关停的），也可在下方指定模型只试它一个。"
+      "hint": "厂商无余额接口时，验证会多打一次 max_tokens=1 的对话（消耗极少额度）。默认关；候选模型见「刷新模型列表」，也可在下方指定。"
     },
     {
       "key": "probe_model",
@@ -35,7 +35,7 @@
       "type": "model",
       "required": false,
       "placeholder": "留空自动挑；也可手填模型名 / ep-xxxxxxxx",
-      "hint": "留空 = 自动从「刷新模型列表」看到的清单里挑一个（优先 flash / lite / mini 等便宜款）。填了就只试它一个——知道确切可用的模型时建议填（推理接入点 ep-xxxxxxxx 不会出现在下拉里，须手输）。"
+      "hint": "留空 = 从「刷新模型列表」里自动挑一个（优先 flash / lite / mini）。填了只试它一个；推理接入点 ep-xxxxxxxx 不在下拉里，须手输。"
     },
     {
       "key": "notes",

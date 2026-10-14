@@ -52,7 +52,7 @@
       "required": true,
       "sensitive": true,
       "placeholder": "64 位十六进制",
-      "hint": "群机器人地址里 access_token= 后面那段。校验时会把它拼进官方 webhook 地址的查询串，故加密存储、绝不回显。发送接口无只读版本，校验用一条非法消息类型做探测，不会把内容投递到群里。",
+      "hint": "群机器人地址里 access_token= 后面那段。加密存储、不回显。发送接口没有只读版本——校验用一条非法消息类型探测，不会投递内容。",
       "show_if": {
         "kind": "webhook"
       }

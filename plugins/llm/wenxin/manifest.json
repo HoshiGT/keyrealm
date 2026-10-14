@@ -44,7 +44,7 @@
       "type": "model",
       "required": false,
       "placeholder": "留空自动选择",
-      "hint": "留空 = 自动用 ernie-3.5-8k（付费档里最便宜）。可填：ernie-4.0-8k、ernie-3.5-8k、ernie-speed-8k、ernie-lite-8k、ernie-tiny-8k。"
+      "hint": "留空 = ernie-3.5-8k。其它可填：ernie-4.0-8k、ernie-speed-8k、ernie-lite-8k、ernie-tiny-8k。"
     },
     {
       "key": "notes",
