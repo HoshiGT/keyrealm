@@ -74,7 +74,7 @@ plugins/
 │   └── ctyun/                  # 天翼云 EOP（签名器 eop_signer.py）
 ├── map/                        # 类别目录（地图）
 │   ├── category.json
-│   ├── amap/                   # 高德地图 Web 服务 Key
+│   ├── amap/                   # 高德地图 Key（Web 服务 / JS API / iOS / Android / 小程序）
 │   ├── baidu/                  # 百度地图服务端 AK（+ 可选私钥 SK）
 │   └── tencent/                # 腾讯位置服务 WebService Key（+ 可选 SK 签名）
 ├── exchange/                   # 类别目录（交易所）
@@ -1075,7 +1075,7 @@ anon（**匿名对象存储**：无凭据探测公开桶）。
 并把残留对象的完整地址回给用户手动清理）。`validate()` 拒绝预签名 URL（带查询串）。
 XML 解析与带进度 / 取消的流式下载放在类别共享模块 `storage_common.py`。
 
-**map/ 类别（3 个）**：amap（高德地图 Web 服务 Key）、
+**map/ 类别（3 个）**：amap（高德地图 Key；「Web 服务」类型实调校验，其它平台按「该 Key 是否存在」判定）、
 baidu（百度地图服务端 AK，选填私钥 SK —— AK 开了 **SN 校验**时补上 SK 由插件自动签名）、
 tencent（腾讯位置服务 WebService Key，选填 SK 密钥 —— Key 开了 **签名校验**时补上 SK，由插件按
 `md5(path + "?" + 升序参数 + SK)` 计算 `sig` 签名）。
@@ -1199,7 +1199,7 @@ tencent（腾讯位置服务 WebService Key，选填 SK 密钥 —— Key 开了
   anon（**匿名对象存储**）—— **无凭据**，`list_objects` / `download_object` / `download_prefix`
   （即「公开可列 / 可读」）+ `write_probe`（**`write`**：匿名 PUT 一个探针对象后立即 DELETE，
   判定「公开可写」；删不掉时**不算成功**并把残留对象的地址回给用户手动清理）。
-- **map**：amap（高德）—— 地理编码 · 逆地理编码 · 行政区划 · 实况天气 · 预报天气 · IP 定位 · 距离测量；
+- **map**：amap（高德，**仅「Web 服务」类型的 Key** 提供下列操作 —— 其它平台的 Key 调不动 REST 接口）—— 地理编码 · 逆地理编码 · 行政区划 · 实况天气 · 预报天气 · IP 定位 · 距离测量；
   baidu（百度）—— 地理编码 · 逆地理编码 · 地点检索 · IP 定位 · 实况天气 · 预报天气；
   tencent（腾讯位置服务）—— 地理编码 · 逆地址解析 · 地点搜索 · 行政区划 · 距离计算 · IP 定位 · 实况天气 · 预报天气。
   三家都是**纯只读查询**（校验走 IP 定位接口，见 §5 清单）。百度若 AK 开了 **SN 校验**、

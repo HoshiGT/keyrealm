@@ -1,4 +1,12 @@
-"""高德地图 Web 服务 Key 验证插件（plugins/map/ 类别下的独立子插件）。
+"""高德地图 Key 验证插件（plugins/map/ 类别下的独立子插件）。
+
+**按平台分档验证**——高德 Key 是按「服务平台」绑定的：
+
+- **Web 服务**类型的 Key：用 Web 服务 REST 接口**实调**（默认）。
+- **其它平台**（Web 端 JS API / iOS / Android / 微信小程序）：那类 Key 绑在**客户端 SDK** 上，
+  服务端**无法**替它们发起真实调用。此时改判「**该 Key 是否存在**」——高德的
+  ``USERKEY_PLAT_NOMATCH``（10009）恰恰说明 **Key 存在、只是绑给了别的平台**；
+  ``INVALID_USER_KEY``（10001）才是「不存在或已过期」。
 
 高德 Web 服务接口一律是 **HTTP 200 + body 内判定**：业务结果放在 ``status`` / ``info`` /
 ``infocode`` 里，HTTP 状态码只有网络层含义。因此这里不按状态码判成败——``status`` 为
@@ -112,6 +120,41 @@ def _call(client, path: str, key: str, **params):
         return payload, "", ""
     info = str(payload.get("info") or "").strip()
     return None, _explain(payload), _INFO.get(info, ("error", ""))[0]
+
+
+# ── Key 平台 ─────────────────────────────────────────────
+# 高德 Key 按「服务平台」绑定；只有 Web 服务类型的 Key 能在服务端调 REST 接口。
+_KEY_TYPES = {
+    "web_service": "Web 服务",
+    "jsapi": "Web 端（JS API）",
+    "ios": "iOS",
+    "android": "Android",
+    "wechat_mini": "微信小程序",
+    "other": "其它",
+}
+
+
+def _key_type(data) -> str:
+    """取「Key 类型」（缺省 = Web 服务）。未知取值也按 Web 服务处理，不因此报错。"""
+    value = str((data or {}).get("key_type") or "").strip()
+    return value if value in _KEY_TYPES else "web_service"
+
+
+def _probe(client, key: str):
+    """打一次 IP 定位接口，**连同原始 ``info`` 一起返回**——verify 要按平台语义分档。
+
+    与 ``_call`` 的区别：``_call`` 把 ``info`` 折成 verdict（供操作报错用），这里要拿到
+    ``info`` 本身——``USERKEY_PLAT_NOMATCH``（Key 存在、平台不符）与 ``INVALID_USER_KEY``
+    （Key 不存在）在 verify 里的判定**完全不同**。
+    """
+    resp = client.get(f"{BASE}/v3/ip", params={"key": key})
+    payload = safe_json(resp)
+    if not isinstance(payload, dict):
+        return None, f"响应无法解析（HTTP {resp.status_code}）", ""
+    if str(payload.get("status")) == "1":
+        return payload, "", "OK"
+    info = str(payload.get("info") or "").strip()
+    return None, _explain(payload), info
 
 
 # ── 列定义 ───────────────────────────────────────────────
@@ -336,9 +379,11 @@ _HANDLERS = {
 # ── 操作声明 ─────────────────────────────────────────────
 
 def actions(data) -> list:
-    """声明可用操作（凭据含 Key 时提供只读查询）。"""
+    """声明可用操作——**只在「Web 服务」类型下**提供（其它平台的 Key 调不动这些 REST 接口）。"""
     data = data or {}
     if not str(data.get("key") or "").strip():
+        return []
+    if _key_type(data) != "web_service":
         return []
     return [
         {
@@ -484,20 +529,29 @@ def validate(data) -> list:
     if not data:
         return ["配置数据为空"]
     if not str(data.get("key") or "").strip():
-        return ["Web 服务 Key 不能为空"]
+        return ["Key 不能为空"]
+    kt = str(data.get("key_type") or "").strip()
+    if kt and kt not in _KEY_TYPES:
+        return [f"未知的 Key 类型：{kt}"]
     return []
 
 
 @guarded
 def verify(data) -> VerifyResult:
-    """用 IP 定位接口验证 Key：该接口无需额外参数、不消耗业务配额。"""
+    """按「Key 类型」验证。
+
+    - **Web 服务**：用 IP 定位接口**实调**（无需额外参数、不消耗业务配额）。
+    - **其它平台**：那类 Key 只能在客户端 SDK 里用，服务端调不动——于是改判「**Key 是否存在**」：
+      平台不符（10009）说明它**存在**（即有效），只有「不存在 / 已过期」（10001）才判 invalid。
+    """
     data = data or {}
     key = str(data.get("key") or "").strip()
     if not key:
-        return VerifyResult(status="invalid", message="Web 服务 Key 为空")
+        return VerifyResult(status="invalid", message="Key 为空")
 
+    kt = _key_type(data)
     with make_client() as client:
-        payload, error, verdict = _call(client, "/v3/ip", key)
+        payload, error, info = _probe(client, key)
 
     if payload is not None:
         account = {}
@@ -507,8 +561,31 @@ def verify(data) -> VerifyResult:
             account["省"] = province
         if city != "—":
             account["市"] = city
+        if kt != "web_service":
+            return VerifyResult(
+                status="valid", account_info=account or None,
+                message=(f"凭证有效——而且它是一个可用的「Web 服务」Key；"
+                         f"你选的「{_KEY_TYPES[kt]}」可能记错了（该类型本该在客户端 SDK 里用）"))
         return VerifyResult(status="valid", message="凭证有效", account_info=account or None)
 
+    if info == "USERKEY_PLAT_NOMATCH":
+        # 平台不符 ⇒ Key **存在**。这正是「其它平台」判有效的依据：服务端替它做不了真实调用。
+        if kt != "web_service":
+            return VerifyResult(
+                status="valid", account_info={"平台": _KEY_TYPES[kt]},
+                message=(f"该 Key 有效（存在），绑定的是「{_KEY_TYPES[kt]}」平台。它不能在服务端"
+                         "调用 Web 服务接口，本插件只能确认它存在、无法替它做真实调用验证。"))
+        return VerifyResult(
+            status="invalid",
+            message=("Key 与绑定的服务平台不符：它属于「Web 端(JS API)」等**非 Web 服务**类型。"
+                     "把上面的「Key 类型」改成对应类型，即可按「该 Key 是否存在」判定；"
+                     "要用本插件的各项查询，请到高德开放平台另建一个「Web 服务」Key。"))
+    if info == "INVALID_USER_KEY":
+        return VerifyResult(
+            status="invalid",
+            message=f"Key 不正确或已过期（{_KEY_TYPES[kt]} 平台下未找到该 Key）")
+
+    verdict = _INFO.get(info, ("error", ""))[0]
     return VerifyResult(status=verdict or "error", message=error)
 
 
