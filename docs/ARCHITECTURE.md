@@ -666,7 +666,7 @@ pywebview 没有「再次显示」事件可挂（`Form.Shown` 只触发一次，
 
 **交棒时序（顺序不可颠倒）**：应用内 `start_update()` → 写 `data/.update-request.json` →
 `spawn_detached()` 把**自更新进程**起成**脱离进程**（冻结 exe 用 `Keyrealm --self-update <渠道>`、
-源码运行用 `python main.py --self-update <渠道>`；Windows 用 `cmd start` 开独立 CMD 窗口，
+源码运行用 `python main.py --self-update <渠道>`；**两平台都用脱离进程 + 日志文件，不弹控制台窗口**，
 POSIX 走 `start_new_session`）→ **确认子进程起来之后**才调 `_close_quit_cb()`（= `main._quit_app`）退出。
 `main.py` 的 `--self-update` 分支不建窗口，直接跑 `updater.apply_update()`。脚本首步 `wait_for_app_exit()` 轮询
 `single_instance.acquire()`（拿不到锁 = 应用还在跑）；它同时**占住锁**保证更新期间没人能启动

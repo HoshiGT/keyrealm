@@ -875,7 +875,7 @@ onMounted(() => refreshAll(false))
         v-if="updating"
         class="mb-12"
         type="warning"
-        :title="updatePrepareTask && updatePrepareTask.status === 'running'
+        :title="!updatePrepareTask || updatePrepareTask.status === 'running'
           ? '正在准备更新（准备好后程序会自动关闭并重启）'
           : '准备完成，程序即将关闭以完成安装/构建…'"
         :closable="false"

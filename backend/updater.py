@@ -62,6 +62,11 @@ DEFAULT_BRANCH = "main"
 CLONE_DEPTH = 1
 CHANNELS = ("formal", "test")
 
+# 打包后的 exe 是**窗口化**的（`Keyrealm.spec` 里 console=False）——此时 spawn 任何控制台子进程
+# （git / pip / venv / npm）Windows 都会**弹一个黑框**出来。统一加 `CREATE_NO_WINDOW` 压掉它。
+# POSIX 上取 0（`creationflags` 非零才报错，0 即默认）。
+_NO_WINDOW = 0x08000000 if os.name == "nt" else 0   # CREATE_NO_WINDOW
+
 SETTING_CHANNEL = "update_channel"
 
 # 备份里默认跳过的 data/ 子目录（logs 可能很大；installed_plugins 是旧缓存）
@@ -553,6 +558,7 @@ def _git(args: list[str], cwd: Optional[Path] = None, timeout: float = 60,
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=timeout,
         env=_child_env(token=token),
+        creationflags=_NO_WINDOW,
     )
 
 
@@ -984,7 +990,8 @@ def run_build(*, root: Optional[Any] = None, frontend: bool = True,
     sink = open(log, "ab")
     try:
         proc = subprocess.Popen(cmd, cwd=str(root), env=_child_env(),
-                                stdout=sink, stderr=subprocess.STDOUT)
+                                stdout=sink, stderr=subprocess.STDOUT,
+                                creationflags=_NO_WINDOW)
     except Exception as exc:  # noqa: BLE001
         sink.close()
         return {"ok": False, "message": f"构建无法启动：{exc}", "log": str(log)}
@@ -1028,7 +1035,8 @@ def ensure_deps(*, root: Optional[Any] = None, extra: tuple = ("pyinstaller",),
     for cmd in commands:
         try:
             r = subprocess.run(cmd, cwd=str(root), env=env,
-                               capture_output=True, text=True, encoding="utf-8", errors="replace")
+                               capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               creationflags=_NO_WINDOW)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "message": f"依赖安装失败：{exc}"}
         if r.returncode != 0:
@@ -1053,7 +1061,8 @@ def ensure_venv(root: Optional[Any] = None) -> dict:
     sys_py = shutil.which("python3") or shutil.which("python") or sys.executable
     try:
         r = subprocess.run([sys_py, "-m", "venv", str(root / ".venv")], cwd=str(root),
-                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           creationflags=_NO_WINDOW)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "message": f"创建虚拟环境失败：{exc}"}
     if r.returncode != 0 or not venv_py.is_file():
@@ -1692,18 +1701,17 @@ def _self_update_argv(root: Path, kind: str) -> list[str]:
     return [sys.executable, str(root / "main.py"), "--self-update", kind]
 
 
-def _spawn_updater(root: Path, kind: str, terminal: str) -> int:
-    """把「自更新」起成脱离进程。Windows 走独立 CMD 窗口；POSIX 走新会话并记日志。"""
+def _spawn_updater(root: Path, kind: str) -> int:
+    """把「自更新」起成脱离进程（**两平台都不弹控制台窗口**，输出落 ``data/logs/update-*.log``）。
+
+    早先 Windows 用 ``cmd /c start ... cmd /k`` 开一个 CMD 窗口；但准备阶段已把耗时步骤（下载 / 拉源码 /
+    构建）挪进应用内，交棒只剩「替换/安装 + 迁移 + 重启」这点时间，**再弹黑框纯属打扰**。
+    现在与 POSIX 一致：脱离进程 + 日志文件，进度看「上次更新」报告与日志。
+    """
     argv = _self_update_argv(root, kind)
     env = proxy_env()          # 把更新代理注入子进程（git / pip / npm 据此出网）
-    if os.name == "nt":
-        # cmd /c start "" cmd /k <命令>：新控制台窗口（满足「打开 CMD 窗口」）
-        inner = subprocess.list2cmdline(argv)
-        return spawn_detached(["cmd", "/c", "start", "Keyrealm 更新", "cmd", "/k", inner],
-                              cwd=root, env=env)
     log = root / "data" / "logs" / f"update-{time.strftime('%Y%m%d-%H%M%S')}.log"
     return spawn_detached(argv, cwd=root, log=log, env=env)
-
 
 def begin_handoff(kind: str = "formal", *, root: Optional[Any] = None, restart: bool = True,
                   terminal: str = "auto", quit_cb: Optional[Callable[[], None]] = None,
@@ -1726,7 +1734,7 @@ def begin_handoff(kind: str = "formal", *, root: Optional[Any] = None, restart: 
     _write_json_atomic(request_file(root), req)
 
     try:
-        pid = _spawn_updater(root, kind, req["terminal"])
+        pid = _spawn_updater(root, kind)
     except Exception as exc:  # noqa: BLE001 - 起不来就绝不退出应用
         _log.error("启动更新进程失败：%s", exc)
         return {"ok": False, "message": f"无法启动更新进程：{exc}"}

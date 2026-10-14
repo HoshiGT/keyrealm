@@ -188,7 +188,7 @@ scripts/restart.sh --wait
 | 测试版报「工作区有未提交改动」 | 程序目录是仓库且有本地改动。先 commit/stash，或加 `--force`（先 `git stash` 再合并）。 |
 | 应用内「立即更新」正准备时**失败/取消** | 这是**准备阶段**（应用进程内），**程序不会退出**，错误显示在卡片上，可重试；也可改用 `scripts/build_update.sh` 一次性补完。 |
 | 准备完成后**交棒失败**（更新进程没起来） | 应用不退出。正式版用 `scripts/build_update.sh --kind formal`、测试版用 `--kind test` 手动补完（回落流程会补做替换/构建/迁移）。 |
-| 更新进程在跑但看不到进度 | 交棒阶段应用已退出：Windows 看**独立 CMD 窗口**，POSIX 看 `data/logs/update-*.log`；结论在重启后的「上次更新」报告里。 |
+| 更新进程在跑但看不到进度 | 交棒阶段应用已退出，进度看 **`data/logs/update-*.log`**（Windows 也一样，不再弹控制台窗口）；结论在重启后的「上次更新」报告里。 |
 | 迁移报「迁移链断档」 | 目标结构版本与现有脚本之间缺一跳。补齐 `m_<缺的from>__to_*.py` 或核对 `SCHEMA_VERSION`。 |
 | 迁移报「检测到应用正在运行」 | 应用没完全退出。先退出应用再 `--apply`。 |
 | 重启后没起来 | 看 `data/logs/relaunch-*.log`；或手动 `scripts/restart.sh`。 |
@@ -214,7 +214,7 @@ scripts/restart.sh --wait
 2. `scripts\build_update.bat --dry-run` → 打印将执行的步骤，中文不乱码。
 3. 启动应用 → 设置 → 更新 → **检查更新** → 有更新时点**立即更新**。
 4. 确认**准备阶段在应用内进行**（卡片显示进度条、可取消）；准备完成后程序自动关闭，
-   弹**独立 CMD 窗口**完成替换/迁移/重启。
+   **不再弹控制台窗口**，脱离进程完成替换/迁移/重启（输出落 `data\logs\update-*.log`）。
 5. 构建/替换产物 `Keyrealm.exe` 落在**仓库根**；`backups\` 里有且仅有一份 zip（正式版就位前还会短暂出现 `_asset-*.zip`）；测试版的构建落点在 `build\staged\`。
 6. 更新完成后程序**自动重启**；设置页「上次更新」显示**逐阶段报告**（✓/✗ + 日志路径）。
 7. 应用运行期间再跑一次 `scripts\db_update.bat --apply` → 应被单实例闸门拒绝。
