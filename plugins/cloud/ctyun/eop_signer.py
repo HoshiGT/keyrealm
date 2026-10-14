@@ -4,8 +4,7 @@
 用于构造一个只读探针：``GET /v4/region/list-regions``（资源池列表查询）。
 凭据有效时该接口返回本租户可见的资源池列表，不会产生任何写副作用。
 
-自包含：仅依赖标准库 + ``httpx``（``httpx`` 仅在 ``probe()`` 里用到，
-``sign_probe()`` / ``interpret()`` 本身纯标准库）。
+自包含：仅依赖标准库。
 
 ============================================================================
 证据来源（校准基准）
@@ -454,28 +453,6 @@ def interpret(status_code: int, body_text: str) -> dict:
     return {"verdict": "error",
             "message": (f"异常响应（{detail}）: {snippet}" if status or eop_err
                         else f"HTTP {status_code}，非预期响应: {snippet}")}
-
-
-# ---------------------------------------------------------------------------
-# 便捷：直接发请求（需要 httpx）
-# ---------------------------------------------------------------------------
-
-def probe(ak: str, sk: str, *, endpoint: str = DEFAULT_ENDPOINT, region_id: str = "",
-          region_name: str = "", timeout: float = 10.0, proxy: str | None = None) -> dict:
-    """发一次只读探针并返回 ``interpret()`` 的结果（附原始状态码与正文）。"""
-    import httpx  # 延迟导入：sign_probe/interpret 无需 httpx
-
-    method, url, headers, body = sign_probe(
-        ak, sk, endpoint=endpoint, region_id=region_id, region_name=region_name)
-    kwargs = {"headers": headers, "timeout": timeout, "follow_redirects": False}
-    if proxy:
-        kwargs["proxy"] = proxy
-    with httpx.Client(**kwargs) as client:
-        resp = client.request(method, url, content=body)
-    result = interpret(resp.status_code, resp.text)
-    result["http_status"] = resp.status_code
-    result["raw_body"] = resp.text[:1000]
-    return result
 
 
 # ---------------------------------------------------------------------------

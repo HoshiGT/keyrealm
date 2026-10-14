@@ -11,9 +11,9 @@ b1979d1e63240b88ef8c68c0456800e0d9ae31bf, SDK_VERSION=0.9.79）中的：
 - ``baidubce/utils.py``               —— ``get_canonical_time`` / ``normalize_string`` / ``get_canonical_querystring``
 - ``baidubce/http/bce_http_client.py``—— ``send_request`` 里 Host / Content-Length / x-bce-date 的先后次序
 
-只依赖标准库与 httpx(仅可选发送用)。
+只依赖标准库。
 
-依赖：stdlib + httpx
+依赖：stdlib
 参考文档：
 - 生成认证字符串：https://cloud.baidu.com/doc/Reference/s/njwvz1yfu
 - 签名流程：https://cloud.baidu.com/doc/Reference/s/6k6yfh1he
@@ -36,7 +36,6 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 __all__ = [
     "sign_probe",
     "interpret",
-    "send_probe",
     "PROBES",
     "DEFAULT_SIGNED_HEADERS",
     "normalize_string",
@@ -458,38 +457,6 @@ def interpret(status_code: int, body_text: str, content_type: str = "") -> Dict[
     if not bits:
         bits.append("HTTP %s，响应体无可识别错误码" % status_code)
     return {"verdict": verdict, "message": "；".join(bits)}
-
-
-# --------------------------------------------------------------------------- #
-# 可选：真正发出去（httpx）
-# --------------------------------------------------------------------------- #
-
-def send_probe(
-    ak: str,
-    sk: str,
-    *,
-    probe: str = "iam",
-    timeout: float = 10.0,
-    proxy: Optional[str] = None,
-    timestamp: Optional[float] = None,
-) -> Dict[str, str]:
-    """签名并发送探针，返回 ``interpret`` 的结果（附 ``status``）。
-
-    需要 httpx。``proxy`` 例：``"socks5://127.0.0.1:10808"``（需 httpx[socks]）。
-    """
-    import httpx  # 延迟导入，保证本模块的签名部分零第三方依赖
-
-    method, url, headers, body = sign_probe(ak, sk, probe=probe, timestamp=timestamp)
-    kwargs: Dict[str, Any] = {"timeout": timeout, "follow_redirects": False}
-    if proxy:
-        kwargs["proxy"] = proxy
-
-    with httpx.Client(**kwargs) as client:
-        resp = client.request(method, url, headers=headers, content=body)
-
-    result = interpret(resp.status_code, resp.text, resp.headers.get("Content-Type", ""))
-    result["status"] = str(resp.status_code)
-    return result
 
 
 # --------------------------------------------------------------------------- #

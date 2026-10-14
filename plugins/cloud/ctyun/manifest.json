@@ -1,6 +1,6 @@
 {
   "name": "天翼云",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "credential_type": "cloud_ctyun",
   "author": "Keyrealm",
   "description": "验证天翼云 AK/SK 有效性（EOP 网关 /v4/region/list-regions，只读），并提供资源池列表查询",
