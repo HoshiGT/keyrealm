@@ -1,6 +1,6 @@
 {
   "name": "匿名对象存储（公开桶检测）",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "credential_type": "storage_anon",
   "author": "Keyrealm",
   "description": "无需密钥：判定并浏览可匿名访问的对象存储桶（只读列举/读取/下载 + 一次匿名写探测）。通吃阿里云 OSS / 腾讯 COS / 华为 OBS / AWS S3 / 百度 BOS / MinIO 及任意 HTTP 桶。",

@@ -143,6 +143,14 @@ def verify(data) -> VerifyResult:
     if resp.status_code == 200 and root is not None and _local(root) == "ListBucketResult":
         return VerifyResult(status="valid", message="匿名可列举（公开桶）",
                             account_info={"anonymous_list": "允许"})
+    if resp.status_code == 200 and (root is None or _local(root) != "ListBucketResult"):
+        # 200 但根元素不是 `ListBucketResult`：多半打到了**站点首页 / 网关页**而不是对象存储端点
+        # （响应是良构 XML 也一样——HTML 页面同样能被解析，只是根元素叫 `html`）。
+        # 最常见的原因是**桶名写错**——S3 / MinIO 的桶名不允许下划线，写错会被服务端当普通路径，
+        # 于是返回站点页面（而不是 `ListBucketResult`）。
+        return VerifyResult(status="error", message=(
+            "该地址返回的不是 S3 列举结果（像是站点页面而非对象存储端点）：请核对**桶名与端点**——"
+            "S3 / MinIO 的桶名**不允许下划线**（例如 fpaas_bucket 实际应为 fpaas-bucket）。"))
     code, _message = xml_error(resp.text or "")
     if resp.status_code == 403 or code in _DENIED_CODES:
         return VerifyResult(status="invalid", message=f"桶存在但未开放匿名列举（{code or 'HTTP 403'}）")
