@@ -209,6 +209,7 @@ async function copyClientConfig() {
         </el-button>
         <el-button text @click="copyClientConfig">复制客户端配置</el-button>
       </div>
+      <div class="text-muted server-hint">开启后下次启动会自动开启；点「停止服务」则保持关闭。</div>
 
       <el-alert type="info" :closable="false" class="mt-12">
         <template #title>
@@ -277,6 +278,11 @@ async function copyClientConfig() {
   gap: 8px;
   margin-top: 16px;
   flex-wrap: wrap;
+}
+
+.server-hint {
+  margin-top: 8px;
+  font-size: 12px;
 }
 
 .config-pre {

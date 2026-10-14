@@ -901,6 +901,13 @@ def set_plugin_enabled(credential_type: str, enabled: bool) -> dict:
 MCP_DEFAULT_HOST = "127.0.0.1"
 MCP_DEFAULT_PORT = 8765
 
+# 上次的开关状态：启动时据此自动恢复（只有用户点「停止服务」才落 0）
+MCP_ENABLED_KEY = "mcp_enabled"
+
+
+def read_mcp_enabled() -> bool:
+    return (db.get_setting(MCP_ENABLED_KEY, "0") or "").strip() == "1"
+
 
 def _mcp_host() -> str:
     return db.get_setting("mcp_host", "").strip() or MCP_DEFAULT_HOST
@@ -997,13 +1004,31 @@ def start_mcp() -> dict:
     _push_mcp_status()
     if not ok:
         return {"ok": False, "message": f"端口 {port} 已被占用，请到设置里换一个端口"}
+    db.set_setting(MCP_ENABLED_KEY, "1")
     return {"ok": True, "host": host, "port": actual_port, "url": url}
 
 
 def stop_mcp() -> dict:
     mcp_server.stop_server()
+    db.set_setting(MCP_ENABLED_KEY, "0")
     _push_mcp_status()
     return {"ok": True}
+
+
+def autostart_mcp() -> bool:
+    """启动时按上次的开关状态恢复 MCP；没开过就什么都不做。
+
+    端口被占用时只记日志、**不改开关**——下次启动照旧会试。
+    """
+    if not read_mcp_enabled():
+        return False
+    host, port = _mcp_host(), _mcp_port()
+    ok, actual_port, _url = mcp_server.start_server(port, host)
+    if ok:
+        _log.info("MCP 已按上次状态自动启动（%s:%s）", host, actual_port)
+    else:
+        _log.warning("MCP 自动启动失败：端口 %s 被占用（开关保持开启，下次启动会再试）", port)
+    return ok
 
 
 def list_mcp_permissions() -> list:

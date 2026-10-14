@@ -590,8 +590,8 @@ def main():
     # 启动空闲自动锁定看门狗（是否真的锁由 settings.auto_lock_minutes 决定，默认关闭）
     idle_lock.start()
 
-    # MCP 不随应用自动启动（避免每次启动都监听 8765 端口），
-    # 由用户在「MCP 设置」页手动开启；开启后最小化到托盘仍持续运行。
+    # MCP：按上次退出前的开关状态恢复（上次开着就自动开）。端口被占用时只记日志，不改开关。
+    api.autostart_mcp()
 
     # 创建窗口。窗口入口的 file:// 形式另存一份：轻量模式恢复界面时用它重载（见 _restore_page）。
     _frontend = _get_frontend_path()
