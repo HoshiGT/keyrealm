@@ -231,7 +231,7 @@ EP 自己给这类列的规则是 `background: inherit`——继承所在行的�
 `plugin_manager.icon_needs_lift()` 把结果随 `list_plugins()` 下发为 `icon_lift`；
 前端只给置了该标志的 `<img>` 加 `.icon-lift`，`base.css` 的白板规则也据此限定。
 **没有**在前端硬编码「哪几个标是黑的」——新装一个黑标插件同样自动纳入判定，不必改前端。
-冷启动一次性分析约 76 ms（63 个插件 / 61 张 logo，34 张位图已从 640² 缩到 ≤256²、多数 128²），
+冷启动一次性分析约 76 ms（64 个插件 / 61 张 logo，34 张位图已从 640² 缩到 ≤256²、多数 128²），
 之后按 `credential_type` 命中缓存（约 0.03 ms），缓存只在 `sync_plugins()` 时清空。
 
 **3. 解锁页徽标外那圈旋转描边始终不可见。** 它原本是 `conic-gradient` 配 `radial-gradient`
