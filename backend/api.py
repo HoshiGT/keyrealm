@@ -1415,16 +1415,47 @@ def build_backup_doc(scope: str = "all", encrypted: bool = True,
     return {"ok": True, "document": doc}
 
 
-def apply_backup_doc(doc: dict, dedupe: bool = True, source: str = "") -> dict:
+def _resolve_decrypt_key(doc: dict, key: bytes, orig_password: Optional[str]) -> tuple:
+    """决定**解开这份文档密文**该用哪把 key。返回 ``(decrypt_key | None, 需要密码时的提示)``。
+
+    v2 起文档带 ``vault.salt``：文档来自**别的保险库**时，密文是用「原主密码 + 那份 salt」
+    派生的 key 加密的——只有拿到原主密码才能解开，解完再用**当前库的 key** 重新加密写回。
+    """
+    vault = doc.get("vault") if isinstance(doc.get("vault"), dict) else {}
+    doc_salt = str((vault or {}).get("salt") or "").strip()
+    cur_salt = (db.get_setting("salt", "") or "").strip()
+    if not doc.get("encrypted") or not doc_salt or doc_salt == cur_salt:
+        return key, ""                       # 明文 / 无 salt 信息 / 同一保险库
+    if not orig_password:
+        return None, "这份备份来自另一个保险库，请输入它当时的主密码后重试"
+    try:
+        salt = bytes.fromhex(doc_salt)
+    except ValueError:
+        return None, "备份里的 salt 不合法，无法还原"
+    derived = derive_key(orig_password, salt)
+    verify_token = str((vault or {}).get("verify_token") or "").strip()
+    if verify_token and not check_verify_token(derived, verify_token):
+        return None, "主密码不正确（与这份备份的保险库不匹配）"
+    return derived, ""
+
+
+def apply_backup_doc(doc: dict, dedupe: bool = True, source: str = "",
+                     orig_password: Optional[str] = None) -> dict:
     """把备份文档并入当前库（不弹对话框）——GUI 导入与 MCP 工具共用。
 
     ``source`` 只写进导入日志抬头，标明这份备份的来源文件。
+    ``orig_password``：文档来自**别的保险库**（带 ``vault.salt``）时，用它来解开密文；
+    缺省/不对时返回 ``{"ok": False, "need_password": True}``，由界面补问后重试。
     """
     key = _get_key()
     if key is None:
         return {"error": "vault_locked"}
+    decrypt_key, need_msg = _resolve_decrypt_key(doc, key, orig_password)
+    if decrypt_key is None:
+        return {"ok": False, "need_password": True, "message": need_msg}
     try:
-        result = backup.import_backup(key, doc, dedupe=dedupe, source=source)
+        result = backup.import_backup(key, doc, dedupe=dedupe, source=source,
+                                      decrypt_key=decrypt_key)
     except ValueError as e:
         return {"ok": False, "message": str(e)}
 
@@ -1432,6 +1463,7 @@ def apply_backup_doc(doc: dict, dedupe: bool = True, source: str = "") -> dict:
     proxy_config.apply_proxy(proxy_store.global_url() or "")
     push_event("vault:credentials_changed")
     push_event("vault:plugins_changed")
+    push_event("vault:proxies_changed")
     _log.info("已导入备份：成功 %d 条，失败 %d 条，重复跳过 %d 条（日志：%s）",
               result["imported"], result.get("failed_count", 0),
               result.get("skipped_duplicate", 0), result.get("log_file") or "未生成")
@@ -1473,24 +1505,31 @@ def export_backup(scope: str = "all", encrypted: bool = True,
     }
 
 
-def import_backup() -> dict:
-    """从用户选择的备份文件导入（自动识别加密/明文）。"""
+def import_backup(orig_password: Optional[str] = None, path: Optional[str] = None) -> dict:
+    """从备份文件导入（自动识别加密/明文）。
+
+    ``path`` 传了就不弹文件框——界面在「这份备份来自别的保险库、请补主密码」后会带着
+    **同一个文件**再调一次，免得让用户重选一遍。
+    """
     key = _get_key()
     if key is None:
         return {"error": "vault_locked"}
 
-    path = _file_dialog("open")
     if not path:
-        return {"ok": False, "message": "已取消"}
+        path = _file_dialog("open")
+        if not path:
+            return {"ok": False, "message": "已取消"}
 
     try:
         doc = backup.read_backup_file(path)
     except Exception as e:
         return {"ok": False, "message": f"读取失败: {e}"}
 
-    result = apply_backup_doc(doc, source=path)
+    result = apply_backup_doc(doc, source=path, orig_password=orig_password)
     if result.get("ok"):
         result["path"] = path
+    elif result.get("need_password"):
+        result["path"] = path      # 带上同一个文件，界面补问主密码后直接重试，不必重选
     return result
 
 
@@ -1733,6 +1772,19 @@ def take_auto_update_notice() -> dict:
     return notice or {}
 
 
+def _full_export_doc() -> Optional[dict]:
+    """给更新前的备份构一份**全量导出文档**；拿不到（未解锁等）就返回 ``None``——不影响更新。"""
+    try:
+        built = build_backup_doc("all", True)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("生成全量导出失败：%s", type(exc).__name__)
+        return None
+    if not built.get("ok"):
+        _log.info("跳过随包全量导出：%s", built.get("message") or built.get("error") or "")
+        return None
+    return built["document"]
+
+
 def start_update(kind: str = "formal", restart: bool = True, terminal: str = "auto") -> dict:
     """「立即更新」：**应用内先准备**（备份 + 下载 / 拉源码 / 装依赖 / 构建，带进度、可取消），
     准备成功后再**交棒**给脱离进程（替换 / 迁移 / 重启）并退出程序。
@@ -1761,6 +1813,7 @@ def start_update(kind: str = "formal", restart: bool = True, terminal: str = "au
                 kind,
                 progress_cb=lambda c, t, s: tasks.progress(tid, c, t, s),
                 should_cancel=tasks.should_cancel(tid),
+                export_doc=_full_export_doc(),      # 全量导出随备份落盘（原库坏了也能还原）
             )
         except Exception as exc:  # noqa: BLE001 - 准备边界兜底，不退出应用
             _log.exception("准备更新异常")

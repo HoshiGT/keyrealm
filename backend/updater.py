@@ -891,8 +891,14 @@ def _zip_add_tree(zf: zipfile.ZipFile, src: Path, arc_prefix: str,
     return skipped
 
 
-def make_backup(*, root: Optional[Any] = None, kind: str = "formal", keep: int = 1) -> dict:
-    """把可执行文件 + ``plugins/`` + ``data/`` 打包成 zip；**至多保留 ``keep`` 份**。"""
+def make_backup(*, root: Optional[Any] = None, kind: str = "formal", keep: int = 1,
+                export_doc: Optional[dict] = None) -> dict:
+    """把可执行文件 + ``plugins/`` + ``data/``（含凭据库一致性快照）打包成 zip；**至多保留 ``keep`` 份**。
+
+    ``export_doc``：**全量导出文档**（`backend/backup.build_backup` 的产物）。应用内更新时由
+    `backend/api.py` 生成（它才拿得到主密码派生的 key）并传进来，随包落成
+    ``data/keyrealm-full-backup.json``——**即使原库损坏/丢失，凭据与设置也能从这份文档还原**。
+    """
     root = repo_root(root)
     bdir = backups_dir(root)
     bdir.mkdir(parents=True, exist_ok=True)
@@ -940,6 +946,14 @@ def make_backup(*, root: Optional[Any] = None, kind: str = "formal", keep: int =
                         snap.unlink()
                     except OSError:
                         pass                     # 删不掉也不该让整份备份失败
+            # 全量导出文档：原库一旦损坏/丢失，凭据、设置、定时计划都能从它还原
+            if export_doc:
+                try:
+                    zf.writestr("data/keyrealm-full-backup.json",
+                                json.dumps(export_doc, ensure_ascii=False, indent=2))
+                    members.append("data/keyrealm-full-backup.json")
+                except Exception as exc:  # noqa: BLE001 - 序列化失败不该挡住更新
+                    skipped.append(f"keyrealm-full-backup.json（{type(exc).__name__}）")
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "message": f"备份失败：{exc}"}
     try:
@@ -1423,6 +1437,7 @@ def prepare_update(kind: str = "formal", *, root: Optional[Any] = None, frontend
                    do_backup: bool = True, force: bool = False,
                    progress_cb: Optional[ProgressCb] = None,
                    should_cancel: Optional[Callable[[], bool]] = None,
+                   export_doc: Optional[dict] = None,
                    log: Callable[[str], None] = print) -> dict:
     """**准备阶段**（应用进程内跑，程序不退出）：备份 + 下载预编译包 / 拉源码 + 装依赖 + 构建。
 
@@ -1470,7 +1485,7 @@ def prepare_update(kind: str = "formal", *, root: Optional[Any] = None, frontend
     if do_backup:
         _status_stage(root, kind, stages, "backup", "备份旧产物…", done)
         _prog(0, 0, "备份中…")
-        bk = make_backup(root=root, kind=kind)
+        bk = make_backup(root=root, kind=kind, export_doc=export_doc)
         if not bk.get("ok"):
             return {"ok": False, "kind": kind, "message": bk.get("message", "备份失败")}
         log(f"已备份 → {bk['path']}")

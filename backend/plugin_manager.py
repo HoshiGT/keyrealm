@@ -140,6 +140,17 @@ def is_plugin_enabled(credential_type: str) -> bool:
     return credential_type not in _read_disabled()
 
 
+def disabled_types() -> list:
+    """当前被禁用的 credential_type 列表（供**全量备份**导出）。"""
+    return sorted(_read_disabled())
+
+
+def set_disabled(types) -> None:
+    """整体覆盖禁用集合（供**全量备份**导入；随后 sync 一次即生效）。"""
+    _write_disabled({str(x) for x in (types or []) if str(x).strip()})
+    sync_plugins()
+
+
 def batchable_types() -> set[str]:
     """可参与「批量验证」的 credential_type 全集（**唯一的判定处**）。
 
@@ -298,6 +309,19 @@ def _category_display(category: str, meta: dict) -> str:
     return str(meta.get("name") or category or "未分类")
 
 
+# 「像密钥」的字段名提示：只用于启动时的 lint 判断（判不准也不影响任何功能）
+_SECRET_HINTS = ("key", "token", "secret", "password", "passwd", "pass", "auth",
+                 "credential", "sign", "webhook", "cookie", "session")
+
+
+def _looks_like_secret_field(field) -> bool:
+    """字段看起来是不是「密钥」：``type=password``，或名字里含密钥类词。"""
+    if str(getattr(field, "type", "") or "").lower() == "password":
+        return True
+    key = str(getattr(field, "key", "") or "").lower()
+    return any(hint in key for hint in _SECRET_HINTS)
+
+
 def sync_plugins():
     """扫描 plugins/ 目录，同步插件注册表、DB 的 enabled 镜像与已加载模块。
 
@@ -325,12 +349,16 @@ def sync_plugins():
         found.add(ct)
         # lint：声明了字段却一个 sensitive 都没有 → 该插件的密钥完全不参与输出净化。
         # 这是**静默失效**的一种（用户与作者都看不出区别），加载时点出来。
+        # **只在确实存在「像密钥」的字段时才报**：像「匿名对象存储」那样全字段都非机密的插件
+        # （只有桶地址 / 备注）本来就没有可净化的东西，按旧条件会每次启动都误报。
         if manifest.fields and not any(f.sensitive for f in manifest.fields):
-            _log.warning(
-                "插件 %s 声明了 %d 个字段，但没有任何 sensitive:true —— "
-                "其密钥不会被输出净化（错误消息里的密钥会落日志/落库）",
-                ct, len(manifest.fields),
-            )
+            suspect = [f.key for f in manifest.fields if _looks_like_secret_field(f)]
+            if suspect:
+                _log.warning(
+                    "插件 %s 声明了 %d 个字段，但没有任何 sensitive:true —— "
+                    "其密钥（%s）不会被输出净化（错误消息里的密钥会落日志/落库）",
+                    ct, len(manifest.fields), "、".join(suspect),
+                )
         is_on = ct not in disabled
         try:
             db.upsert_plugin(

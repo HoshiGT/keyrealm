@@ -119,6 +119,9 @@ Keyrealm 可以在程序内检查并一键更新。**两种渠道的更新方式
 ## 5. 备份
 
 - **内容**：可执行文件 + `plugins/` + `data/`（数据库走 SQLite 一致性快照）。
+  **另外还随包带一份「全量导出」`data/keyrealm-full-backup.json`**（就是「备份」页那份整库备份：
+  凭据 / 分组 / 代理 / 预设 / 定时计划 / 设置 / 保险库 KDF / MCP / 插件启停）——**原库损坏或丢失时，
+  靠它也能把数据还原回来**（在「备份 → 导入」里选它，来自别的保险库时会再问当时的主密码）。
   **排除** `data/logs/`、`data/installed_plugins/` 与 **`data/webview/`**（后者是 WebView2 的
   用户数据目录，运行时被 WebView **独占**，一读就 `Permission denied`；它只是可再生的缓存）。
 - **读不了的文件会被跳过而不是让备份失败**：更新前的备份失败会**直接挡住更新**，而读取失败
@@ -170,6 +173,7 @@ scripts/restart.sh --wait
 |---|---|---|
 | `backups/*.zip` | 更新前备份（含密钥） | 忽略 |
 | `backups/_asset-*.zip` | 正式版下载的预编译包（就位后即删） | 忽略 |
+| `data/keyrealm-full-backup.json` | 更新前备份里随包的**全量导出**（原库损坏也能还原） | 忽略（`data/`） |
 | `build/staged/` | 测试版**准备阶段**的构建落点（交棒时安装进程序目录） | 忽略（`build/`） |
 | `.update-meta/` | 从预编译包解出的 `version.json` + `migrations/`（正式版更新后才有） | 忽略 |
 | `data/.update-request.json` | 应用交给交棒进程的请求（含 `prepared` 指针） | 忽略（`data/`） |

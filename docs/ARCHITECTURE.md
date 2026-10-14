@@ -369,13 +369,17 @@ plugins/
 
 判定与文案集中在 `backend/proxy.py`：`needs_socks()` / `socks_available()` / `SOCKS_HINT`（单一事实来源，三层共用）。
 
-**备份 / 恢复**：`backend/backup.py` 负责构建/导入备份文档（JSON）。加密备份的敏感字段直接沿用库中密文，只能用同一主密码导入；明文备份可跨主密码导入（以当前主密钥重新加密写库）。文件读写通过 pywebview 的原生文件对话框（`api._file_dialog`，优先用 `webview.FileDialog` 枚举——旧的模块级 `SAVE_DIALOG`/`OPEN_DIALOG` 常量会打印弃用警告）。
+**备份 / 恢复**：`backend/backup.py` 负责构建/导入备份文档（JSON，**v2 起为「全量」**）。加密备份的敏感字段直接沿用库中密文；**整库档还会带上 `vault.salt` / `vault.verify_token`**——有了这份 KDF 材料，导出文件才**自包含**：原库丢了也能用「文档里的 salt + 原主密码」把密文解开（见下）。明文备份本就跨主密码可导（以当前主密钥重新加密写库）。文件读写通过 pywebview 的原生文件对话框（`api._file_dialog`，优先用 `webview.FileDialog` 枚举——旧的模块级 `SAVE_DIALOG`/`OPEN_DIALOG` 常量会打印弃用警告）。
+
+**跨保险库还原**：`api._resolve_decrypt_key` 比较文档的 `vault.salt` 与当前库的 salt——**不同**就说明这份备份来自另一个保险库（密文是用「那份 salt + 当时的主密码」派生的 key 加密的）。此时界面会补问**原主密码**，用它派生源 key（并用文档里的 `verify_token` 校验），导入时**逐条解密后以当前库的 key 重新加密**写回；`_ENCRYPTED_SETTINGS`（如 `update_token`）同样重加密。**绝不覆盖当前库的 `salt`/`verify_token`**——那是当前保险库的根，改了整库都打不开。
 
 **导入是填充式的**：以当前库（本质是各插件的 `fields_schema`）为蓝本，把备份条目里的值往这个蓝本里填，**不删也不覆盖既有数据**。一条要满足三条才导得进去，否则**整条判失败、不写库**：① 插件**存在且启用**；② 备份里的字段**都能在当前插件里找到**（多出未知字段 = 两边同构性已不成立）；③ 插件的**必填字段在备份里有着落**（备份没有、插件也没默认值 → 填进去必是一条注定验证失败的凭据）。插件新增的**选填**字段一律留空——这正是「库扩增后新列留空」的落点。去重仍按「同类型 + 敏感值相同」跳过（`dedupe=true`）。
 
 判定失败的条目逐条记下原因，并落到 `data/logs/` 下**两份普通文本文件**（与运行日志同目录，但不用 `logging`：这是一次性、条目化的审计记录，混进滚动日志会把两者都搅浑）：完整导入日志（含成功条目，敏感值脱敏）与**导入失败日志**（仅失败条目，**保留明文**，供人工比对补录，故以 `0600` 权限落盘）。返回给界面的失败条数有上限（日志文件里是全量）。
 
-导出有两个**互不重叠**的维度：`scope` 决定是否附带**分组与偏好设置**（`all` 带、`credentials` 不带），`credential_ids` 决定**导出哪些凭据**（`None` = 全部，给定列表 = 只导这些；不影响 scope 语义）。因此「全部 + 勾选若干」与「仅凭据 + 勾选若干」的差别仍然只是分组/偏好设置那部分，文档里写入 `credential_ids` 便于回溯。前端「备份」页把两者做成两组控件（范围单选 + 凭据目录树勾选，勾选器是共享组件 `components/CredentialTreePicker.vue`——「系统设置 → 定时计划 → 指定凭据」用的是同一个）。
+导出有两个**互不重叠**的维度：`scope` 决定是否附带**整库档**（`all` 带、`credentials` 不带），`credential_ids` 决定**导出哪些凭据**（`None` = 全部，给定列表 = 只导这些；不影响 scope 语义）。因此「全部 + 勾选若干」与「仅凭据 + 勾选若干」的差别仍然只是整库档那部分，文档里写入 `credential_ids` 便于回溯。前端「备份」页把两者做成两组控件（范围单选 + 凭据目录树勾选，勾选器是共享组件 `components/CredentialTreePicker.vue`——「系统设置 → 定时计划 → 指定凭据」用的是同一个）。
+
+**整库档（`scope=all`，v2）带的东西**：凭据 + 分组 + 代理 + 预设 + **`vault`（salt / verify_token）** + **`settings`（全量，除结构版本与归入 vault 的两项）** + **定时计划** + **MCP（工具权限 + 活跃令牌，令牌**只带哈希**）** + **插件启停**（`plugins/.state.json` 的 disabled 集）。这几样合起来才是「换台机器/原库丢了也能复原」的**全量备份**。
 
 ---
 
@@ -506,7 +510,7 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
 
 **设置项**：`settings` 表的 `auto_lock_minutes`（纯 K/V，**不涉及 DDL / schema_version**）。
 默认 `0` = 关闭；可选档位 `1 / 5 / 10 / 15 / 30 / 60` 分钟，非法值一律回落到 `0`。
-该键在 `backup.py` 的 `_PREF_KEYS` 里，随整库备份导出/导入。
+该键随整库备份的 `settings` 段导出/导入（`backup.py` v2 起是**全量设置**，不再只挑几个偏好键）。
 
 **为什么计时在后端而不是前端**：
 1. 「后台有任务在跑就顺延」这条规则的依据 `tasks.running_count()` 在后端；
@@ -686,9 +690,11 @@ POSIX 走 `start_new_session`）→ **确认子进程起来之后**才调 `_clos
 **跨进程 / 跨重启通信**：全程写 `data/.update-status.json`（阶段、成败、from/to）；新应用启动后
 由前端「设置 → 更新」卡片读取展示。
 
-**备份**：可执行文件 + `plugins/` + `data/`（DB 走 `sqlite3 backup()` 一致性快照，`logs/` 排除）
+**备份**：可执行文件 + `plugins/` + `data/`（DB 走 `sqlite3 backup()` 一致性快照，`logs/`/`webview/` 排除）
+**再外加一份全量导出 `data/keyrealm-full-backup.json`**（复用「备份」功能，见 §备份），
 打成一个 zip 落 `backups/`（gitignored、0600、**含真实密钥**），**只留一份**。构建失败不覆盖旧
 产物（`assemble_release` 覆盖前留 `Keyrealm.old` 供回滚）。
+> 两份内容互补：**快照**用于「更新失败原样回退」，**全量导出**用于「原库损坏/丢失仍能还原」。
 
 **数据库逐级迁移**：`scripts/migrations/m_<from>__to_<to>.py`（接口 `FROM_VERSION` /
 `TO_VERSION` / `preview(conn)` / `apply(conn)`），运行器串链**逐级**升、**绝不跨级**，每跳留

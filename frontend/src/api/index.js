@@ -288,7 +288,9 @@ export const api = {
   // ── 备份 / 恢复 ─────────────────────────────────────────
   exportBackup: (scope = 'all', encrypted = true, credentialIds = null) =>
     call('export_backup', scope, encrypted, credentialIds),
-  importBackup: () => call('import_backup'),
+  // 导入备份。来自**别的保险库**（v2 备份自带 salt）时：先不带参调用 → 返回 need_password
+  // + path，再带「原主密码 + 同一文件」重试（顺序同 VaultApi.import_backup(orig_password, path)）。
+  importBackup: (origPassword = null, path = null) => call('import_backup', origPassword, path),
 
   // ── 日志 ────────────────────────────────────────────────
   getLogConfig: () => call('get_log_config'),

@@ -26,15 +26,24 @@ from typing import Any, Optional
 
 from . import database as db
 from . import plugin_manager
-from .crypto import decrypt_dict, encrypt_dict, mask_secret
+from .crypto import decrypt, decrypt_dict, encrypt, encrypt_dict, mask_secret
 from .logger import LOG_DIR
 
 FORMAT = "credential-vault-backup"
-VERSION = 1
+VERSION = 2      # v2 = **全量**：加 vault(salt/verify_token) / settings(全部) / schedules / mcp / plugins_disabled
 
-# 仅备份/恢复这几项与主密码、与本机环境无关的偏好设置
-# （salt / verify_token 不备份；mcp_host / mcp_port 是本机监听配置，换台机器未必可用，不跟随备份）
-_PREF_KEYS = ("verify_proxy", "global_proxy_id", "log_level", "close_action", "auto_lock_minutes")
+# 不进 settings 段的键：
+# - `schema_version` 是**结构**版本，跟着库走不合适；
+# - `salt` / `verify_token` 归入 `vault` 段——**加密导出的可独立还原全靠它**：
+#   没有 salt，即使原库丢了、主密码也对，也派生不出那把 key，密文永远是密文。
+_SETTINGS_EXCLUDE = {"schema_version", "salt", "verify_token"}
+
+# 「值本身是密文」的设置项：导出原样带；导入时要用**源 key** 解开、再用**当前 key** 重加密，
+# 否则换库后这个值就是一段解不开的废密文。
+_ENCRYPTED_SETTINGS = ("update_token",)
+
+# v1 时代只备份这几个偏好键；v2 起 `settings` 段是全量，读取时仍兼容老文件的 `prefs`
+_LEGACY_PREF_KEYS = ("verify_proxy", "global_proxy_id", "log_level", "close_action", "auto_lock_minutes")
 
 # 返回给界面的失败条数上限（日志文件里是全量；IPC 载荷没必要跟着条目数一起涨）
 _MAX_REPORTED_FAILURES = 200
@@ -279,7 +288,13 @@ def build_backup(
             {"name": g["name"], "description": g.get("description", ""), "color": g.get("color", "#409EFF")}
             for g in db.list_groups()
         ]
-        doc["prefs"] = {k: db.get_setting(k, "") for k in _PREF_KEYS}
+        # **KDF 材料**：让加密导出能独立还原（原库丢了也解得开）
+        doc["vault"] = {
+            "salt": db.get_setting("salt", ""),
+            "verify_token": db.get_setting("verify_token", ""),
+        }
+        # **全部设置**（除结构版本与上面归入 vault 的两项）——新增设置项会自动跟着走
+        doc["settings"] = {k: v for k, v in db.all_settings().items() if k not in _SETTINGS_EXCLUDE}
         # 代理注册表与类别/插件默认设置。代理**带上 id**（导入侧据此把凭据/预设里引用的
         # `_proxy_id` 改写成本库的 id）；地址与名字照旧，便于人读。
         doc["proxies"] = [
@@ -290,20 +305,58 @@ def build_backup(
             {"scope": r["scope"], "scope_key": r["scope_key"], "values": r.get("payload") or "{}"}
             for r in db.list_preset_defaults()
         ]
+        doc["schedules"] = [_schedule_doc(s) for s in db.list_schedules()]
+        doc["mcp_permissions"] = [
+            {"tool_name": p["tool_name"], "enabled": bool(p["enabled"])}
+            for p in db.list_mcp_permissions()
+        ]
+        active = db.get_active_mcp_token()
+        doc["mcp_tokens"] = [_token_doc(active)] if active else []
+        doc["plugins_disabled"] = plugin_manager.disabled_types()
     return doc
 
 
-def import_backup(key: bytes, doc: dict, dedupe: bool = True, source: str = "") -> dict:
+def _schedule_doc(s: dict) -> dict:
+    """定时计划的可搬运表示（**不带** last_run_at / next_run_at——那两个是运行态派生值）。"""
+    return {
+        "name": s.get("name"),
+        "trigger_type": s.get("trigger_type"),
+        "trigger_args": s.get("trigger_args") or {},
+        "target_scope": s.get("target_scope") or "all",
+        "target_id": s.get("target_id"),
+        "credential_ids": s.get("credential_ids") or [],
+        "enabled": bool(s.get("enabled")),
+    }
+
+
+def _token_doc(t: dict) -> dict:
+    """MCP 活跃令牌的可搬运表示：**只带哈希**——同一 bearer token 在目标库继续可用，
+    但谁也无法从文件反推出原文。"""
+    return {
+        "name": t.get("name"),
+        "token_hash": t.get("token_hash"),
+        "token_prefix": t.get("token_prefix"),
+        "tools_allowed": t.get("tools_allowed") or [],
+        "expires_at": t.get("expires_at"),
+    }
+
+
+def import_backup(key: bytes, doc: dict, dedupe: bool = True, source: str = "",
+                  decrypt_key: Optional[bytes] = None) -> dict:
     """把备份文档**填充式**导入当前库，返回统计与逐条失败原因。
 
     ``source`` 只用于日志抬头（记一下这份备份是从哪个文件来的），不影响导入逻辑。
-    加密备份需与当前主密码匹配——不匹配时直接抛 ``ValueError`` 中止整个导入，
-    因为那说明用户拿错了密码/文件，逐条报失败没有意义。
+
+    ``decrypt_key``：**解密这份文档用的 key**。缺省 = ``key``（当前库的 key，即同一保险库）。
+    文档来自**别的保险库**（v2 起带 ``vault.salt``）时，调用方先用「原主密码 + 文档里的 salt」
+    派生出源 key 传进来——这样密文解得开、再用当前库的 key 重新加密写回，跨库还原才成立。
+    加密备份解不开时直接抛 ``ValueError`` 中止整个导入（说明拿错了密码/文件，逐条报失败没意义）。
     """
     if not isinstance(doc, dict) or doc.get("format") != FORMAT:
         raise ValueError("不是有效的 Keyrealm 备份文件")
 
     encrypted = bool(doc.get("encrypted"))
+    src_key = decrypt_key or key                 # 解开文档里密文用的 key
     entries = doc.get("credentials") or []
 
     # 1) 分组：按名称补建
@@ -386,9 +439,9 @@ def import_backup(key: bytes, doc: dict, dedupe: bool = True, source: str = "") 
                 failed += 1
                 continue
             try:
-                data = decrypt_dict(key, blob)
+                data = decrypt_dict(src_key, blob)
             except Exception:
-                raise ValueError("备份是加密的，且与当前主密码不匹配，无法导入")
+                raise ValueError("备份是加密的，且与提供的密码不匹配，无法导入")
         else:
             data = row.get("data") or {}
         rec["data"] = data
@@ -433,12 +486,15 @@ def import_backup(key: bytes, doc: dict, dedupe: bool = True, source: str = "") 
         rec["status"] = "imported"
         imported += 1
 
-    # 3) 偏好设置（仅整库范围）
-    if doc.get("scope") == "all" and isinstance(doc.get("prefs"), dict):
-        for k in _PREF_KEYS:
-            if k in doc["prefs"]:
-                # global_proxy_id 是 UUID，跨库稳定，原样写入即可
-                db.set_setting(k, str(doc["prefs"][k]))
+    # 3) 设置 / 定时计划 / MCP / 插件启停（仅整库范围）
+    restored = {"settings": 0, "schedules": 0, "mcp_permissions": 0, "mcp_tokens": 0,
+                "plugins_disabled": 0}
+    if doc.get("scope") == "all":
+        restored["settings"] = _import_settings(doc, src_key, key)
+        restored["schedules"] = _import_schedules(doc)
+        restored["mcp_permissions"] = _import_mcp_permissions(doc)
+        restored["mcp_tokens"] = _import_mcp_tokens(doc)
+        restored["plugins_disabled"] = _import_plugins_disabled(doc)
 
     # 4) 落两份日志（无论成败都写完整日志；有失败才多写一份含明文的）
     counts = {
@@ -473,9 +529,114 @@ def import_backup(key: bytes, doc: dict, dedupe: bool = True, source: str = "") 
         "failed_truncated": max(0, len(failed_items) - _MAX_REPORTED_FAILURES),
         "created_groups": created_groups,
         "created_proxies": created_proxies,
+        "restored": restored,
         "log_file": log_file,
         "failed_log_file": failed_log_file,
     }
+
+
+# ── 整库档的其余 section 恢复（v2）──────────────────────────
+
+def _import_settings(doc: dict, src_key: bytes, key: bytes) -> int:
+    """恢复设置项。v2 用 `settings`（**全量**）；v1 老文件只有 `prefs`（少数几个）。"""
+    settings = doc.get("settings") if isinstance(doc.get("settings"), dict) else None
+    if settings is None:                       # v1 兼容
+        prefs = doc.get("prefs") if isinstance(doc.get("prefs"), dict) else {}
+        settings = {k: prefs.get(k, "") for k in _LEGACY_PREF_KEYS if k in prefs}
+    count = 0
+    for k, v in settings.items():
+        k = str(k)
+        if k in _SETTINGS_EXCLUDE:
+            continue                           # 结构版本 / KDF 材料：**绝不覆盖**当前库
+        value = str(v if v is not None else "")
+        if k in _ENCRYPTED_SETTINGS:
+            # 值是密文：先按源 key 解、再按当前 key 重加密，换库后才用得了。
+            # 注意这些设置项存的是**原始字符串**的密文（不是 encrypt_dict 的 JSON），故用 decrypt/encrypt。
+            try:
+                value = encrypt(key, decrypt(src_key, value))
+            except Exception:
+                continue                       # 解不开就跳过，别塞一段废密文进去
+        db.set_setting(k, value)
+        count += 1
+    return count
+
+
+def _import_schedules(doc: dict) -> int:
+    """恢复定时计划（同名视为已有，不重复建）。"""
+    existing = {s.get("name") or "" for s in db.list_schedules()}
+    count = 0
+    for s in doc.get("schedules") or []:
+        if not isinstance(s, dict):
+            continue
+        name = str(s.get("name") or "").strip()
+        if not name or name in existing:
+            continue
+        try:
+            created = db.create_schedule(
+                name=name,
+                trigger_type=str(s.get("trigger_type") or "cron"),
+                trigger_args=s.get("trigger_args") or {},
+                target_scope=str(s.get("target_scope") or "all"),
+                target_id=s.get("target_id"),
+                credential_ids=s.get("credential_ids") or [],
+            )
+            if not s.get("enabled", True):
+                db.update_schedule(created["id"], enabled=0)
+            existing.add(name)
+            count += 1
+        except Exception:  # noqa: BLE001
+            continue
+
+
+    return count
+
+
+def _import_mcp_permissions(doc: dict) -> int:
+    count = 0
+    for p in doc.get("mcp_permissions") or []:
+        name = str((p or {}).get("tool_name") or "").strip()
+        if not name:
+            continue
+        try:
+            db.set_mcp_permission(name, bool(p.get("enabled")))
+            count += 1
+        except Exception:  # noqa: BLE001
+            continue
+    return count
+
+
+def _import_mcp_tokens(doc: dict) -> int:
+    """恢复 MCP 活跃令牌；**只在目标库没有活跃令牌时**建，免得覆盖现有的。"""
+    if db.get_active_mcp_token():
+        return 0
+    count = 0
+    for t in doc.get("mcp_tokens") or []:
+        h = str((t or {}).get("token_hash") or "").strip()
+        if not h:
+            continue
+        try:
+            db.create_mcp_token(
+                name=str(t.get("name") or "（从备份恢复）"),
+                token_hash=h,
+                token_prefix=str(t.get("token_prefix") or h[:8]),
+                tools_allowed=t.get("tools_allowed") or [],
+                expires_at=t.get("expires_at"),
+            )
+            count += 1
+        except Exception:  # noqa: BLE001 - 哈希重复等
+            continue
+    return count
+
+
+def _import_plugins_disabled(doc: dict) -> int:
+    types = doc.get("plugins_disabled")
+    if not isinstance(types, list):
+        return 0
+    try:
+        plugin_manager.set_disabled(types)
+    except Exception:  # noqa: BLE001
+        return 0
+    return len(types)
 
 
 def read_backup_file(path: str) -> Optional[dict]:

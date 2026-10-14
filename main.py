@@ -271,8 +271,8 @@ class VaultApi:
     def export_backup(self, scope: str = "all", encrypted: bool = True, credential_ids=None):
         return api.export_backup(scope, encrypted, credential_ids)
 
-    def import_backup(self):
-        return api.import_backup()
+    def import_backup(self, orig_password: str = None, path: str = None):
+        return api.import_backup(orig_password, path)
 
     # ── Logging ───────────────────────────────────────────
     def get_log_config(self):

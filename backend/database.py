@@ -314,6 +314,13 @@ def set_setting(key: str, value: str):
         get_conn().commit()
 
 
+def all_settings() -> dict:
+    """全部设置键值（供**全量备份**导出；调用方自己决定排除哪些键）。"""
+    with _lock:
+        rows = get_conn().execute("SELECT key, value FROM settings").fetchall()
+    return {r["key"]: r["value"] for r in rows}
+
+
 # ── groups ────────────────────────────────────────────────
 
 def list_groups() -> list[dict]:

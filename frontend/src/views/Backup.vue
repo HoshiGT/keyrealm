@@ -6,7 +6,8 @@ import { Download, Upload } from '@element-plus/icons-vue'
 import api from '@/api'
 import CredentialTreePicker from '@/components/CredentialTreePicker.vue'
 
-// 备份范围：all = 全部凭据（含分组与偏好设置）；selected = 仅勾选的凭据（不含分组/偏好）
+// 备份范围：all = **整库**（凭据 + 分组 + 代理 + 预设 + 定时计划 + 设置 + 保险库 KDF + MCP + 插件启停）；
+//           selected = 仅勾选的凭据（不含整库档那部分）
 const scope = ref('all')
 const encrypted = ref(true)
 const exporting = ref(false)
@@ -53,7 +54,7 @@ async function doExport() {
       ElMessage.info(res.message || '已取消')
       return
     }
-    const extras = res.scope === 'all' ? '，含分组与偏好设置' : ''
+    const extras = res.scope === 'all' ? '，含分组 / 代理 / 预设 / 定时计划 / 设置 / 插件启停（整库）' : ''
     lastResult.value =
       `已导出 ${res.count} 条凭据（${res.encrypted ? '加密' : '明文'}${extras}）→ ${res.path}`
     lastResultType.value = 'success'
@@ -70,7 +71,8 @@ async function doImport() {
     await ElMessageBox.confirm(
       '导入会把备份中的凭据按当前插件字段表填充进库（相同类型且敏感值相同的会跳过）。' +
         '插件未安装/已禁用、含当前插件不认识的字段、缺少必填字段的条目会导入失败并逐条列出原因。' +
-        '加密备份需与当前主密码一致。是否继续？',
+        '整库备份还会一并恢复分组 / 代理 / 预设 / 定时计划 / 设置 / MCP / 插件启停。' +
+        '加密备份自带盐：**同一保险库**直接导入；来自**别的保险库**时会再让你输入它当时的主密码。是否继续？',
       '导入备份',
       { type: 'warning', confirmButtonText: '选择文件并导入', cancelButtonText: '取消' },
     )
@@ -79,7 +81,22 @@ async function doImport() {
   }
   importing.value = true
   try {
-    const res = await api.importBackup()
+    let res = await api.importBackup()
+    // 备份来自**别的保险库**（自带 salt）：补问原主密码，并带着**同一个文件**重试
+    while (res && res.need_password) {
+      let password
+      try {
+        ({ value: password } = await ElMessageBox.prompt(
+          res.message || '这份备份来自另一个保险库，请输入它当时的主密码',
+          '需要原主密码',
+          { inputType: 'password', confirmButtonText: '解密并导入', cancelButtonText: '取消' },
+        ))
+      } catch {
+        return
+      }
+      if (!password) return
+      res = await api.importBackup(password, res.path)
+    }
     if (res && res.ok === false) {
       ElMessage.info(res.message || '已取消')
       return
@@ -90,7 +107,10 @@ async function doImport() {
       `已导入 ${res.imported} 条` +
       (failed ? `，失败 ${failed} 条` : '') +
       (res.skipped_duplicate ? `（重复跳过 ${res.skipped_duplicate} 条）` : '') +
-      `；新建分组 ${res.created_groups ?? 0}、新建代理 ${res.created_proxies ?? 0}`
+      `；新建分组 ${res.created_groups ?? 0}、新建代理 ${res.created_proxies ?? 0}` +
+      (res.restored && res.restored.schedules
+        ? `；恢复定时计划 ${res.restored.schedules} 条`
+        : '')
 
     // 有失败（或至少生成了日志）就弹详情：日志路径必须让用户看见，失败得能一键打开
     if (failed || res.log_file) {
@@ -132,7 +152,7 @@ async function openLog(field) {
       <el-form label-width="90px">
         <el-form-item label="备份范围">
           <el-radio-group v-model="scope">
-            <el-radio value="all">全部凭据（含分组与偏好设置）</el-radio>
+            <el-radio value="all">整库（含分组 / 代理 / 预设 / 定时计划 / 设置 / 插件启停）</el-radio>
             <el-radio value="selected">仅选中的凭据</el-radio>
           </el-radio-group>
         </el-form-item>
@@ -154,8 +174,9 @@ async function openLog(field) {
         加密备份的敏感字段保持密文、不落明文，但只能用同一主密码导入；
         不加密备份为明文，可在不同主密码的库上导入。
         <br />
-        「全部凭据」会额外带上分组与偏好设置（代理 / 日志级别 / 关闭行为）；
-        「仅选中的凭据」只导出勾选的条目，导入时不会改动分组与偏好设置。
+        「整库」会额外带上分组 / 代理 / 预设 / 定时计划 / 设置 / **保险库 KDF（盐）** / MCP / 插件启停，
+        并因此**自包含**——换台机器、或原库损坏丢失，导入它都能还原（来自别的保险库时会再问当时的主密码）；
+        「仅选中的凭据」只导出勾选的条目，导入时不会改动上述整库档内容。
       </el-alert>
 
       <div class="actions">
