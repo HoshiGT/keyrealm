@@ -109,11 +109,18 @@ def _migrate_state_file(path: Path, apply: bool) -> tuple[bool, list]:
 
 
 def _backup(conn: sqlite3.Connection, db_path: Path) -> Path:
-    """用 SQLite 自己的 backup API 落一份一致性快照（WAL 下也安全）。"""
+    """用 SQLite 自己的 backup API 落一份一致性快照（WAL 下也安全）。
+
+    **必须显式 close**：``with sqlite3.connect(...)`` 只是事务上下文、**不关连接**，
+    连接还开着就删文件，Windows 上会 `WinError 32`。
+    """
     stamp = time.strftime("%Y%m%d-%H%M%S")
     dest = Path(f"{db_path}.bak-llm-doubao-to-ark-{stamp}")
-    with sqlite3.connect(str(dest)) as bck:
+    bck = sqlite3.connect(str(dest))
+    try:
         conn.backup(bck)
+    finally:
+        bck.close()
     return dest
 
 

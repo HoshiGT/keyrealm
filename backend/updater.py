@@ -786,10 +786,17 @@ def db_status(*, root: Optional[Any] = None) -> dict:
 
 
 def _snapshot_db(conn: sqlite3.Connection, db_path: Path, tag: str) -> Path:
-    """SQLite 一致性快照（WAL 下也安全）。"""
+    """SQLite 一致性快照（WAL 下也安全）。
+
+    **必须显式 ``close()``**：``with sqlite3.connect(...)`` 只是**事务**上下文，**不关闭连接**——
+    连接还开着就去删这个文件，Windows 会报 `WinError 32（另一个程序正在使用此文件）`。
+    """
     dest = Path(f"{db_path}.bak-{tag}-{time.strftime('%Y%m%d-%H%M%S')}")
-    with sqlite3.connect(str(dest)) as back:
+    back = sqlite3.connect(str(dest))
+    try:
         conn.backup(back)
+    finally:
+        back.close()
     return dest
 
 
@@ -916,14 +923,23 @@ def make_backup(*, root: Optional[Any] = None, kind: str = "formal", keep: int =
                                                                           "credentials.db-shm"})
             db_path = root / "data" / "credentials.db"
             if db_path.is_file():
-                snap = db_path.with_name("credentials.db.snapshot")
+                # 快照文件名带 pid：撞不上上次崩溃残留的同名文件
+                snap = db_path.with_name(f"credentials.db.snapshot-{os.getpid()}")
                 try:
-                    with sqlite3.connect(str(db_path)) as src, sqlite3.connect(str(snap)) as dst:
-                        src.backup(dst)
+                    src = sqlite3.connect(str(db_path))
+                    dst = sqlite3.connect(str(snap))
+                    try:
+                        src.backup(dst)      # SQLite 在线备份 API → 一致性快照
+                    finally:
+                        src.close()          # **必须关**：不关 Windows 上删不掉（WinError 32）
+                        dst.close()
                     zf.write(snap, "data/credentials.db")
                     members.append("data/credentials.db")
                 finally:
-                    snap.unlink(missing_ok=True)
+                    try:
+                        snap.unlink()
+                    except OSError:
+                        pass                     # 删不掉也不该让整份备份失败
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "message": f"备份失败：{exc}"}
     try:
