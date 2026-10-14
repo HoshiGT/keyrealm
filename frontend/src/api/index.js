@@ -123,6 +123,8 @@ export const EVENTS = {
   tasksChanged: 'vault:tasks',
   // 更新准备/交棒失败（准备阶段在应用内跑，失败时**不退出**）。detail={kind,message}。
   updateFailed: 'vault:update_failed',
+  // 「自动检测更新」在启动/解锁后查到了新版本（detail 与 check_update 结果同形）。
+  updateAvailable: 'vault:update_available',
 }
 
 export const api = {
@@ -316,6 +318,11 @@ export const api = {
   // 更新访问令牌（私有仓库）：{ok, configured, mask}。明文只在后端内存/env，前端只拿掩码。空串 = 清除。
   getUpdateToken: () => call('get_update_token'),
   setUpdateToken: (token) => call('set_update_token', token),
+  // 自动检测更新开关：{enabled}。**默认开启**——启动与解锁后各自动查一次。
+  getUpdateAutoCheck: () => call('get_update_auto_check'),
+  setUpdateAutoCheck: (enabled) => call('set_update_auto_check', enabled),
+  // 取出「自动检测发现的更新」通知（取出即清除，避免重复弹）；无则返回 {}。
+  takeUpdateNotice: () => call('take_update_notice'),
   // 检查更新：{ok, kind, has_update, reason, current, latest, db_change, db_chain, source_ok}
   checkUpdate: (kind = 'formal') => call('update_check', kind),
   // 上一次更新的结果（读 data/.update-status.json；无则 {}）

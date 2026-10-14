@@ -178,6 +178,8 @@ def unlock(password: str) -> dict:
     _set_key(key)
     idle_lock.touch()
     tray.update_tray()
+    # 解锁后补跑一次「自动检测更新」——启动时应用还没解锁，私有仓库的检查多半没成
+    start_auto_update_check()
     return {"ok": True, "message": "解锁成功"}
 
 
@@ -1604,6 +1606,79 @@ def set_update_token(token: str) -> dict:
 
 # 「立即更新」的准备任务 id（同一时刻只允许一个在跑）
 _update_task_id: Optional[str] = None
+
+
+# ── 自动检测更新（启动时查一次）───────────────────────────
+# 「自动检测更新」默认开启：应用启动（以及首次解锁）后**在后台查一次**，发现新版本就通知前端。
+# 未解锁时拿不到私有仓库的访问令牌，检查多半失败——此时**不标记完成**，留待 unlock() 后再试一次。
+
+_auto_check_lock = threading.Lock()
+_auto_check_state: dict = {"running": False, "done": False, "notice": None}
+
+
+def get_update_auto_check() -> dict:
+    return {"enabled": updater.get_auto_check()}
+
+
+def set_update_auto_check(enabled) -> dict:
+    result = updater.set_auto_check(enabled)
+    if result.get("enabled"):
+        # 重新开启 → 清掉「本会话已查过」的标记并立刻再查一次（给用户即时反馈）
+        with _auto_check_lock:
+            _auto_check_state["done"] = False
+            _auto_check_state["notice"] = None
+        start_auto_update_check()
+    return result
+
+
+def start_auto_update_check() -> dict:
+    """启动 / 解锁后自动查一次更新（**非阻塞**，失败不打扰用户）。"""
+    if not updater.get_auto_check():
+        return {"started": False, "reason": "disabled"}
+    with _auto_check_lock:
+        if _auto_check_state["running"]:
+            return {"started": False, "reason": "running"}
+        if _auto_check_state["done"]:
+            return {"started": False, "reason": "done"}
+        _auto_check_state["running"] = True
+    threading.Thread(target=_auto_check_worker, daemon=True).start()
+    return {"started": True}
+
+
+def _auto_check_worker() -> None:
+    res: dict = {}
+    try:
+        _sync_update_token()          # 私有仓库要令牌（解锁后才拿得到）
+        res = updater.check_update(updater.get_channel())
+    except Exception as exc:  # noqa: BLE001 - 自动检查绝不打扰用户
+        _log.warning("自动检查更新异常：%s", type(exc).__name__)
+        res = {"ok": False}
+    ok = bool(res.get("ok"))
+    if not ok:
+        _log.info("自动检查更新未完成（解锁后会再试一次）：%s",
+                  res.get("message") or res.get("error") or "")
+    elif res.get("has_update"):
+        latest = res.get("latest") or {}
+        _log.info("自动检查更新：发现新版本 %s（当前 %s）",
+                  latest.get("version"), (res.get("current") or {}).get("version"))
+        notice = {k: res.get(k) for k in
+                  ("kind", "current", "latest", "reason", "db_change", "db_chain", "asset")}
+        notice["has_update"] = True
+        with _auto_check_lock:
+            _auto_check_state["notice"] = notice
+        push_event("vault:update_available", notice)
+    with _auto_check_lock:
+        _auto_check_state["running"] = False
+        if ok:
+            _auto_check_state["done"] = True
+
+
+def take_auto_update_notice() -> dict:
+    """取出「自动检测发现的更新」通知（**取出即清除**，避免重复弹）。无则返回 ``{}``。"""
+    with _auto_check_lock:
+        notice = _auto_check_state.get("notice")
+        _auto_check_state["notice"] = None
+    return notice or {}
 
 
 def start_update(kind: str = "formal", restart: bool = True, terminal: str = "auto") -> dict:

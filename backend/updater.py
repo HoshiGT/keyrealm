@@ -68,6 +68,8 @@ CHANNELS = ("formal", "test")
 _NO_WINDOW = 0x08000000 if os.name == "nt" else 0   # CREATE_NO_WINDOW
 
 SETTING_CHANNEL = "update_channel"
+# 启动时是否自动检查更新（缺省 = 开启，见 get_auto_check）
+SETTING_AUTO_CHECK = "update_auto_check"
 
 # 备份里默认跳过的 data/ 子目录（logs 可能很大；installed_plugins 是旧缓存）
 _BACKUP_SKIP_DIRS = {"logs", "installed_plugins"}
@@ -691,6 +693,18 @@ def set_channel(channel: str) -> dict:
         return {"ok": False, "message": f"无效的更新渠道：{channel}"}
     db.set_setting(SETTING_CHANNEL, value)
     return {"ok": True, "channel": value}
+
+
+def get_auto_check() -> bool:
+    """启动时是否**自动检查更新**。**默认开启**（缺省值按开启处理，只认显式的 "0" 为关）。"""
+    return (db.get_setting(SETTING_AUTO_CHECK, "1") or "").strip() != "0"
+
+
+def set_auto_check(enabled) -> dict:
+    value = bool(enabled)
+    db.set_setting(SETTING_AUTO_CHECK, "1" if value else "0")
+    _log.info("自动检测更新已%s", "开启" if value else "关闭")
+    return {"ok": True, "enabled": value}
 
 
 # ── 数据库逐级迁移 ────────────────────────────────────────

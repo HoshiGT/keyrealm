@@ -1,7 +1,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 // 按需引入后不再有 app.use(ElementPlus, { locale })，中文语言包改由根级
 // <el-config-provider> 提供（ElConfigProvider 用 renderSlot 渲染，不产生额外 DOM）。
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
@@ -69,6 +69,25 @@ const ACTIVITY_EVENTS = [
   ['keydown', undefined],
 ]
 
+/** 「自动检测更新」发现新版本 → 弹一条可点击的通知（点它跳到设置页的更新卡片）。
+ *  后端把通知存成「取出即清除」，所以事件与首屏各调一次也不会重复弹。 */
+async function showUpdateNotice() {
+  try {
+    const n = await api.takeUpdateNotice()
+    if (!n || !n.has_update) return
+    const v = (n.latest && n.latest.version) || ''
+    const c = (n.latest && n.latest.commit) || ''
+    const cur = (n.current && n.current.version) || ''
+    ElNotification({
+      title: '发现新版本',
+      message: `${v}${c ? `（${c}）` : ''}　当前 ${cur}　·　点击前往「设置 → 更新」`,
+      type: 'info',
+      duration: 0,
+      onClick: () => router.push({ name: 'settings' }),
+    })
+  } catch { /* 通知失败无所谓，不影响使用 */ }
+}
+
 onMounted(() => {
   disposers.push(
     onEvent(EVENTS.credentialUpdated, (detail) => vaultStore.applyCredentialUpdated(detail)),
@@ -103,6 +122,10 @@ onMounted(() => {
   // 后端加锁（界面按钮 / 托盘 / 空闲自动锁）都会广播此事件，统一在这里清空明文。
   // 随后的 watch(appStore.unlocked) 会把路由推回 /unlock。
   disposers.push(onEvent(EVENTS.vaultLocked, () => appStore.applyLocked()))
+
+  // 自动检测更新发现新版本 → 弹通知；同时补查一次（覆盖「检查在首屏前就完成」的情况）。
+  disposers.push(onEvent(EVENTS.updateAvailable, () => { showUpdateNotice() }))
+  showUpdateNotice()
 
   const handleFocus = () => {
     handleActivity()

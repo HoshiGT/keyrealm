@@ -648,6 +648,11 @@ pywebview 没有「再次显示」事件可挂（`Form.Shown` 只触发一次，
 会 `copy2` 覆盖运行中的可执行文件、`run_migrations` 要独占数据库，两者都要求应用已退出。
 交棒顺序不可颠倒：**先起更新进程、再关闭应用**。
 
+**自动检测更新**（`settings.update_auto_check`，**默认开启**）：`main.py` 启动后与 `api.unlock()` 里各
+调一次 `api.start_auto_update_check()`——后台线程跑 `check_update`，发现新版本就 `push_event("vault:update_available")`
+并留一份「取出即清除」的通知（`take_auto_update_notice()`），前端 `App.vue` 弹可点击通知跳到设置页。
+**未解锁时拿不到私有仓库的访问令牌**，启动那次多半失败且**不标记完成**，留待解锁后补跑一次。
+
 **两档更新方式不同**：**正式版**对比 **GitHub Release 的最新正式版标签**，准备阶段**下载对应平台的
 预编译包**（`Keyrealm-<版本>-<平台>.zip`）并算 SHA-256；交棒阶段校验后**替换当前程序**、迁移数据库、
 重启——**不编译**（源码部署会因此切成二进制）。**测试版**跟 `main`（版本号 **或** commit 任一不同即

@@ -318,6 +318,15 @@ class VaultApi:
     def set_update_token(self, token: str):
         return api.set_update_token(token)
 
+    def get_update_auto_check(self):
+        return api.get_update_auto_check()
+
+    def set_update_auto_check(self, enabled: bool):
+        return api.set_update_auto_check(enabled)
+
+    def take_update_notice(self):
+        return api.take_auto_update_notice()
+
     def start_update(self, kind: str = "formal", restart: bool = True, terminal: str = "auto"):
         return api.start_update(kind, restart, terminal)
 
@@ -592,6 +601,10 @@ def main():
         quit_cb=_quit_app,
         get_status_cb=api.get_tray_status,
     )
+
+    # 启动时自动检测一次更新（默认开启；非阻塞，发现新版本会通知界面）。
+    # 此刻多半还没解锁，私有仓库查不成——unlock() 里会再补跑一次。
+    api.start_auto_update_check()
 
     # 绑定关闭事件
     _window.events.closing += _on_closing

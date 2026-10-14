@@ -380,6 +380,30 @@ const updateFoundTitle = computed(() => {
   return `发现新版本 ${v}`
 })
 
+// 自动检测更新（**默认开启**）：启动/解锁后后端自动查一次，发现新版本会弹通知。
+const updateAutoCheck = ref(true)
+const updateAutoCheckSaving = ref(false)
+
+async function loadUpdateAutoCheck() {
+  try {
+    const res = await api.getUpdateAutoCheck()
+    if (res && res.enabled !== undefined) updateAutoCheck.value = Boolean(res.enabled)
+  } catch { /* 容错：不阻塞其它卡片 */ }
+}
+
+async function applyUpdateAutoCheck(value) {
+  updateAutoCheckSaving.value = true
+  try {
+    await api.setUpdateAutoCheck(value)
+    ElMessage.success(value ? '已开启自动检测更新' : '已关闭自动检测更新')
+  } catch (err) {
+    ElMessage.error(err.message || '保存失败')
+    await loadUpdateAutoCheck()
+  } finally {
+    updateAutoCheckSaving.value = false
+  }
+}
+
 // 更新代理：与应用内每凭据的「使用代理」同一套语义，但这里是**全局**一份。
 // 选择值 = 'global' | 'direct' | <某代理 id>。
 const updateProxySpec = ref('global')
@@ -603,6 +627,7 @@ async function refreshAll(showSpinner = true) {
       loadUpdateChannel(),
       loadUpdateProxy(),
       loadUpdateToken(),
+      loadUpdateAutoCheck(),
       loadUpdateStatus(),
       loadDbMigrationStatus(),
       proxyStore.fetch().catch(() => {}),
@@ -750,6 +775,23 @@ onMounted(() => refreshAll(false))
 
     <el-card shadow="never">
       <template #header><span>更新</span></template>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">自动检测更新</div>
+          <div class="setting-desc">
+            每次程序启动（以及解锁）后在后台自动查一次有没有新版本，发现时会弹通知提醒。
+            默认开启；关掉后仍可在下面手动「检查更新」。
+          </div>
+        </div>
+        <el-switch
+          v-model="updateAutoCheck"
+          :loading="updateAutoCheckSaving"
+          @change="applyUpdateAutoCheck"
+        />
+      </div>
+
+      <el-divider />
 
       <div class="setting-row">
         <div class="setting-info">
