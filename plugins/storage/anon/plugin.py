@@ -15,12 +15,17 @@
 
 ``verify`` 语义 = 「该桶是否允许匿名列举」：200 → valid；403 → invalid（私有）；404 → invalid（不存在）。
 
+**TLS 兼容**：默认走标准 TLS 协商；若握手失败（实测有对象存储前置网关**只接受 TLS 1.2**——
+对 TLS 1.3 的 ClientHello 直接回一段明文门户页再断连），会自动**回退到 TLS 1.2 重试一次**
+（证书校验照旧，仅在确为握手失败时触发）。
+
 参考文档：https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
 """
 from __future__ import annotations
 
 import os
 import shutil
+import ssl
 import tempfile
 import uuid
 import zipfile
@@ -94,12 +99,76 @@ def _object_url(base: str, key: str) -> str:
     return f"{base}/{quote(key.lstrip('/'), safe='/-_.~')}"
 
 
-def _client(data: dict):
-    if truthy(data.get("skip_tls_verify")):
-        import httpx  # noqa: PLC0415
+def _client(data: dict, tls_max_12: bool = False):
+    """建一个 httpx 客户端。
+
+    只在需要**自定义 TLS 上下文**时才自己建（关闭证书校验、或把 TLS 上限压到 1.2），
+    其余情况走框架的 ``make_client()``。``tls_max_12`` 供 ``_with_client`` 的降级重试使用。
+    """
+    skip = truthy(data.get("skip_tls_verify"))
+    if not skip and not tls_max_12:
+        return make_client()
+    import httpx  # noqa: PLC0415
+    context = ssl.create_default_context()
+    if skip:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
         log("已对该凭据关闭 TLS 证书校验（skip_tls_verify=true）")
-        return httpx.Client(timeout=timeout(), follow_redirects=True, proxy=proxy(), verify=False)
-    return make_client()
+    if tls_max_12:
+        context.maximum_version = ssl.TLSVersion.TLSv1_2
+    return httpx.Client(timeout=timeout(), follow_redirects=True, proxy=proxy(), verify=context)
+
+
+def _retryable_tls_error(exc: BaseException) -> bool:
+    """连接阶段的失败**是否值得用 TLS 1.2 再试一次**。
+
+    命中：TLS 协议层错误（``SSLError``）、或**连接被重置**（``ConnectionResetError``——
+    中间设备对 ClientHello 直接回 RST 也是这个表现，实测该端点两种表现都出现过）。
+
+    **不命中**：证书校验失败（``SSLCertVerificationError``）、DNS 失败、连接被拒——
+    换个 TLS 版本也修不好，只会多打一次无谓请求、还误导用户。
+    """
+    seen: set[int] = set()
+    chain: list[BaseException] = []
+    node: BaseException | None = exc
+    while node is not None and id(node) not in seen:
+        seen.add(id(node))
+        chain.append(node)
+        node = node.__cause__ or node.__context__
+    if any(isinstance(item, ssl.SSLCertVerificationError) for item in chain):
+        return False
+    return any(isinstance(item, (ssl.SSLError, ConnectionResetError)) for item in chain)
+
+
+def _with_client(data: dict, run):
+    """建客户端执行 ``run(client)``；**连接阶段 TLS 失败时，回退到 TLS 1.2 再试一次**。
+
+    实测：某些对象存储前置网关（``Server: DisplayServer``）**只完成 TLS 1.2 握手**——
+    客户端一上来就报 TLS 1.3，网关把 ClientHello 当垃圾请求、回一段**明文 HTML 门户页**
+    后直接断连；httpx 侧表现为 ``ConnectError``（根因 ``ssl.SSLEOFError`` 或 RST）。于是
+    出现「浏览器能打开（会自动降级重试、只是慢一拍）、插件却报连接失败」。
+
+    只在**确为握手/连接被重置**时降级一次（证书校验照旧），其余连接错误原样抛出。
+    ``run`` 必须在**一次连接内**跑完并返回结果（流式下载也要在 ``run`` 里把流读完再返回），
+    这样重试是整段重跑，不会留下半截状态。
+    """
+    try:
+        with _client(data) as client:
+            return run(client)
+    except Exception as exc:  # noqa: BLE001 - 仅用于识别可重试的连接失败，其余照样抛
+        if not _retryable_tls_error(exc):
+            raise
+        log("连接在 TLS 阶段失败（疑似目标仅支持 TLS 1.2）→ 回退 TLS 1.2 重试一次")
+        with _client(data, tls_max_12=True) as client:
+            return run(client)
+
+
+def _connect_error(exc: BaseException) -> str:
+    """把连接阶段异常翻成一句用户看得懂的话。"""
+    if _retryable_tls_error(exc):
+        return ("连接失败：连接在 TLS 阶段被重置/中断——端点可能只接受特定 TLS 版本，"
+                "或链路被中间设备干扰（已按 TLS 1.2 重试仍失败）")
+    return f"连接失败：{type(exc).__name__}"
 
 
 def _failure(resp) -> str:
@@ -134,10 +203,10 @@ def verify(data) -> VerifyResult:
         return VerifyResult(status="error", message=error)
     log(f"匿名探测对象存储桶 {base}")
     try:
-        with _client(data) as client:
-            resp = client.get(_list_url(base, {"list-type": "2", "max-keys": "1"}))
+        resp = _with_client(data, lambda client: client.get(
+            _list_url(base, {"list-type": "2", "max-keys": "1"})))
     except Exception as exc:  # noqa: BLE001 - 边界兜底
-        return VerifyResult(status="error", message=f"连接失败：{type(exc).__name__}")
+        return VerifyResult(status="error", message=_connect_error(exc))
 
     root = xml_root(resp.text or "")
     if resp.status_code == 200 and root is not None and _local(root) == "ListBucketResult":
@@ -146,11 +215,11 @@ def verify(data) -> VerifyResult:
     if resp.status_code == 200 and (root is None or _local(root) != "ListBucketResult"):
         # 200 但根元素不是 `ListBucketResult`：多半打到了**站点首页 / 网关页**而不是对象存储端点
         # （响应是良构 XML 也一样——HTML 页面同样能被解析，只是根元素叫 `html`）。
-        # 最常见的原因是**桶名写错**——S3 / MinIO 的桶名不允许下划线，写错会被服务端当普通路径，
-        # 于是返回站点页面（而不是 `ListBucketResult`）。
+        # 最常见的原因是**端点或路径写错**——服务端会把它当普通路径，返回站点页面。
         return VerifyResult(status="error", message=(
-            "该地址返回的不是 S3 列举结果（像是站点页面而非对象存储端点）：请核对**桶名与端点**——"
-            "S3 / MinIO 的桶名**不允许下划线**（例如 fpaas_bucket 实际应为 fpaas-bucket）。"))
+            "该地址返回的不是 S3 列举结果（像**站点页面 / 网关页**而非对象存储端点）："
+            "请核对**端点与路径**——路径式是 https://<域>/<桶>，虚拟主机式是 https://<桶>.<域>；"
+            "路径写错时服务端会把它当普通路径、返回站点页面。"))
     code, _message = xml_error(resp.text or "")
     if resp.status_code == 403 or code in _DENIED_CODES:
         return VerifyResult(status="invalid", message=f"桶存在但未开放匿名列举（{code or 'HTTP 403'}）")
@@ -285,8 +354,7 @@ def _run_list_objects(base: str, data: dict, params: dict) -> dict:
     query: dict[str, str] = {"list-type": "2", "delimiter": "/", "max-keys": str(_PAGE_SIZE)}
     if prefix:
         query["prefix"] = prefix
-    with _client(data) as client:
-        resp = client.get(_list_url(base, query))
+    resp = _with_client(data, lambda client: client.get(_list_url(base, query)))
     if resp.status_code != 200:
         return {"ok": False, "error": _failure(resp)}
 
@@ -316,14 +384,17 @@ def _run_download_object(base: str, data: dict, params: dict, progress=None, sho
     path = str(params.get("path") or "").strip()
     if not path:
         return {"ok": False, "error": "未指定保存路径"}
-    with _client(data) as client:
+
+    def _attempt(client) -> dict:
         with client.stream("GET", _object_url(base, key)) as resp:
             if resp.status_code != 200:
                 return {"ok": False, "error": _failure(resp)}
             ok, message = download_with_progress(resp, path, key, progress, should_cancel)
-    if not ok:
-        return {"ok": False, "error": message}
-    return {"ok": True, "output": f"已保存到 {message}"}
+        if not ok:
+            return {"ok": False, "error": message}
+        return {"ok": True, "output": f"已保存到 {message}"}
+
+    return _with_client(data, _attempt)
 
 
 def _list_all_objects(client, base: str, prefix: str, limit: int):
@@ -372,7 +443,7 @@ def _run_download_prefix(base: str, data: dict, params: dict, progress=None, sho
     if not prefix:
         return {"ok": False, "error": "缺少前缀（文件夹），请在表单里填写，或从对象列表行内点击「打包下载」进入"}
 
-    with _client(data) as client:
+    def _attempt(client) -> dict:
         objects, over_limit, list_error = _list_all_objects(client, base, prefix, MAX_ZIP_OBJECTS)
         if list_error:
             return {"ok": False, "error": list_error}
@@ -459,13 +530,15 @@ def _run_download_prefix(base: str, data: dict, params: dict, progress=None, sho
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
-    lines = [f"已打包 {written} 个对象（{human_size(total)}）到 {path}", f"字节数（未压缩）：{total}"]
-    if failed:
-        lines.append(f"失败 {len(failed)} 个：" + "；".join(failed[:5]) + ("…" if len(failed) > 5 else ""))
-    if skipped:
-        lines.append(f"跳过 {len(skipped)} 个：" + "；".join(skipped[:5]) + ("…" if len(skipped) > 5 else ""))
-    lines.append(f"zip 内为相对「{prefix}」的路径")
-    return {"ok": True, "output": "\n".join(lines)}
+        lines = [f"已打包 {written} 个对象（{human_size(total)}）到 {path}", f"字节数（未压缩）：{total}"]
+        if failed:
+            lines.append(f"失败 {len(failed)} 个：" + "；".join(failed[:5]) + ("…" if len(failed) > 5 else ""))
+        if skipped:
+            lines.append(f"跳过 {len(skipped)} 个：" + "；".join(skipped[:5]) + ("…" if len(skipped) > 5 else ""))
+        lines.append(f"zip 内为相对「{prefix}」的路径")
+        return {"ok": True, "output": "\n".join(lines)}
+
+    return _with_client(data, _attempt)
 
 
 # ── 匿名写探测 ────────────────────────────────────────────
@@ -480,11 +553,10 @@ def _run_write_probe(base: str, data: dict, params: dict) -> dict:
     key = f"{prefix + '/' if prefix else ''}{_PROBE_PREFIX}{uuid.uuid4().hex}"
     url = _object_url(base, key)
 
-    with _client(data) as client:
-        try:
-            put = client.request("PUT", url, content=_PROBE_BODY)
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": f"写入请求失败：{type(exc).__name__}"}
+    def _attempt(client) -> dict:
+        # PUT 的**连接 / TLS 失败要抛出去**（交给 _with_client 决定是否降级重试）——
+        # 此时尚未写入任何东西，重试是安全的；若在这里吞掉，就永远走不到 TLS 1.2 重试。
+        put = client.request("PUT", url, content=_PROBE_BODY)
         if put.status_code not in (200, 201, 204):
             return {"ok": False, "error": (
                 f"不支持匿名写入：PUT 被拒（HTTP {put.status_code}）"
@@ -502,6 +574,11 @@ def _run_write_probe(base: str, data: dict, params: dict) -> dict:
         return {"ok": False, "error": (
             f"**该桶允许匿名写入**（PUT 成功），但删除失败（HTTP {delete.status_code}）——"
             f"探针对象可能仍在，请手动删除：\n{url}")}
+
+    try:
+        return _with_client(data, _attempt)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"写入请求失败：{type(exc).__name__}"}
 
 
 def _error_suffix(resp) -> str:
