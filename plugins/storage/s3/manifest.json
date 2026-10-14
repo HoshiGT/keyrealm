@@ -1,0 +1,78 @@
+{
+  "name": "S3 兼容存储（MinIO 等）",
+  "version": "1.0.0",
+  "credential_type": "storage_s3",
+  "author": "Keyrealm",
+  "description": "验证任意 S3 兼容对象存储的 Access Key（MinIO / 自建 / 兼容 S3 的服务）：签名 ListBuckets，只读；并提供桶列表、对象浏览、对象下载",
+  "icon": "logo.svg",
+  "fields": [
+    {
+      "key": "endpoint",
+      "label": "服务端点",
+      "type": "url",
+      "required": true,
+      "placeholder": "http://host:9000 或 https://s3.us-east-1.amazonaws.com",
+      "hint": "S3 兼容服务的接入地址（可带端口，如 MinIO 的 http://minio.example.com:9000）。不要带桶名与路径。"
+    },
+    {
+      "key": "access_key",
+      "label": "Access Key",
+      "type": "text",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "MinIO 的 Access Key / S3 的 AKIA…"
+    },
+    {
+      "key": "secret_key",
+      "label": "Secret Key",
+      "type": "password",
+      "required": true,
+      "sensitive": true,
+      "placeholder": "请输入 Secret Key"
+    },
+    {
+      "key": "session_token",
+      "label": "Session Token",
+      "type": "password",
+      "required": false,
+      "sensitive": true,
+      "placeholder": "仅临时凭据需要",
+      "hint": "用 STS / 实例角色拿到的临时凭据（MinIO STS、AWS STS 等）才需要；长期密钥留空。"
+    },
+    {
+      "key": "region",
+      "label": "区域（Region）",
+      "type": "text",
+      "required": false,
+      "default": "us-east-1",
+      "placeholder": "us-east-1",
+      "hint": "SigV4 签名必须带区域串；MinIO 等自建服务通常用固定占位（默认 us-east-1 即可），AWS 各区域填真实区域。"
+    },
+    {
+      "key": "addressing",
+      "label": "寻址方式",
+      "type": "select",
+      "required": false,
+      "default": "path",
+      "options": [
+        { "value": "path", "label": "路径风格（MinIO / 自建，推荐）" },
+        { "value": "virtual", "label": "虚拟主机风格（AWS S3 等）" }
+      ],
+      "hint": "路径风格 = http://host:9000/<桶>/…；虚拟主机风格 = https://<桶>.host/…。MinIO / IP 端点用路径风格；AWS S3 两种都支持。"
+    },
+    {
+      "key": "skip_tls_verify",
+      "label": "跳过 TLS 证书校验",
+      "type": "checkbox",
+      "required": false,
+      "default": false,
+      "hint": "仅对付**自签名证书**的自建服务开启；开启后该端点的 HTTPS 不再校验证书链。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "name": "匿名对象存储（公开桶检测）",
+  "version": "1.0.0",
+  "credential_type": "storage_anon",
+  "author": "Keyrealm",
+  "description": "无需密钥：判定并浏览可**匿名访问**的对象存储桶（只读列举/读取/下载 + 一次匿名写探测）。通吃阿里云 OSS / 腾讯 COS / 华为 OBS / AWS S3 / 百度 BOS / MinIO 及任意 HTTP 桶。",
+  "icon": "logo.svg",
+  "fields": [
+    {
+      "key": "url",
+      "label": "桶地址",
+      "type": "url",
+      "required": true,
+      "placeholder": "https://bucket.oss-cn-hangzhou.aliyuncs.com 或 http://host:9000/bucket",
+      "hint": "填**桶根地址**（虚拟主机式 https://<桶>.<域> 或路径式 https://<域>/<桶> 都行）。不要带查询串、也不要填预签名 URL。"
+    },
+    {
+      "key": "skip_tls_verify",
+      "label": "跳过 TLS 证书校验",
+      "type": "checkbox",
+      "required": false,
+      "default": false,
+      "hint": "仅用于可信内网自建（自签证书）。"
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "type": "textarea",
+      "required": false
+    }
+  ]
+}

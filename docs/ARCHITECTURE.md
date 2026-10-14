@@ -161,6 +161,7 @@ plugins/
 ├── cloud/                    # 云服务商：aliyun / tencentcloud / aws / gcp / huaweicloud / firebase / jdcloud / ucloud / baiducloud / volcengine / ctyun（另含 google_sa.py 协议级共享模块）
 ├── map/                      # 地图：amap（高德）/ baidu（百度）/ tencent（腾讯位置服务）
 ├── exchange/                 # 交易所：okx / binance
+├── storage/                  # 对象存储：s3（任意 S3 兼容 / MinIO）/ anon（匿名桶探测）（另含 storage_s3v4.py、storage_common.py 类别共享模块）
 └── mail/                     # 邮箱：smtp（通用 SMTP，覆盖 Gmail/QQ/163/126）
 ```
 
@@ -168,9 +169,11 @@ plugins/
 > HTTPS API，与 api/ 其余服务同形，故并入 api/ 而不单开类别——新建类别**不再**需要连带克隆一份
 > `*_common.py`（通用工具已上收 `backend/plugin_sdk.py`），但单开一类的归类代价仍大于收益。
 
-> 九个类别共 61 个子插件：llm 18 / api 8 / im 10 / cloud 11 / dns 4 / dev 4 / map 3 / exchange 2 / mail 1。
+> 十个类别共 63 个子插件：llm 18 / api 8 / im 10 / cloud 11 / storage 2 / dns 4 / dev 4 / map 3 / exchange 2 / mail 1。
 > 类别目录**不再强制**带共享模块——通用原语已上收 `backend/plugin_sdk.py`（框架暴露给插件的唯一接口层）；
-> 只有类别确有「类别特有」工具时才建一个（现仅 `llm/llm_common.py`、`mail/mail_common.py` 两例）。
+> 只有类别确有「类别特有」工具时才建一个（现仅 `llm/llm_common.py`、`mail/mail_common.py`、
+> `storage/storage_common.py + storage/storage_s3v4.py` 三例；**类别级共享模块必须带类别前缀**，
+> 否则同名模块会在 `sys.modules` 里互相顶掉且不报错）。
 > **协议级模块**另立：`cloud/google_sa.py`（把服务账号的邮箱 + 私钥签成 RS256 JWT 换 token，
 > gcp / firebase 共用）与 `llm/llm_protocols.py`。这些都不是子插件。
 
