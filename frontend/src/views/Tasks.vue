@@ -15,9 +15,9 @@
  * 增量更新走 `vault:tasks` 事件，detail 是**发生变化的那一条快照**（不是全量列表），
  * 因此这里就地更新/插入对应行，避免每次进度推送都拉一次全量。
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Edit, Plus, Refresh, Timer, VideoPlay } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, Delete, Edit, Plus, Refresh, Timer, VideoPlay } from '@element-plus/icons-vue'
 
 import { api, EVENTS } from '@/api'
 import CredentialTreePicker from '@/components/CredentialTreePicker.vue'
@@ -41,6 +41,46 @@ const STATUS_META = {
 }
 
 const runningCount = computed(() => tasks.value.filter((t) => t.status === 'running').length)
+
+// ── 分页：与「凭据管理」同一套语义（纯展示层；每页条数持久化，页号不持久化）──
+const PAGE_SIZE_KEY = 'vault.tasks.pageSize'
+// 预设值；下拉允许手输（allow-create），5/10/20/50 只是入口、不是白名单
+const PAGE_SIZES = [5, 10, 20, 50]
+const PAGE_SIZE_DEFAULT = 10
+
+/** 把任意来源的每页条数规整成合法值（正整数，否则回落默认）。 */
+function normalizePageSize(value) {
+  const n = Math.floor(Number(value))
+  return Number.isFinite(n) && n > 0 ? n : PAGE_SIZE_DEFAULT
+}
+
+const pageSize = ref(normalizePageSize(localStorage.getItem(PAGE_SIZE_KEY)))
+// 当前页**不持久化**：页号是「我正看到哪儿」，下次打开还停在第 5 页只会让人以为列表少了内容
+const currentPage = ref(1)
+watch(pageSize, (value) => localStorage.setItem(PAGE_SIZE_KEY, String(value)))
+
+/** 手输的每页条数写回前先规整；非法值要说出来，别让用户以为界面悄悄改了。 */
+function onPageSizeChange(value) {
+  const normalized = normalizePageSize(value)
+  if (normalized !== pageSize.value) pageSize.value = normalized
+  if (!(Number(value) > 0)) {
+    ElMessage.warning(`每页条数需为正整数，已恢复为 ${PAGE_SIZE_DEFAULT}`)
+  }
+}
+
+const totalPages = computed(() => Math.max(1, Math.ceil((tasks.value.length || 0) / pageSize.value)))
+
+// 条数变少（清空已完成 / 调大每页条数）后停在越界页会看到一片空白，把页号夹回合法范围。
+// 用 watch 而不是在 computed 里顺手改：computed 里写 ref 是反向依赖，Vue 会警告。
+watch(totalPages, () => {
+  if (currentPage.value > totalPages.value) currentPage.value = totalPages.value
+})
+
+/** 当前页要展示的任务。总数 ≤ 每页条数时就是全部（1 页）。 */
+const pagedTasks = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return tasks.value.slice(start, start + pageSize.value)
+})
 
 function statusMeta(task) {
   // 「已请求取消」是进行中的子状态：插件还没跑到检查点，结果未定，所以单独给文案与颜色，
@@ -503,13 +543,33 @@ onBeforeUnmount(() => {
           <span>后台任务</span>
           <span class="text-muted header-hint">记录会保留到下次启动</span>
           <div class="spacer" />
+          <!-- 分页：与「凭据管理」同一套语义（每页条数可预设可手输、页号不持久化） -->
+          <div v-if="tasks.length" class="pager">
+            <span class="pager-unit">每页</span>
+            <el-select
+              v-model="pageSize"
+              class="pager-size"
+              title="可选择预设值，也可直接输入自定义条数"
+              filterable
+              allow-create
+              default-first-option
+              :reserve-keyword="false"
+              @change="onPageSizeChange"
+            >
+              <el-option v-for="size in PAGE_SIZES" :key="size" :label="String(size)" :value="size" />
+            </el-select>
+            <span class="pager-unit">条</span>
+            <el-button :icon="ArrowLeft" :disabled="currentPage <= 1" title="上一页" @click="currentPage--" />
+            <span class="pager-page">{{ currentPage }} / {{ totalPages }}</span>
+            <el-button :icon="ArrowRight" :disabled="currentPage >= totalPages" title="下一页" @click="currentPage++" />
+          </div>
           <el-button type="danger" plain :icon="Delete" @click="clearFinished">清空已完成</el-button>
         </div>
       </template>
 
       <div v-loading="loading">
         <div v-if="tasks.length" class="task-list">
-          <div v-for="task in tasks" :key="task.id" class="task-row">
+          <div v-for="task in pagedTasks" :key="task.id" class="task-row">
             <div class="task-head">
               <span class="task-title" :title="task.title">{{ task.title }}</span>
               <el-tag :type="statusMeta(task).type" size="small" effect="light">
@@ -758,6 +818,36 @@ onBeforeUnmount(() => {
 .task-list {
   display: flex;
   flex-direction: column;
+  /* 任务多、输出又长时整列会很长，把下面的「定时验证计划」顶到屏幕外。
+     给个上限 + 内部滚动（拖动滚动条即可翻看本页其余条目）。 */
+  max-height: 55vh;
+  overflow-y: auto;
+}
+
+/* 分页控件：与「凭据管理」的 .pager 同一套（每页条数可预设可手输、页码 x / y） */
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* 等宽数字 + 固定最小宽度：「9 / 9」→「10 / 10」时页面不左右跳 */
+.pager-page {
+  min-width: 56px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.pager-size {
+  width: 78px;   /* 选项 label 只是数字（单位在框外的 .pager-unit），无需更宽 */
+}
+
+.pager-unit {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
 }
 
 .task-row {
