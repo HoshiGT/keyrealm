@@ -240,7 +240,8 @@ def _verify_smtp(data: dict) -> VerifyResult:
         return VerifyResult(
             status="valid",
             message=f"凭证有效：SMTP 登录成功{tls_note}",
-            account_info={"server": host, "port": port},
+            # 附加信息只放「邮箱账号」与「SMTP 服务器」——端口是配置细节，不占附加信息的位置
+            account_info={"smtp_account": username, "smtp_server": host},
         )
     finally:
         _safe_quit(server)

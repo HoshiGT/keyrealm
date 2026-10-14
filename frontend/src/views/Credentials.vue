@@ -1035,6 +1035,8 @@ const ACCOUNT_INFO_LABELS = {
   uTime: '更新时间',
   server: '服务器',
   port: '端口',
+  smtp_account: '邮箱账号',
+  smtp_server: 'SMTP 服务器',
   channel_id: '频道 ID',
   guild_id: '服务器 ID',
   id: 'ID',
