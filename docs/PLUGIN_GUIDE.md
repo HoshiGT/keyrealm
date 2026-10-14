@@ -255,7 +255,7 @@ plugins/
 >    （alpha 不动）——否则缩到 16px 时透明区的黑 RGB 会被插值污染，在深色底上留一圈深灰边
 >    （图标本身的深色可见度另由 `backend/icon_ink.py` 判定）。
 > 4. **位图长边压在 128px 以内**——渲染位最大 22px，640×640 纯属浪费（当初 20 张 640² 缩到 128² 后，
->    冷启动分析总耗时从 232 ms 降至 66 ms；**当前 63 插件 / 61 张 logo 实测约 76 ms**）。
+>    冷启动分析总耗时从 232 ms 降至 66 ms；**当前 64 插件 / 61 张 logo 实测约 76 ms**）。
 >    位图一律缩到 **128×128**（LANCZOS，保 alpha）；
 >    例外是原生就小的图（如 `qq_bot` 官方 favicon 只有 62×62 且无更高清源，原样保留，不做假放大）。
 
@@ -1022,8 +1022,8 @@ sensenova（商汤日日新，OpenAI 兼容）、codebuddy（腾讯 CodeBuddy �
 > ——**1.0 之前不考虑向下兼容（含旧版本数据库）**，旧的 `llm_glm_anthropic` /
 > `llm_anthropic_compatible` 类型不再有对应插件，那类凭据直接在界面上删掉、按新插件重建即可。
 
-**api/ 类别（8 个）**：firecrawl（网页抓取）、tavily（搜索）、metaso（秘塔 AI 搜索）、fofa（FOFA 网络空间测绘）、
-coze（字节扣子）、dify（Dify 应用 / 工作流）、google_api_credentials（Google API 凭据，一对 key/secret）、
+**api/ 类别（9 个）**：firecrawl（网页抓取）、tavily（搜索）、metaso（秘塔 AI 搜索）、fofa（FOFA 网络空间测绘）、
+coze（字节扣子）、dify（Dify 应用 / 工作流）、google_api_credentials（Google API 凭据，一对 key/secret）、baidu_face（百度人脸，人脸识别）、
 gateway（短信网关 / 接码服务商，
 字段按各厂商叫法通用化——`app_key` / `app_secret` 装不下的一律塞 `extra_params`；有可用只读校验接口的
 厂商：Engagelab、Infobip、CM、laaffic、nxcloud、buka、Ultramsg——Infobip 印度节点 200 有效、香港节点在该
@@ -1099,7 +1099,7 @@ tencent（腾讯位置服务 WebService Key，选填 SK 密钥 —— Key 开了
 > 批量并发取 token 会互相作废、还可能打断同一账号下其它正在运行的系统
 > （插件本身走 `stable_token` + `force_refresh=false`，只在账号当前没有可用 token 时才新签发）。
 
-> 本节共 **63 个**，即 `plugins/` 下的**全部**插件，**默认全部启用**。想临时停用某个用
+> 本节共 **64 个**，即 `plugins/` 下的**全部**插件，**默认全部启用**。想临时停用某个用
 > 「插件管理」里的**禁用**即可（状态记在 `plugins/.state.json`，见 §1.1），无需删除目录——
 > 禁用后其功能选项在界面置灰、批量验证自动跳过，其凭据**状态显示为「插件禁用」（派生，重新启用
 > 即回弹）、且不许再给它添加凭据**，而编辑 / 删除与已有数据照常保留。
@@ -1216,6 +1216,7 @@ tencent（腾讯位置服务 WebService Key，选填 SK 密钥 —— Key 开了
 - **exchange**：okx（账户余额）· binance（账户信息、交易所时间）
 - **api**：coze（工作区列表）· tavily（执行搜索）· firecrawl（抓取网页）·
   metaso（搜索（`list`，行内「阅读」下钻）· 网页解析）·
+  baidu_face（人脸库分组列表（`list`，只读））·
   dify（应用信息 · 应用参数 · 对话（`chat`，流式）· 运行工作流（`write`）——key 是**应用级**的，
   能看到什么由该应用的 `mode` 决定：`capabilities()` 按 `/info` 的 mode 显隐，
   workflow 应用不出现「对话」、普通对话应用不出现「运行工作流」）

@@ -154,7 +154,7 @@ plugins/
 │   │   └── plugin.py
 │   ├── deepseek/
 │   └── …                     # 共 18 个 LLM 子插件
-├── api/                      # API 服务类别：firecrawl / tavily / metaso / fofa / coze / dify / google_api_credentials / gateway（共 8 个）
+├── api/                      # API 服务类别：firecrawl / tavily / metaso / fofa / coze / dify / google_api_credentials / gateway / baidu_face（共 9 个）
 ├── dns/                      # 域名解析：dnspod / duckdns / godaddy / cloudflare
 ├── dev/                      # 开发者平台：github / huggingface / wandb / npm
 ├── im/                       # 即时通讯：feishu / dingtalk / wecom / telegram / telegram_apihash / discord / qq_bot / wechat_ilink / wechat_mp / wechat_miniprogram（dingtalk、wecom 为「应用 / Webhook 双形态」）
@@ -169,7 +169,7 @@ plugins/
 > HTTPS API，与 api/ 其余服务同形，故并入 api/ 而不单开类别——新建类别**不再**需要连带克隆一份
 > `*_common.py`（通用工具已上收 `backend/plugin_sdk.py`），但单开一类的归类代价仍大于收益。
 
-> 十个类别共 63 个子插件：llm 18 / api 8 / im 10 / cloud 11 / storage 2 / dns 4 / dev 4 / map 3 / exchange 2 / mail 1。
+> 十个类别共 64 个子插件：llm 18 / api 9 / im 10 / cloud 11 / storage 2 / dns 4 / dev 4 / map 3 / exchange 2 / mail 1。
 > 类别目录**不再强制**带共享模块——通用原语已上收 `backend/plugin_sdk.py`（框架暴露给插件的唯一接口层）；
 > 只有类别确有「类别特有」工具时才建一个（现仅 `llm/llm_common.py`、`mail/mail_common.py`、
 > `storage/storage_common.py + storage/storage_s3v4.py` 三例；**类别级共享模块必须带类别前缀**，
