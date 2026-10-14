@@ -176,7 +176,7 @@ keyrealm/
 ├── frontend/                # Vue 3 前端
 │   ├── src/{views,components,stores,api}/
 │   └── vite.config.js
-└── docs/                    # 架构 / 前端 / 插件 / MCP / 数据库 五份文档
+└── docs/                    # 架构 / 前端 / 插件 / MCP / 数据库 / 更新 六份文档
 ```
 
 ## 6. 版本、数据库与发布
@@ -197,33 +197,30 @@ keyrealm/
 
 ## 7. 程序内更新（从源码编译）
 
-应用内「设置 → 更新」可检查并一键更新（**面向源码运行的部署**；打包分发的 exe 走 Releases）。
-核心实现在 **`backend/updater.py`**（唯一实现），被**应用内**（`backend/api.py` 转发）与
-**四个独立脚本**共用；脚本只做 argparse → 转发。
+应用内「设置 → 更新」可检查并一键更新（**面向源码运行**的部署；打包分发的 exe 走 Releases）。
+**唯一实现在 `backend/updater.py`**，被应用内（`backend/api.py` → `main.py::VaultApi`）与四个
+独立脚本共用；脚本只做 argparse → 转发。
 
 | 能力 | 脚本 | 说明 |
 |---|---|---|
-| 版本检查 | `scripts/check_version.py` + `.sh`/`.bat` | 只读：`git clone --depth 1` 到临时目录读远端版本，**不碰工作区** |
-| 构建更新 | `scripts/build_update.py` + `.sh`/`.bat` | 等应用退出 → 备份 → `git fetch --depth 1`+`merge --ff-only` → `build.py --frontend` → 迁移 → 重启 |
-| 数据库更新 | `scripts/db_update.py` + `.sh`/`.bat` | 逐级迁移（默认演练，`--apply` 才写） |
-| 程序重启 | `scripts/restart.py` + `.sh`/`.bat` | 脱离终端重启应用 |
+| 版本检查 | `scripts/check_version.{py,sh,bat}` | 只读：`git clone --depth 1` 到临时目录读远端版本，不碰工作区 |
+| 构建更新 | `scripts/build_update.{py,sh,bat}` | 等应用退出 → 备份 → `git fetch` → `build.py --frontend` → 迁移 → 重启 |
+| 数据库更新 | `scripts/db_update.{py,sh,bat}` | 逐级迁移（默认演练，`--apply` 才写） |
+| 程序重启 | `scripts/restart.{py,sh,bat}` | 脱离终端重启应用 |
 
-- **两个更新档**：正式版按 `APP_VERSION` 比大小；测试版按「版本号 **或** commit」任一不同。
+- `.sh`/`.bat` 只做「找 / 装 Python」（缺 `.venv` 就 `python -m venv` 并装 `requirements.txt`
+  + `pyinstaller`），再 `exec` 调同名 `.py`；**全程无交互**。
+- **两档口径**：正式版按 `APP_VERSION` 比大小；测试版按「版本号 **或** commit」任一不同。
   两档都跟踪 `main`。渠道存 `settings.update_channel`。
-- **`.sh`/`.bat` 只做「找 / 装 Python」**（`.venv` 不存在就 `python -m venv`，再装
-  `requirements.txt` + `pyinstaller`），随后 `exec` 调同名 `.py`。**全程无交互**。
-- **交棒顺序**：应用内 `start_update()` 先把更新脚本起成**脱离进程**、再关程序；
-  脚本首步 `wait_for_app_exit()`（借 `single_instance` 锁判断应用是否已退）。
-  重启新应用前必须 `single_instance.release()`，否则新进程会把自己当第二实例退出。
-- **备份**：可执行文件 + `plugins/` + `data/` 打成一个 zip，落在 `backups/`（gitignored、
-  含真实密钥、0600）。**只留一份**——写新备份前删旧的。
 
-### 7.1 数据库逐级迁移
+### 7.1 改了数据库结构要做什么
 
-`scripts/migrations/` 下放**结构**迁移脚本，命名 `m_<from>__to_<to>.py`，**只提供「低一级 →
-高一级」**（如 `m_1.0.0__to_1.1.0.py`），每个暴露 `FROM_VERSION`/`TO_VERSION`/`preview(conn)`/
-`apply(conn)`。运行器把链串起来一层层升，**绝不跨级**；断链会点名缺哪一跳。详见
-`scripts/migrations/README.md`。结构有变时**除了写迁移脚本，还要提升 `SCHEMA_VERSION`**。
+**两件事都要做**：① 在 `scripts/migrations/` 加一份 `m_<old>__to_<new>.py`（接口见
+`scripts/migrations/README.md`）；② 提升 `backend/version.py` 的 `SCHEMA_VERSION`。
+**只提供相邻两版的脚本、绝不跨级**——运行器会逐级串起来升。
+
+> 使用方式、命令行参数、备份/回滚、故障排查、Windows 验收清单见
+> **[程序内更新](docs/UPDATE.md)**。
 
 ## 8. 插件开发
 

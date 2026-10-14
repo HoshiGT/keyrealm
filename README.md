@@ -187,6 +187,7 @@ Keyrealm 内置一个 **MCP Server**，Agent 可以直接查询、创建、验�
 程序会关闭、在终端里备份并重新构建，完成后自动重启（更新前会备份可执行文件、`plugins/` 与
 `data/` 到 `backups/`，只保留最近一份；构建脚本缺环境时会自动创建虚拟环境并装依赖）。
 用打包版 exe 的则从 Releases 下载新版。数据库结构若有变动，更新时会**逐级**自动迁移。
+详见 [程序内更新](docs/UPDATE.md)。
 
 **Q：某个服务验证失败或有超时，是不是我的 Key 坏了？**
 先看是不是网络问题。部分厂商（Telegram、Discord、Hugging Face 等）在国内需要代理才能访问，
@@ -219,6 +220,7 @@ Keyrealm 内置一个 **MCP Server**，Agent 可以直接查询、创建、验�
 | [插件开发指南](docs/PLUGIN_GUIDE.md) | 插件结构、`manifest.json`、`plugin.py` 接口、插件清单 |
 | [MCP 接口规范](docs/MCP_API.md) | 连接方式、鉴权、全部工具与参数 |
 | [数据库设计](docs/DATABASE.md) | 表结构、ER 图、迁移策略 |
+| [程序内更新](docs/UPDATE.md) | 两种更新档、应用内 / 命令行更新、备份与回滚、数据库逐级迁移 |
 | [更新日志](CHANGELOG.md) | 各版本变更 |
 
 ---

@@ -669,6 +669,8 @@ SQLite 快照，`--apply` 前抢单实例锁。
 `assemble_release` **跳过 `plugins/` 自我复制**（否则会把活的源目录删掉再自我复制），也不清
 `data/installed_plugins`（那已是用户真实数据目录）。
 
+> 使用方式、命令行参数、备份/回滚、故障排查与 Windows 验收清单见 **[程序内更新](UPDATE.md)**。
+
 ---
 
 ## 3. 数据流
