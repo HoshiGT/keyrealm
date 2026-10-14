@@ -221,6 +221,10 @@ plugins/
 > 直接写中文即可。写了 `**加粗**` 会在解析 manifest 时被自动剥成纯文本（`backend/plugin_base.plain_text`），
 > 别指望它变粗；glob 形式的 `**`（如 `**/*.py`）不受影响。
 
+> **插件只描述「当前」格式，不写数据兼容**：字段改了形态（拆开 / 合并 / 改名）时，**不要在
+> `verify` / `validate` 里做双格式容忍**（例如"字段里出现 `|` 就拆开"）。历史数据由**数据升级**
+> 负责转换（`backend/data_upgrades.py`，在导入备份与更新后执行），插件只认当前形态即可。
+
 > **插件 logo 的来源与许可**：内置插件的品牌图标是**随包分发**的第三方商标图形，取自
 > [Simple Icons](https://simpleicons.org/)（CC0-1.0）、Iconify 的 `thesvg` 集合（MIT）、
 > **App Store 官方图标**（中文区 `itunes.apple.com/search?country=cn`，取 `artworkUrl512` 的高分辨率版；

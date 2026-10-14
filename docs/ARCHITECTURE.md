@@ -707,6 +707,13 @@ POSIX 走 `start_new_session`）→ **确认子进程起来之后**才调 `_clos
 `TO_VERSION` / `preview(conn)` / `apply(conn)`），运行器串链**逐级**升、**绝不跨级**，每跳留
 SQLite 快照，`--apply` 前抢单实例锁。
 
+**凭据数据格式升级**（与上者分开的**另一件事**）：`backend/data_upgrades.py` + `version.DATA_VERSION`。
+改的是**凭据数据的格式**（某插件字段的拆并），不是表结构。分家的原因是**时机**：凭据的敏感字段
+**加密**，而结构迁移跑在交棒阶段（应用已退出、没有主密码），**改不了**这些数据。因此数据升级在
+**应用解锁后**执行一次（`api.run_data_upgrades`，幂等，落后于 `DATA_VERSION` 才跑）；**导入备份**
+在落库前走**同一套规则**。**规矩**：规则只在这个模块里维护——插件只描述**当前**格式、不写双格式
+兼容，框架其它地方也不做格式容忍。
+
 **`scripts/build.py` 的输出**：默认落**仓库根**（`.git` 同级，`--output` 可改）。输出=仓库根时
 `assemble_release` **跳过 `plugins/` 自我复制**（否则会把活的源目录删掉再自我复制），也不清
 `data/installed_plugins`（那已是用户真实数据目录）。

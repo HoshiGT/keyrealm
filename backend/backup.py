@@ -24,6 +24,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from . import data_upgrades
 from . import database as db
 from . import plugin_manager
 from .crypto import decrypt, decrypt_dict, encrypt, encrypt_dict, mask_secret
@@ -461,6 +462,9 @@ def import_backup(key: bytes, doc: dict, dedupe: bool = True, source: str = "",
 
         schema = plugin.get("fields_schema") or []
         rec["sensitive"] = {f["key"] for f in schema if f.get("sensitive")}
+        # 老格式 → 当前格式（一次性数据升级，规则见 backend/data_upgrades.py）：
+        # 先升级再校验，于是导入进来的旧备份直接就是当前格式，插件无需做双格式兼容。
+        data = data_upgrades.upgrade_credential(ct, data or {})
         effective, errors = _prepare_entry(schema, data)
         rec["data"] = effective
         if errors:

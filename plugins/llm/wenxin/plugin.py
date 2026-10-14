@@ -1,7 +1,8 @@
 """百度文心 API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
 
 协议：POST {base}/oauth/2.0/token（client_credentials）。
-凭证为 **API Key + Secret Key 两个字段**（旧版把两者拼在一个字段里、用 ``|`` 分隔，仍兼容）。
+凭证为 **API Key + Secret Key 两个独立字段**。本插件**只认当前格式**；老数据
+（把两者拼成一个字段）由导入备份与更新流程升级，不在运行时兼容。
 
 参考文档：https://cloud.baidu.com/doc/WENXINWORKSHOP/index.html
 """
@@ -29,16 +30,11 @@ PROTOCOL = "wenxin"
 def _creds(data: dict) -> tuple[str, str]:
     """取 (client_id, client_secret)。
 
-    新格式是两个独立字段 ``api_key`` / ``secret_key``；旧版把两者拼在一个字段里
-    （``API_KEY|SECRET_KEY``），这里继续认——``api_key`` 里出现 ``|`` 就地拆分，
-    于是老凭据不改动也仍然可用（用户重填这笔时自然分开即可）。
+    插件**只认当前格式**：两个独立字段 ``api_key`` / ``secret_key``。老格式
+    （``API_KEY|SECRET_KEY`` 拼在一个字段里）不在这里兼容——那是**一次性的数据升级**，
+    由导入备份与更新流程把旧数据转成本格式（见 ``backend/data_upgrades.py``）。
     """
-    api_key = (data.get("api_key") or "").strip()
-    secret = (data.get("secret_key") or "").strip()
-    if "|" in api_key:
-        client_id, _, tail = api_key.partition("|")
-        return client_id.strip(), (tail.strip() or secret)
-    return api_key, secret
+    return (data.get("api_key") or "").strip(), (data.get("secret_key") or "").strip()
 
 
 def validate(data: dict) -> list[str]:

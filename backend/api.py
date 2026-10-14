@@ -17,6 +17,7 @@ from typing import Any, Optional, Union
 
 from . import autostart
 from . import backup
+from . import data_upgrades
 from . import database as db
 from . import idle_lock
 from . import logger
@@ -178,9 +179,61 @@ def unlock(password: str) -> dict:
     _set_key(key)
     idle_lock.touch()
     tray.update_tray()
+    # 换版 / 更新后：把库里遗留的**老格式凭据数据**升级到当前格式（幂等；失败不能拖垮解锁）
+    try:
+        up = run_data_upgrades()
+        if up.get("upgraded"):
+            _log.info("凭据数据升级完成：%s 条（v%s → v%s）",
+                      up["upgraded"], up.get("from"), up.get("to"))
+    except Exception:  # noqa: BLE001 - 数据升级失败不该影响解锁
+        _log.exception("凭据数据升级失败（不影响解锁）")
     # 解锁后补跑一次「自动检测更新」——启动时应用还没解锁，私有仓库的检查多半没成
     start_auto_update_check()
     return {"ok": True, "message": "解锁成功"}
+
+
+def _sensitive_keys(credential_type: str) -> set:
+    """该插件里声明为 sensitive 的字段名（与 create/update 拆 data_plain 的口径一致）。"""
+    record = db.get_plugin_by_type(credential_type)
+    return {f["key"] for f in (record or {}).get("fields_schema", []) if f.get("sensitive")}
+
+
+def run_data_upgrades() -> dict:
+    """把库里遗留的**老格式凭据数据**升级到当前格式（幂等；只在数据版本落后时执行）。
+
+    **必须解锁后调用**：凭据的敏感字段是加密的，没有主密码读不出来——所以这一步做不到结构
+    迁移 `m_*.py` 里（那些跑在更新交棒阶段、应用已退出）。规则见 `backend/data_upgrades.py`；
+    导入备份在落库前走同一套规则。
+    """
+    try:
+        cur = int(db.get_setting("data_version", "0") or 0)
+    except (TypeError, ValueError):
+        cur = 0
+    if cur >= version.DATA_VERSION:
+        return {"ok": True, "upgraded": 0, "from": cur, "to": version.DATA_VERSION}
+    key = _get_key()
+    if key is None:
+        return {"ok": False, "message": "保险库未解锁，无法升级数据"}
+    upgraded = 0
+    for cred in db.list_credentials():
+        ct = cred.get("credential_type") or ""
+        blob = cred.get("data_encrypted")
+        try:
+            data = decrypt_dict(key, blob) if blob else dict(cred.get("data_plain") or {})
+        except Exception:  # noqa: BLE001 - 单条解不开就跳过，别让整体失败
+            continue
+        new = data_upgrades.upgrade_credential(ct, data)
+        if new == data:
+            continue
+        sensitive = _sensitive_keys(ct)
+        db.update_credential(
+            cred["id"],
+            data_encrypted=encrypt_dict(key, new),
+            data_plain={k: v for k, v in new.items() if k not in sensitive},
+        )
+        upgraded += 1
+    db.set_setting("data_version", str(version.DATA_VERSION))
+    return {"ok": True, "upgraded": upgraded, "from": cur, "to": version.DATA_VERSION}
 
 
 def lock_vault() -> dict:
