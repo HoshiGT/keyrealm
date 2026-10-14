@@ -232,7 +232,22 @@ keyrealm/
   同名模块会因 `sys.modules` 互相顶掉，拿到别家的实现且一路不报错。
 - docstring 末尾用 `参考文档：` 附官方文档链接（只写官方页，不写转述页）。
 
-## 9. 提交约定
+## 9. 发布预编译包（GitHub Actions）
+
+打 tag（`vX.Y.Z`）会触发 **`.github/workflows/release.yml`**：在三个 runner 上并行构建，把产物挂到
+该 tag 的 GitHub Release，用户下载即用。
+
+- 矩阵：`windows-latest`（x64）、`macos-13`（Intel）、`macos-latest`（Apple Silicon）。
+  **必须矩阵**——PyInstaller **不能跨平台编译**，每个平台只能在对应系统上构建。
+- 每个 runner：装 Python + Node → `pip install -r requirements.txt pyinstaller` → `npm ci` →
+  `python scripts/build.py --frontend --output release` → 把 `release/`（可执行文件 + `plugins/`）
+  打成 `Keyrealm-<版本>-<平台>.zip`（顶层一个干净目录，不散落）→ 挂到 Release。
+- **手动触发**（Actions → Release → Run workflow）只产出构建产物、不发 Release，可用于验证。
+- 目标机前提：**Windows** 需 WebView2 Runtime（Win10/11 通常自带）；**macOS** 产物**未签名**，
+  首次打开会被 Gatekeeper 拦，需右键→「打开」或 `xattr -dr com.apple.quarantine <文件>` 放行。
+- Linux 暂无预编译包（pywebview 依赖 GTK/WebKitGTK，打包成本高）。
+
+## 10. 提交约定
 
 - **提交信息用中文**，沿用 conventional 前缀（`feat` / `fix` / `docs` / `chore` / `refactor` /
   `perf` / `style`）。

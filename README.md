@@ -101,16 +101,19 @@
 
 ## 下载与安装
 
-### Windows
+### Windows / macOS
 
-从 [Releases](../../releases) 下载 `Keyrealm.exe`，放到任意目录双击即可——单文件、免安装。
+从 [Releases](../../releases) 下载对应平台的压缩包
+（`Keyrealm-<版本>-windows-x64.zip` / `macos-arm64.zip` / `macos-x64.zip`），解压后直接运行，免安装。
+
+- **Windows**：运行 `Keyrealm.exe`。需要 **WebView2 Runtime**（Windows 10/11 通常已内置；
+  若启动时报缺 WebView2，从微软官网装一次即可）。
+- **macOS**：运行包内的 `Keyrealm`。**未签名**——首次打开会被 Gatekeeper 拦，右键→「打开」，
+  或终端执行 `xattr -dr com.apple.quarantine Keyrealm` 放行。
 
 首次运行会在程序同级目录创建 `data/`（数据库、日志、界面偏好都在这里）。
 
-> 需要 **WebView2 Runtime**：Windows 10/11 通常已内置；若启动时报缺 WebView2，
-> 从微软官网装一次即可。
-
-### macOS / Linux
+### Linux
 
 暂无预编译包，需从源码运行，见 [CONTRIBUTING.md](CONTRIBUTING.md) 的开发环境一节。
 

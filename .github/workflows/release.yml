@@ -1,0 +1,94 @@
+name: Release
+
+# 打 tag（v*）时，在各平台 runner 上构建预编译包并挂到对应 GitHub Release。
+# 也可手动触发（Actions → Release → Run workflow）验证构建——此时只产出 workflow artifact，不发 Release。
+#
+# 为什么必须用矩阵：**PyInstaller 不能跨平台编译**——Windows 的 exe 只能在 Windows 上打、
+# macOS 的只能在 macOS 上打。所以每个平台各开一个 runner 并行构建。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # 创建 Release / 上传资产需要
+
+jobs:
+  build:
+    name: ${{ matrix.pkg }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            pkg: windows-x64
+          - os: macos-13        # Intel（macos-latest 已是 Apple Silicon）
+            pkg: macos-x64
+          - os: macos-latest    # Apple Silicon
+            pkg: macos-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 安装 Python 依赖
+        # requirements.txt 含 socksio（httpx[socks]）、PySocks、telethon、python-socks——
+        # spec 会对这四个「静态分析看不到」的依赖做强校验，缺一即中止构建，故必须装齐。
+        # PyInstaller 不在 requirements.txt 里，单独装。
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: 安装前端依赖
+        working-directory: frontend
+        run: npm ci
+
+      - name: 构建（前端 + PyInstaller）
+        # --output release：产物落到 release/（exe + plugins/），便于整目录打包。
+        run: python scripts/build.py --frontend --output release
+
+      - name: 打包 zip
+        shell: python
+        env:
+          PKG_NAME: ${{ matrix.pkg }}
+        run: |
+          import os, zipfile
+          from pathlib import Path
+          ref = os.environ.get("GITHUB_REF_NAME", "")
+          ver = ref[1:] if ref.startswith("v") else "dev"
+          pkg = os.environ["PKG_NAME"]
+          top = f"Keyrealm-{ver}-{pkg}"          # 解压后是一个干净的顶层目录，不散落
+          out = f"{top}.zip"
+          root = Path("release")
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+              for p in sorted(root.rglob("*")):
+                  if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc":
+                      z.write(p, f"{top}/{p.relative_to(root).as_posix()}")
+          print("打包 →", out)
+
+      - name: 上传构建产物（任何触发都留档）
+        uses: actions/upload-artifact@v4
+        with:
+          name: Keyrealm-${{ matrix.pkg }}
+          path: Keyrealm-*.zip
+          if-no-files-found: error
+
+      - name: 发布到 Release（仅 tag）
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Keyrealm-*.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false
