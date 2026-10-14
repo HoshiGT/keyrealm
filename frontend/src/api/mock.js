@@ -997,6 +997,37 @@ export function createMockApi() {
       await delay(40)
       return { ok: true, mode, proxy_id: proxyId, resolved: '' }
     },
+    async start_update_check() {
+      await delay(200)
+      return { ok: true, task_id: 'mock-check' }
+    },
+    async get_update_check_result() {
+      await delay(40)
+      return {
+        ok: true,
+        kind: 'formal',
+        has_update: false,
+        reason: 'dev mock：未联网，视为与远端一致',
+        current: { version: '1.3.0', commit: 'mock000', schema_version: '1.0.0', frozen: false, source_ok: true },
+        latest: { version: '1.3.0', commit: 'mock000', schema_version: '1.0.0' },
+        db_change: false,
+        db_chain: [],
+        source_ok: true,
+        checked_at: new Date().toISOString(),
+      }
+    },
+    async get_update_auto_check() {
+      await delay(20)
+      return { enabled: true }
+    },
+    async set_update_auto_check(enabled) {
+      await delay(40)
+      return { ok: true, enabled: Boolean(enabled) }
+    },
+    async take_update_notice() {
+      await delay(20)
+      return {}
+    },
     async update_check(kind = 'formal') {
       await delay(400)
       return {

@@ -1242,6 +1242,28 @@ def read_request(root: Optional[Any] = None) -> dict:
     return _read_json(request_file(root)) or {}
 
 
+def check_file(root: Optional[Any] = None) -> Path:
+    """**最近一次「检查更新」的结果**（持久化）。
+
+    界面据此在换页 / 重启后仍能显示上次结果，**直到被新的一次检查替换**为止。
+    """
+    return _data_dir(root) / ".update-check.json"
+
+
+def read_last_check(root: Optional[Any] = None) -> dict:
+    return _read_json(check_file(root)) or {}
+
+
+def write_last_check(result: dict, *, root: Optional[Any] = None) -> None:
+    """把一次检查结果落盘（只挑界面要用的字段）。"""
+    keys = ("ok", "kind", "has_update", "reason", "current", "latest",
+            "db_change", "db_chain", "asset", "platform", "source_ok", "proxy",
+            "error", "message")
+    payload = {k: result.get(k) for k in keys if k in result}
+    payload["checked_at"] = _now()
+    _write_json_atomic(check_file(root), payload)
+
+
 # ── 准备产物清单（应用内写、交棒进程读）──────────────────────
 # 交棒进程据此走「快路径」：校验 sha256 后跳过已完成的下载 / 拉源码 / 构建。
 # 陈旧（超 TTL）或校验失败一律视为无效 → 回落完整流程（CLI 走的正是这条）。

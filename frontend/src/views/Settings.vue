@@ -529,16 +529,29 @@ async function loadDbMigrationStatus() {
   }
 }
 
+// 「检查更新」现在也是**后台任务**：点了就返回，结果经 vault:update_checked 回来；
+// 结果由后端**持久化**（getUpdateCheckResult），换页 / 重启后仍在，直到被新结果替换。
 async function checkUpdate() {
+  if (updateChecking.value) return
   updateChecking.value = true
-  updateResult.value = null
   try {
-    updateResult.value = await api.checkUpdate(updateChannel.value)
+    const res = await api.startUpdateCheck()
+    if (res && res.ok === false) {
+      updateChecking.value = false
+      ElMessage.error(res.message || '无法开始检查更新')
+    }
+    // 成功：等 vault:update_checked / 任务状态回来
   } catch (err) {
-    updateResult.value = { ok: false, message: err.message || '检查更新失败' }
-  } finally {
     updateChecking.value = false
+    ElMessage.error(err.message || '检查更新失败')
   }
+}
+
+async function loadUpdateCheckResult() {
+  try {
+    const res = await api.getUpdateCheckResult()
+    if (res && Object.keys(res).length) updateResult.value = res
+  } catch { /* 容错：不阻塞其它卡片 */ }
 }
 
 async function doUpdate() {
@@ -580,9 +593,16 @@ async function cancelUpdate() {
 // 订阅后台任务：只认「更新」这一条，用它驱动准备进度与状态
 let _offTasks = null
 let _offUpdateFailed = null
+let _offChecked = null
 onMounted(() => {
   _offTasks = onEvent(EVENTS.tasksChanged, (snapshot) => {
-    if (!snapshot || snapshot.kind !== 'update') return
+    if (!snapshot) return
+    if (snapshot.kind === 'update_check') {
+      // 「检查更新」的后台任务：running 时按钮转圈；结束由 updateChecked 事件收口
+      updateChecking.value = snapshot.status === 'running'
+      return
+    }
+    if (snapshot.kind !== 'update') return
     updatePrepareTask.value = snapshot
     if (snapshot.status === 'running') {
       updating.value = true
@@ -603,10 +623,16 @@ onMounted(() => {
     updating.value = false
     updateFailed.value = (d && d.message) || '更新失败'
   })
+  // 检查结束（手动或自动）→ 收口按钮状态并刷新卡片上的结果
+  _offChecked = onEvent(EVENTS.updateChecked, (d) => {
+    updateChecking.value = false
+    if (d && Object.keys(d).length) updateResult.value = d
+  })
 })
 onUnmounted(() => {
   if (_offTasks) _offTasks()
   if (_offUpdateFailed) _offUpdateFailed()
+  if (_offChecked) _offChecked()
 })
 
 const refreshing = ref(false)
@@ -629,6 +655,7 @@ async function refreshAll(showSpinner = true) {
       loadUpdateToken(),
       loadUpdateAutoCheck(),
       loadUpdateStatus(),
+      loadUpdateCheckResult(),
       loadDbMigrationStatus(),
       proxyStore.fetch().catch(() => {}),
       appStore.refreshTray().catch(() => {}),

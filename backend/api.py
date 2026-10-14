@@ -1612,8 +1612,14 @@ _update_task_id: Optional[str] = None
 # 「自动检测更新」默认开启：应用启动（以及首次解锁）后**在后台查一次**，发现新版本就通知前端。
 # 未解锁时拿不到私有仓库的访问令牌，检查多半失败——此时**不标记完成**，留待 unlock() 后再试一次。
 
-_auto_check_lock = threading.Lock()
-_auto_check_state: dict = {"running": False, "done": False, "notice": None}
+# ── 检查更新（后台任务 + 结果持久化）────────────────────────
+# 「检查更新」与「自动检测更新」共用同一台机器：**同一时刻只跑一个**；结果写
+# data/.update-check.json 持久化，界面换页 / 重启后仍能显示，**直到被新结果替换**。
+# - 手动检查（点按钮）→ 登记成**后台任务**（在「任务」页可见）；
+# - 自动检查（启动 / 解锁）→ 静默，**只在成功时**持久化（免得启动时未解锁的失败盖掉好结果）。
+
+_check_lock = threading.Lock()
+_check_state: dict = {"running": False, "task_id": None, "auto_done": False, "notice": None}
 
 
 def get_update_auto_check() -> dict:
@@ -1623,61 +1629,107 @@ def get_update_auto_check() -> dict:
 def set_update_auto_check(enabled) -> dict:
     result = updater.set_auto_check(enabled)
     if result.get("enabled"):
-        # 重新开启 → 清掉「本会话已查过」的标记并立刻再查一次（给用户即时反馈）
-        with _auto_check_lock:
-            _auto_check_state["done"] = False
-            _auto_check_state["notice"] = None
+        # 重新开启 → 清掉「本会话已自动查过」的标记并立刻再查一次（给用户即时反馈）
+        with _check_lock:
+            _check_state["auto_done"] = False
+            _check_state["notice"] = None
         start_auto_update_check()
     return result
 
 
+def get_update_check_result() -> dict:
+    """最近一次「检查更新」的结果（**持久化**）；从未查过返回 ``{}``。"""
+    return updater.read_last_check()
+
+
+def start_update_check() -> dict:
+    """「检查更新」——**后台任务**：结果持久化，换页 / 重启后仍在，直到被新结果替换。"""
+    return _start_check("manual")
+
+
 def start_auto_update_check() -> dict:
-    """启动 / 解锁后自动查一次更新（**非阻塞**，失败不打扰用户）。"""
-    if not updater.get_auto_check():
-        return {"started": False, "reason": "disabled"}
-    with _auto_check_lock:
-        if _auto_check_state["running"]:
-            return {"started": False, "reason": "running"}
-        if _auto_check_state["done"]:
-            return {"started": False, "reason": "done"}
-        _auto_check_state["running"] = True
-    threading.Thread(target=_auto_check_worker, daemon=True).start()
-    return {"started": True}
+    """启动 / 解锁后自动查一次（**静默**，失败不打扰；发现新版本弹通知）。"""
+    return _start_check("auto")
 
 
-def _auto_check_worker() -> None:
-    res: dict = {}
+def _start_check(source: str) -> dict:
+    if source == "auto" and not updater.get_auto_check():
+        return {"ok": False, "skipped": True, "reason": "disabled"}
+    with _check_lock:
+        if _check_state["running"]:
+            # 已有检查在跑（多半是刚启动的自动检查）：搭车，不重复跑
+            return {"ok": True, "running": True, "task_id": _check_state["task_id"]}
+        if source == "auto" and _check_state["auto_done"]:
+            return {"ok": False, "skipped": True, "reason": "done"}
+        task = tasks.create("update_check", "检查更新") if source == "manual" else None
+        _check_state["running"] = True
+        _check_state["task_id"] = task["id"] if task else None
+    threading.Thread(target=_run_check, args=(source,), daemon=True).start()
+    return {"ok": True, "task_id": task["id"] if task else None}
+
+
+def _run_check(source: str) -> None:
+    with _check_lock:
+        tid = _check_state["task_id"]
     try:
         _sync_update_token()          # 私有仓库要令牌（解锁后才拿得到）
         res = updater.check_update(updater.get_channel())
-    except Exception as exc:  # noqa: BLE001 - 自动检查绝不打扰用户
-        _log.warning("自动检查更新异常：%s", type(exc).__name__)
-        res = {"ok": False}
+    except Exception as exc:  # noqa: BLE001 - 检查边界兜底，绝不抛
+        _log.warning("检查更新异常：%s", type(exc).__name__)
+        res = {"ok": False, "error": "error", "message": f"检查更新异常：{type(exc).__name__}"}
     ok = bool(res.get("ok"))
-    if not ok:
+
+    # 手动检查总是留痕（含失败）；自动检查只在成功时落盘
+    if source == "manual" or ok:
+        try:
+            updater.write_last_check(res)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("写检查结果失败：%s", type(exc).__name__)
+
+    if tid:
+        if ok:
+            tasks.finish(tid, ok=True, output=_check_summary(res))
+        else:
+            tasks.finish(tid, ok=False, error=res.get("message") or res.get("error") or "检查失败")
+    elif not ok:
         _log.info("自动检查更新未完成（解锁后会再试一次）：%s",
                   res.get("message") or res.get("error") or "")
-    elif res.get("has_update"):
-        latest = res.get("latest") or {}
-        _log.info("自动检查更新：发现新版本 %s（当前 %s）",
-                  latest.get("version"), (res.get("current") or {}).get("version"))
-        notice = {k: res.get(k) for k in
-                  ("kind", "current", "latest", "reason", "db_change", "db_chain", "asset")}
-        notice["has_update"] = True
-        with _auto_check_lock:
-            _auto_check_state["notice"] = notice
-        push_event("vault:update_available", notice)
-    with _auto_check_lock:
-        _auto_check_state["running"] = False
-        if ok:
-            _auto_check_state["done"] = True
+
+    if ok:
+        with _check_lock:
+            _check_state["auto_done"] = True
+        if res.get("has_update"):
+            latest = res.get("latest") or {}
+            _log.info("检查更新：发现新版本 %s（当前 %s）",
+                      latest.get("version"), (res.get("current") or {}).get("version"))
+            notice = {k: res.get(k) for k in
+                      ("kind", "current", "latest", "reason", "db_change", "db_chain", "asset")}
+            notice["has_update"] = True
+            with _check_lock:
+                _check_state["notice"] = notice
+            push_event("vault:update_available", notice)
+
+    push_event("vault:update_checked", res)     # 界面据此刷新「检查更新」卡片
+    with _check_lock:
+        _check_state["running"] = False
+        _check_state["task_id"] = None
+
+
+def _check_summary(res: dict) -> str:
+    latest = res.get("latest") or {}
+    cur = res.get("current") or {}
+    if res.get("has_update"):
+        v = latest.get("version") or ""
+        c = latest.get("commit") or ""
+        return f"发现新版本 {v}" + (f"（{c}）" if c else "")
+    return f"已是最新（当前 {cur.get('version') or ''}）"
 
 
 def take_auto_update_notice() -> dict:
     """取出「自动检测发现的更新」通知（**取出即清除**，避免重复弹）。无则返回 ``{}``。"""
-    with _auto_check_lock:
-        notice = _auto_check_state.get("notice")
-        _auto_check_state["notice"] = None
+    with _check_lock:
+        notice = _check_state.get("notice")
+        _check_state["notice"] = None
     return notice or {}
 
 

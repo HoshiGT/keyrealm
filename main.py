@@ -327,6 +327,12 @@ class VaultApi:
     def take_update_notice(self):
         return api.take_auto_update_notice()
 
+    def start_update_check(self):
+        return api.start_update_check()
+
+    def get_update_check_result(self):
+        return api.get_update_check_result()
+
     def start_update(self, kind: str = "formal", restart: bool = True, terminal: str = "auto"):
         return api.start_update(kind, restart, terminal)
 

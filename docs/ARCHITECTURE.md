@@ -649,8 +649,13 @@ pywebview 没有「再次显示」事件可挂（`Form.Shown` 只触发一次，
 交棒顺序不可颠倒：**先起更新进程、再关闭应用**。
 
 **自动检测更新**（`settings.update_auto_check`，**默认开启**）：`main.py` 启动后与 `api.unlock()` 里各
-调一次 `api.start_auto_update_check()`——后台线程跑 `check_update`，发现新版本就 `push_event("vault:update_available")`
-并留一份「取出即清除」的通知（`take_auto_update_notice()`），前端 `App.vue` 弹可点击通知跳到设置页。
+调一次 `api.start_auto_update_check()`。**手动「检查更新」与自动检查共用同一台机器**
+（`api._start_check`，**同一时刻只跑一个**）：手动检查登记成**后台任务**（`tasks` 里 kind=`update_check`，
+在「任务」页可见），自动检查**静默**（不建任务）。结果写 `data/.update-check.json` **持久化**
+（`updater.write_last_check` / `read_last_check`），界面换页 / 重启后仍能显示，**直到被新结果替换**；
+手动检查**总是**落盘（含失败），自动检查**只在成功时**落盘（免得启动时未解锁的失败盖掉好结果）。
+发现新版本另 `push_event("vault:update_available")` 并留一份「取出即清除」的通知
+（`take_auto_update_notice()`），前端 `App.vue` 弹可点击通知跳到设置页。
 **未解锁时拿不到私有仓库的访问令牌**，启动那次多半失败且**不标记完成**，留待解锁后补跑一次。
 
 **两档更新方式不同**：**正式版**对比 **GitHub Release 的最新正式版标签**，准备阶段**下载对应平台的

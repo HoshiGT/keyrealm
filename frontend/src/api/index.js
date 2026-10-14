@@ -125,6 +125,8 @@ export const EVENTS = {
   updateFailed: 'vault:update_failed',
   // 「自动检测更新」在启动/解锁后查到了新版本（detail 与 check_update 结果同形）。
   updateAvailable: 'vault:update_available',
+  // （手动或自动）检查更新结束，detail 即检查结果。界面据此刷新「检查更新」卡片。
+  updateChecked: 'vault:update_checked',
 }
 
 export const api = {
@@ -323,6 +325,10 @@ export const api = {
   setUpdateAutoCheck: (enabled) => call('set_update_auto_check', enabled),
   // 取出「自动检测发现的更新」通知（取出即清除，避免重复弹）；无则返回 {}。
   takeUpdateNotice: () => call('take_update_notice'),
+  // 「检查更新」= **后台任务**：立即返回 {ok, task_id}，结果经 vault:update_checked 推送，
+  // 并持久化（getUpdateCheckResult 可随时取回，换页 / 重启后仍在，直到被新结果替换）。
+  startUpdateCheck: () => call('start_update_check'),
+  getUpdateCheckResult: () => call('get_update_check_result'),
   // 检查更新：{ok, kind, has_update, reason, current, latest, db_change, db_chain, source_ok}
   checkUpdate: (kind = 'formal') => call('update_check', kind),
   // 上一次更新的结果（读 data/.update-status.json；无则 {}）
