@@ -107,11 +107,36 @@ jobs:
           path: Keyrealm-*.zip
           if-no-files-found: error
 
-      - name: 发布到 Release（仅 tag）
-        if: startsWith(github.ref, 'refs/tags/')
+  # 发布单独一个 job：**只在 tag 时跑、且只跑一次**，把所有平台的包汇总后一次性建 Release。
+  # 早前把发布步骤放在矩阵里，两个平台各建/更新一次 → Release 正文出现两条重复的 "Full Changelog"。
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 汇总各平台产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-assets
+          merge-multiple: true
+      - name: 生成发行说明（取 CHANGELOG 里本版本那一段）
+        # generate_release_notes 在本仓库（无 PR）上生成不出内容，只会留一行 Full Changelog；改用 CHANGELOG。
+        shell: python
+        run: |
+          import os, re, pathlib
+          tag = os.environ["GITHUB_REF_NAME"]
+          ver = tag[1:] if tag.startswith("v") else tag
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          m = re.search(rf"^##\s*\[{re.escape(ver)}\][^\n]*\n(.*?)(?=^##\s*\[|\Z)",
+                        text, re.M | re.S)
+          body = (m.group(1).strip() + "\n") if m else f"发布 {tag}。\n"
+          pathlib.Path("notes.md").write_text(body, encoding="utf-8")
+          print("发行说明字节:", len(body))
+      - name: 发布到 Release
         uses: softprops/action-gh-release@v2
         with:
-          files: Keyrealm-*.zip
-          generate_release_notes: true
+          files: dist-assets/*.zip
+          body_path: notes.md
           draft: false
           prerelease: false
