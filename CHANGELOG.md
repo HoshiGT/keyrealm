@@ -52,6 +52,8 @@
   用户不必重新生成、也不必重配 MCP 客户端（跨库还原也随 settings 段一起走）。
   ② **`plugins.plugin_path` 由绝对路径改为相对 `plugins/` 的路径**（如 `llm/openai`）——
   绝对路径会把程序目录钉死，用户搬一次目录就全部失效。
+- **结构版本 1.2.0 → 1.3.0**（`m_1.2.0__to_1.3.0.py`）：清掉 `settings` 里两条**没人读**的死键
+  （`data_version`、`data_schema_version`——早期方案改掉后留下的）；纯 SQL，不需要主密码。
 
 ---
 
