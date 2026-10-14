@@ -990,12 +990,19 @@ def latest_backup(*, root: Optional[Any] = None) -> Optional[Path]:
 # ── 取源码（会改工作区）─────────────────────────────────────
 
 def fetch_latest(*, root: Optional[Any] = None, branch: str = DEFAULT_BRANCH,
-                 force: bool = False) -> dict:
-    """``git fetch origin <branch>`` + ``merge --ff-only``：把工作区快进到远端。
+                 force: bool = False, discard: bool = False) -> dict:
+    """``git fetch origin <branch>`` 后把工作区对齐到远端。
 
-    脏工作区默认**拒绝**（避免覆盖用户未提交的改动）；``force=True`` 时先 ``git stash`` 再合。
+    脏工作区有三种处置，**按参数显式选**（`force` 优先，其次 `discard`）：
 
-    **不用 ``--depth 1``**：浅取会在 FETCH_HEAD 处切出浅边界，本地既有的历史与它「接不上」，
+    - ``force=True``：先 ``git stash`` 再快进合并（保留一份可取回的副本）；
+    - ``discard=True``：**直接丢弃本地改动**（``git reset --hard FETCH_HEAD``）——**更新走的就是这条**。
+      部署目录里的改动多半是构建/依赖留下的痕迹（典型是 ``npm install`` 改写的
+      ``frontend/package-lock.json``），不该拦住更新；丢弃清单会记进日志。
+      **未跟踪 / 被 ignore 的文件（``data/``、``backups/``…）不受影响。**
+    - 都不给：**拒绝**，避免覆盖用户未提交的改动。
+
+    **不用 ``--depth 1``**：浅取会在 FETCH_HEAD 处切出浅边界，本地既有历史与它「接不上」，
     ``merge --ff-only`` 会报 **`refusing to merge unrelated histories`** 而**静默失败**——
     只要本地真的落后于远端就必然踩到（本机复现）。普通 fetch 只传本地缺的对象，开销可接受。
     """
@@ -1004,21 +1011,37 @@ def fetch_latest(*, root: Optional[Any] = None, branch: str = DEFAULT_BRANCH,
         return {"ok": False, "message": "未安装 git"}
     if not is_source_checkout(root):
         return {"ok": False, "message": "当前不是 git 源码仓库（未检测到 .git）"}
-    dirty = _git(["status", "--porcelain"], cwd=root).stdout.strip()
+    # 注意：**别先对整段输出 strip** —— porcelain 每行是 `XY <路径>`，首行的状态前导空格
+    # 一旦被削掉，按固定偏移取路径就会错位（踩过：`a.txt` 被取成 `.txt`）。
+    status = _git(["status", "--porcelain"], cwd=root).stdout
+    dirty = status.strip()
+    discarded: list = []
     stashed = False
     if dirty:
-        if not force:
+        if force:
+            st = _git(["stash", "push", "-u", "-m", "keyrealm-update-autostash"], cwd=root)
+            stashed = st.returncode == 0
+        elif discard:
+            discarded = [line[3:].strip() for line in status.splitlines() if line.strip()]
+        else:
             return {"ok": False,
                     "message": "工作区有未提交改动，为避免覆盖已中止。请先提交或 stash，"
                                "或加 --force（会先 git stash 再合并）"}
-        st = _git(["stash", "push", "-u", "-m", "keyrealm-update-autostash"], cwd=root)
-        stashed = st.returncode == 0
     try:
         fe = _git(["fetch", "origin", branch], cwd=root, timeout=180)
     except subprocess.TimeoutExpired:
         return {"ok": False, "message": "git fetch 超时（网络不可用？）"}
     if fe.returncode != 0:
         return {"ok": False, "message": f"git fetch 失败：{_short(fe.stderr)}"}
+    if discard and not stashed:
+        rs = _git(["reset", "--hard", "FETCH_HEAD"], cwd=root)
+        if rs.returncode != 0:
+            return {"ok": False, "message": f"对齐远端失败：{_short(rs.stderr)}"}
+        if discarded:
+            _log.info("更新：已丢弃本地改动 %d 项（%s）",
+                      len(discarded), "、".join(discarded[:5]))
+        return {"ok": True, "discarded": discarded,
+                "message": "源码已对齐到远端最新（本地改动已丢弃）"}
     mg = _git(["merge", "--ff-only", "FETCH_HEAD"], cwd=root)
     if mg.returncode != 0:
         return {"ok": False,
@@ -1138,17 +1161,20 @@ def ensure_venv(root: Optional[Any] = None) -> dict:
 
 
 def ensure_source(*, root: Optional[Any] = None, branch: str = DEFAULT_BRANCH,
-                  force: bool = False) -> dict:
+                  force: bool = False, discard: bool = True) -> dict:
     """确保程序目录是一份（最新的）源码：是仓库就快进，不是就就地初始化并检出。
 
     供**测试版**（从源码构建）用——从 Releases 装的二进制版本机没有源码，这里把它转成源码部署
     （``git init`` + ``fetch`` + ``checkout -f``）；``data/``、可执行文件等未跟踪文件原样保留。
+
+    ``discard=True``（**默认**）：工作区脏时**丢弃本地改动**对齐远端——更新场景要的就是「直接拉最新」，
+    部署目录里的改动多半是构建/依赖留下的痕迹。想保留就先 commit / stash，或用 ``force=True``（先 stash 再合）。
     """
     root = repo_root(root)
     if not git_available():
         return {"ok": False, "message": "未安装 git，无法从源码构建"}
     if is_source_checkout(root):
-        return fetch_latest(root=root, branch=branch, force=force)
+        return fetch_latest(root=root, branch=branch, force=force, discard=discard)
     url = _remote_url()
     try:
         _git(["init"], cwd=root)

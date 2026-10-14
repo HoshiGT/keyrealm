@@ -1814,6 +1814,7 @@ def start_update(kind: str = "formal", restart: bool = True, terminal: str = "au
                 progress_cb=lambda c, t, s: tasks.progress(tid, c, t, s),
                 should_cancel=tasks.should_cancel(tid),
                 export_doc=_full_export_doc(),      # 全量导出随备份落盘（原库坏了也能还原）
+                log=lambda m: _log.info("更新准备：%s", m),
             )
         except Exception as exc:  # noqa: BLE001 - 准备边界兜底，不退出应用
             _log.exception("准备更新异常")

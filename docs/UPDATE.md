@@ -82,8 +82,11 @@ Keyrealm 可以在程序内检查并一键更新。**两种渠道的更新方式
 
 **准备阶段（应用内，程序不退出）**：
 1. 备份当前程序。
-2. **获取源码**：程序目录是 git 仓库就快进到 `main`；**不是就就地初始化并检出**
+2. **获取源码**：程序目录是 git 仓库就对齐到 `main` 最新；**不是就就地初始化并检出**
    （`git init` + `fetch` + `checkout` —— 即把程序目录转成源码部署；可执行文件、`data/` 等未跟踪文件原样保留）。
+   > **工作区有改动时直接丢弃**（`git reset --hard`）——更新要的就是「拉最新」，而部署目录里的改动多半是
+   > 构建/依赖留下的痕迹（典型是 `npm install` 改写的 `package-lock.json`）。想保留就先 commit，
+   > 或用 CLI 的 `--force`（先 `git stash` 再合并）。**未跟踪 / 被忽略的文件不受影响。**
    > **这一步是「提交点」**：源码一更新，工作区就前进了，而数据库还没迁移——所以此后**不再接受取消**，
    > 会直接进入构建并交棒。若交棒失败，用 `scripts/build_update.sh --kind test` 手动补完（回落流程会补做构建/迁移/替换）。
 3. **准备构建环境**：项目下没有 `.venv` 就现建一个，再装 `requirements.txt` + `pyinstaller`（全程走「更新代理」）。
@@ -197,7 +200,7 @@ scripts/restart.sh --wait
 | 正式版报「读取 Release 失败（HTTP 404）」 | 私有仓库下公开资产 URL 用不了：**没填访问令牌**或令牌权限不足（需 Contents: read）。在「设置 → 更新 → 访问令牌」填/换一个 PAT 后重试。 |
 | 正式版报「该 Release 里没有 …zip」 | 认证成功但该 Release 里没有本平台/架构的包（CI 只出了 Windows 与 macOS）。 |
 | 测试版报「未安装 git」/「创建虚拟环境失败」 | 测试版要从源码构建：需要 git、Python 3.11+、Node.js 18+。缺哪样按提示补。 |
-| 测试版报「工作区有未提交改动」 | 程序目录是仓库且有本地改动。先 commit/stash，或加 `--force`（先 `git stash` 再合并）。 |
+| 测试版更新时本地改动被丢弃 | 更新**默认直接拉最新、丢弃工作区改动**（部署目录里的改动多半是构建/依赖留下的痕迹，典型是 `npm install` 改写的 `frontend/package-lock.json`）。想保留就先 commit，或用 `scripts/build_update.sh --kind test --force`（先 `git stash` 再合并）。**未跟踪 / 被忽略的文件（`data/`、`backups/`…）不受影响。** |
 | 应用内「立即更新」正准备时**失败/取消** | 这是**准备阶段**（应用进程内），**程序不会退出**，错误显示在卡片上，可重试；也可改用 `scripts/build_update.sh` 一次性补完。 |
 | 准备完成后**交棒失败**（更新进程没起来） | 应用不退出。正式版用 `scripts/build_update.sh --kind formal`、测试版用 `--kind test` 手动补完（回落流程会补做替换/构建/迁移）。 |
 | 更新进程在跑但看不到进度 | 交棒阶段应用已退出，进度看 **`data/logs/update-*.log`**（Windows 也一样，不再弹控制台窗口）；结论在重启后的「上次更新」报告里。 |

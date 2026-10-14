@@ -246,7 +246,14 @@ def build_frontend() -> None:
             f"    cd \"{FRONTEND}\" && npm install"
         )
     if not node_modules.exists():
-        _run([npm, "install"], cwd=FRONTEND)
+        # 用 `npm ci` 而不是 `npm install`：ci **严格按 lockfile 装、绝不改写它**。
+        # `npm install` 会在 lockfile 与 npm 版本/平台有漂移时顺手重写 `package-lock.json`，
+        # 把**部署目录的工作区弄脏**——而测试版更新要 `git fetch`，脏树会被拦下（或被迫丢弃改动）。
+        # 没有 lockfile 时才退回 `npm install`（此时没有可被改写的锁文件）。
+        if (FRONTEND / "package-lock.json").is_file():
+            _run([npm, "ci"], cwd=FRONTEND)
+        else:
+            _run([npm, "install"], cwd=FRONTEND)
     _run([npm, "run", "build"], cwd=FRONTEND)
 
 
