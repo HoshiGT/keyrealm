@@ -479,7 +479,7 @@ def import_backup(key: bytes, doc: dict, dedupe: bool = True, source: str = "",
         imported += 1
 
     # 3) 设置 / 定时计划 / MCP / 插件启停（仅整库范围）
-    restored = {"settings": 0, "schedules": 0, "mcp_permissions": 0, "mcp_tokens": 0,
+    restored = {"settings": 0, "schedules": 0, "mcp_permissions": 0,
                 "plugins_disabled": 0}
     if doc.get("scope") == "all":
         restored["settings"] = _import_settings(doc, src_key, key)

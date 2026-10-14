@@ -41,7 +41,7 @@ from backend.version import SCHEMA_VERSION  # noqa: E402
 # 建表脚本里应当出现的每一张表
 EXPECTED_TABLES = (
     "settings", "groups", "credentials", "plugins", "mcp_permissions",
-    "mcp_tokens", "schedules", "proxies", "preset_defaults",
+    "schedules", "proxies", "preset_defaults",
 )
 
 
