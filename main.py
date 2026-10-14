@@ -15,14 +15,15 @@ if str(BASE_DIR) not in sys.path:
 
 import webview  # pywebview
 
-from backend import api, autostart, database as db, idle_lock, logger, mcp_server, plugin_manager, proxy as proxy_config, scheduler, single_instance, tray, verify_options, version
-from backend import vault_proxy_ctx
+from backend import api, autostart, database as db, idle_lock, logger, mcp_server, plugin_manager, proxy as proxy_config, scheduler, single_instance, tls_store, tray, verify_options, version
+from backend import vault_proxy_ctx, vault_tls_ctx
 from backend.paths import app_dir, is_frozen, resource_dir
 
-# 把「按调用生效的代理上下文」以**固定别名**注册进 sys.modules：插件侧的 proxy() 靠这个名字
-# 懒查它（插件不直接 import backend 内部模块，只允许 import backend.plugin_sdk，见 PLUGIN_GUIDE §3）。
-# 必须在任何插件调用之前完成，所以放在模块级而不是 main() 里。
+# 把「按调用生效的代理 / TLS 版本上下文」以**固定别名**注册进 sys.modules：插件侧
+# proxy() / tls_version() 靠这两个名字懒查（插件不直接 import backend 内部模块，只允许
+# import backend.plugin_sdk，见 PLUGIN_GUIDE §3）。必须在任何插件调用之前完成，所以放模块级。
 sys.modules.setdefault("vault_proxy_ctx", vault_proxy_ctx)
+sys.modules.setdefault("vault_tls_ctx", vault_tls_ctx)
 
 
 class VaultApi:
@@ -253,6 +254,13 @@ class VaultApi:
 
     def test_proxy_id(self, proxy_id=None):
         return api.test_proxy_id(proxy_id)
+
+    # ── TLS 版本策略 ──────────────────────────────────────
+    def get_tls_options(self):
+        return api.get_tls_options()
+
+    def set_tls_version(self, value):
+        return api.set_tls_version(value)
 
     # ── 类别 / 插件默认设置 ────────────────────────────────
     def get_credential_defaults(self, credential_type: str):
@@ -557,6 +565,9 @@ def main():
 
     # 应用持久化的验证超时（写入 VAULT_TIMEOUT 供插件读取；外部同名变量优先）
     verify_options.apply_timeout()
+
+    # 应用持久化的 TLS 版本策略（写入 VAULT_TLS 供插件读取；外部同名变量优先）
+    tls_store.apply_global()
 
     log.info("应用启动（版本=%s，frozen=%s，日志级别=%s，数据目录=%s）",
              version.version_string(), is_frozen(), logger.get_level(), app_dir())

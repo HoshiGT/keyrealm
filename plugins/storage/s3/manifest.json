@@ -1,6 +1,6 @@
 {
   "name": "S3 兼容存储（MinIO 等）",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "credential_type": "storage_s3",
   "author": "Keyrealm",
   "description": "验证任意 S3 兼容对象存储的 Access Key（MinIO / 自建 / 兼容 S3 的服务）：签名 ListBuckets，只读；并提供桶列表、对象浏览、对象下载",

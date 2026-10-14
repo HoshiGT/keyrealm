@@ -668,6 +668,28 @@ const refreshing = ref(false)
  * 免得以后新增设置项时只改了其中一处。
  * @param {boolean} showSpinner 首屏不必转菊花 —— 页面本来就是空的
  */
+/* ── 全局 TLS 版本 ──────────────────────────────────── */
+const tlsVersion = ref('auto')
+const tlsVersions = ref(['auto', '1.0', '1.1', '1.2', '1.3'])
+
+const tlsLabel = (v) => (v === 'auto' ? 'auto（先 TLS 1.3，握手失败回退 1.2）' : `固定 TLS ${v}`)
+
+async function loadTls() {
+  const res = await api.getTlsOptions().catch(() => null)
+  if (!res || res.ok === false) return
+  tlsVersion.value = res.tls_version || 'auto'
+  if (Array.isArray(res.tls_versions) && res.tls_versions.length) tlsVersions.value = res.tls_versions
+}
+
+async function changeTlsVersion(value) {
+  const res = await api.setTlsVersion(value).catch(() => null)
+  if (!res || res.ok === false) {
+    ElMessage.error((res && res.message) || '设置失败')
+    return
+  }
+  ElMessage.success('全局 TLS 版本已更新')
+}
+
 async function refreshAll(showSpinner = true) {
   if (showSpinner) refreshing.value = true
   try {
@@ -676,6 +698,7 @@ async function refreshAll(showSpinner = true) {
       loadAutoLock(),
       loadLightMode(),
       loadAutostart(),
+      loadTls(),
       loadUpdateChannel(),
       loadUpdateProxy(),
       loadUpdateToken(),
@@ -1055,6 +1078,21 @@ onMounted(() => refreshAll(false))
             @click="runProxyTest(null)"
           >测试当前</el-button>
         </div>
+      </div>
+
+      <el-divider />
+
+      <!-- 全局默认 TLS 版本：凭据与各层预设都没指定时用它 -->
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">TLS 版本</div>
+          <div class="setting-desc">
+            凭据与各层预设都未指定时用它。auto 先按标准协商，握手失败自动回退 TLS 1.2 重试。
+          </div>
+        </div>
+        <el-select v-model="tlsVersion" class="proxy-input" @change="changeTlsVersion">
+          <el-option v-for="v in tlsVersions" :key="v" :value="v" :label="tlsLabel(v)" />
+        </el-select>
       </div>
 
       <el-divider />

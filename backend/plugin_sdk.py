@@ -8,6 +8,7 @@
 - 结果类型 `VerifyResult`
 - 日志 `log` / `log_debug`
 - 代理读取 `proxy`、HTTP 客户端 `make_client`
+- TLS 版本策略 `tls_version()`（`auto` / `1.0` / `1.1` / `1.2` / `1.3`，`make_client` 自动应用）
 - 响应解析 `safe_json` / `body_snippet`
 - 异常兜底 `guarded`
 - 超时 `TIMEOUT`（默认值）/ `timeout()`（实际生效值，读 `VAULT_TIMEOUT`）
@@ -50,6 +51,7 @@ from __future__ import annotations
 
 import logging
 import os
+import ssl
 import sys
 from dataclasses import dataclass
 from typing import Optional
@@ -162,17 +164,110 @@ def proxy() -> Optional[str]:
     return None
 
 
-def make_client(follow_redirects: bool = True,
-                request_timeout: Optional[float] = None) -> httpx.Client:
-    """建一个 httpx 客户端（自动带上代理与超时）。
+# ── TLS 版本策略（框架级） ────────────────────────────────
 
-    ``request_timeout`` 为空时用全局超时 ``timeout()``；显式传入则覆盖之——
-    供「一个验证里要连试多个候选、每个只给短超时」的场景使用。
+# 固定版本 → ssl.TLSVersion
+_PINNED_VERSIONS = {
+    "1.0": ssl.TLSVersion.TLSv1,
+    "1.1": ssl.TLSVersion.TLSv1_1,
+    "1.2": ssl.TLSVersion.TLSv1_2,
+    "1.3": ssl.TLSVersion.TLSv1_3,
+}
+_VALID_MODES = ("auto", *_PINNED_VERSIONS)
+
+
+def tls_version() -> str:
+    """本次请求的 TLS 版本策略：``auto``（默认）/ ``1.0`` / ``1.1`` / ``1.2`` / ``1.3``。
+
+    顺序：按调用注入（``vault_tls_ctx``）> 环境变量 ``VAULT_TLS`` > ``auto``。
+    ``auto`` = 先按标准协商，仅当连接阶段握手失败才回退 TLS 1.2 重试一次；固定版本 = 锁死范围。
     """
+    ctx = sys.modules.get("vault_tls_ctx")
+    if ctx is not None:
+        value = ctx.current()
+        if value is not ctx.UNSET:
+            return str(value)
+    raw = os.environ.get("VAULT_TLS")
+    if raw:
+        text = raw.strip().lower()
+        if text in _VALID_MODES:
+            return text
+    return "auto"
+
+
+def _ssl_context(pinned: Optional[str], verify) -> ssl.SSLContext:
+    """按策略建 SSL 上下文：``pinned`` 为空 = auto；``verify=False`` 关证书校验。"""
+    context = ssl.create_default_context()
+    if verify is False:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    if pinned in _PINNED_VERSIONS:
+        context.minimum_version = context.maximum_version = _PINNED_VERSIONS[pinned]
+    return context
+
+
+def _is_tls_failure(exc: BaseException) -> bool:
+    """异常链里是否为连接阶段的 TLS 失败（证书校验失败不算）。"""
+    seen: set[int] = set()
+    chain: list[BaseException] = []
+    node: Optional[BaseException] = exc
+    while node is not None and id(node) not in seen:
+        seen.add(id(node))
+        chain.append(node)
+        node = node.__cause__ or node.__context__
+    if any(isinstance(item, ssl.SSLCertVerificationError) for item in chain):
+        return False
+    return any(isinstance(item, (ssl.SSLError, ConnectionResetError)) for item in chain)
+
+
+class _TlsPolicyTransport(httpx.HTTPTransport):
+    """``auto`` 下握手在连接阶段失败时，用 TLS 1.2 重发一次（证书校验照旧）。
+
+    放 transport 层的原因：插件调用处看不到「握手失败」这个中间状态，没有重试机会。
+    ``handle_request`` 收到的是已缓冲的请求，重发不丢 body。
+    """
+
+    def __init__(self, *, tls_mode: str = "auto", verify=True, **kwargs):
+        self._mode = tls_mode
+        self._verify = verify
+        self._kwargs = kwargs
+        self._fallback: Optional[httpx.HTTPTransport] = None
+        pinned = tls_mode if tls_mode in _PINNED_VERSIONS else None
+        if pinned or verify is False:
+            super().__init__(verify=_ssl_context(pinned, verify), **kwargs)
+        else:
+            super().__init__(verify=True, **kwargs)
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        try:
+            return super().handle_request(request)
+        except httpx.ConnectError as exc:
+            if self._mode != "auto" or not _is_tls_failure(exc):
+                raise
+            if self._fallback is None:
+                log("TLS 握手在连接阶段失败（疑似目标只接受特定 TLS 版本）→ 回退 TLS 1.2 重试一次")
+                self._fallback = httpx.HTTPTransport(
+                    verify=_ssl_context("1.2", self._verify), **self._kwargs)
+            return self._fallback.handle_request(request)
+
+
+def make_client(follow_redirects: bool = True,
+                request_timeout: Optional[float] = None,
+                verify: Optional[bool] = None) -> httpx.Client:
+    """建一个 httpx 客户端（自动带上代理、超时与 TLS 版本策略）。
+
+    ``request_timeout`` 为空时用全局超时 ``timeout()``。
+    ``verify=False`` 关闭证书校验（自签内网自建用）；``None`` = 默认校验。
+    """
+    transport = _TlsPolicyTransport(
+        tls_mode=tls_version(),
+        verify=False if verify is False else True,
+        proxy=proxy(),
+    )
     return httpx.Client(
         timeout=timeout() if request_timeout is None else request_timeout,
         follow_redirects=follow_redirects,
-        proxy=proxy(),
+        transport=transport,
     )
 
 

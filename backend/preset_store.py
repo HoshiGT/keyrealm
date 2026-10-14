@@ -7,7 +7,8 @@
 - **敏感字段（api_key / token / 密码）永远不可预设**——``preset_defaults.values`` 是**明文列**，
   一旦密钥被写成默认值就是明文落库，比凭据数据泄露更糟。写入、读取、注入三处各剔一次。
 
-代理（``_proxy_mode`` / ``_proxy_id``）不是 manifest 字段，作为保留键单独放行，见 ``proxy_store``。
+代理（``_proxy_mode`` / ``_proxy_id``）与 TLS 版本（``_tls_version``）不是 manifest 字段，
+作为保留键单独放行，见 ``proxy_store`` / ``tls_store``。
 """
 from __future__ import annotations
 
@@ -15,12 +16,13 @@ from typing import Optional
 
 from . import database as db
 from .proxy_store import KEY_ID, KEY_MODE
+from .tls_store import KEY as KEY_TLS
 
 SCOPE_CATEGORY = "category"
 SCOPE_PLUGIN = "plugin"
 
 # 与 manifest 字段无关、但允许预设的保留键
-_RESERVED_KEYS = {KEY_MODE, KEY_ID}
+_RESERVED_KEYS = {KEY_MODE, KEY_ID, KEY_TLS}
 
 
 def _iter_fields(record: dict):

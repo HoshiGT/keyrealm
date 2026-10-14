@@ -277,6 +277,11 @@ export const api = {
   // 返回 { ok, proxy, proxy_source, direct, proxied, verdict }。
   testProxyId: (proxyId = null) => call('test_proxy_id', proxyId),
 
+  // ── TLS 版本策略（框架级） ──────────────────────────────
+  // 返回 { ok, tls_version, tls_versions }；值 ∈ auto / 1.0 / 1.1 / 1.2 / 1.3
+  getTlsOptions: () => call('get_tls_options'),
+  setTlsVersion: (value) => call('set_tls_version', value),
+
   // ── 类别 / 插件默认设置 ─────────────────────────────────
   getCredentialDefaults: (credentialType) => call('get_credential_defaults', credentialType),
   getScopeOptions: (scope, scopeKey, credentialType = '') =>

@@ -35,7 +35,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 from urllib.parse import urlsplit
 
-from backend.plugin_sdk import VerifyResult, log, make_client, mask_secret, proxy, timeout
+from backend.plugin_sdk import VerifyResult, log, make_client, mask_secret
 
 import storage_s3v4 as s3v4
 from storage_common import (
@@ -146,12 +146,12 @@ def _region(data: dict, params: dict | None = None) -> str:
 
 
 # ── HTTP 客户端（可选跳过 TLS 校验）────────────────────────
+# 代理 / 超时 / TLS 版本由框架的 make_client() 统一施加，这里只决定是否关证书校验。
 
 def _client(data: dict):
     if truthy(data.get("skip_tls_verify")):
-        import httpx  # noqa: PLC0415 - 仅此分支需要，惰性导入
         log("已对该凭据关闭 TLS 证书校验（skip_tls_verify=true）")
-        return httpx.Client(timeout=timeout(), follow_redirects=True, proxy=proxy(), verify=False)
+        return make_client(verify=False)
     return make_client()
 
 

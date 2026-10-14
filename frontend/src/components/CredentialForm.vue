@@ -6,6 +6,7 @@ import { useVaultStore } from '@/stores/vault'
 import { api } from '@/api'
 import { normalizeOptions, visibleFields } from '@/utils/format'
 import ProxySelect from '@/components/ProxySelect.vue'
+import TlsSelect from '@/components/TlsSelect.vue'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -113,6 +114,11 @@ const usesProxy = ref(true)
 // 后端按「子模块预设 > 上层模块预设 > 全局」算好的实际出口，用于下拉里那项的括注
 const inheritedProxy = ref('')
 
+// ── TLS 版本（空串 = 跟随上层设置） ──────────────────────
+const tlsVersion = ref('')
+const inheritedTls = ref('')
+const tlsVersions = ref(['auto', '1.0', '1.1', '1.2', '1.3'])
+
 /**
  * 拉取该插件的默认设置。
  * `apply=true`（新建）时才把默认值注入表单——编辑时套默认会把用户显式清空的字段复活。
@@ -123,6 +129,10 @@ async function loadDefaults(credentialType, { apply = false } = {}) {
     const res = await api.getCredentialDefaults(credentialType)
     usesProxy.value = !res || res.uses_proxy !== false
     inheritedProxy.value = (res && res.inherited_proxy) || ''
+    inheritedTls.value = (res && res.inherited_tls) || ''
+    if (res && Array.isArray(res.tls_versions) && res.tls_versions.length) {
+      tlsVersions.value = res.tls_versions
+    }
     const values = (res && res.values) || {}
     if (apply) {
       Object.entries(values).forEach(([key, value]) => {
@@ -155,6 +165,7 @@ async function resetForm() {
     const plain = existing.data_plain || {}
     proxyMode.value = plain._proxy_mode || 'global'
     proxyId.value = plain._proxy_id ?? null
+    tlsVersion.value = plain._tls_version || ''
     try {
       const full = await api.getCredential(targetId)
       // 防止快速切换时把旧结果写进新表单
@@ -162,6 +173,7 @@ async function resetForm() {
         form.data = schemaDefaults(schema, full.data)
         proxyMode.value = full.data._proxy_mode || 'global'
         proxyId.value = full.data._proxy_id ?? null
+        tlsVersion.value = full.data._tls_version || ''
       }
     } catch {
       // 拉取失败则回退到 data_plain（非敏感字段）
@@ -178,6 +190,7 @@ async function resetForm() {
     form.data = schemaDefaults((plugin && plugin.fields_schema) || [])
     proxyMode.value = 'global'
     proxyId.value = null
+    tlsVersion.value = ''
     await loadDefaults(initialType, { apply: true })
   }
   if (formRef.value) formRef.value.clearValidate()
@@ -254,6 +267,8 @@ function buildData() {
   // 保留键不在 manifest 字段里，得单独带上：后端按这两个键决定该凭据走哪个代理
   data._proxy_mode = proxyMode.value || 'global'
   if (proxyMode.value === 'proxy' && proxyId.value) data._proxy_id = proxyId.value
+  // TLS 版本：空 = 跟随上层，不写键
+  if (tlsVersion.value) data._tls_version = tlsVersion.value
   return data
 }
 
@@ -456,6 +471,14 @@ async function submit() {
         <div class="field-hint">
           该凭据验证时走哪个出口。优先级：<strong>本条凭据 &gt; 该插件预设 &gt; 所属类别预设 &gt; 全局默认</strong>
           ——「跟随上层设置」就是按这个顺序往上找
+        </div>
+      </el-form-item>
+
+      <el-form-item v-if="usesProxy" label="TLS 版本">
+        <TlsSelect v-model="tlsVersion" :inherit-hint="inheritedTls" :versions="tlsVersions" />
+        <div class="field-hint">
+          该凭据验证时用哪个 TLS 版本，优先级同上。<strong>auto</strong> 先按标准协商，
+          仅当握手失败才回退 TLS 1.2 重试；只认 TLS 1.2 的老网关可直接选固定版本。
         </div>
       </el-form-item>
 

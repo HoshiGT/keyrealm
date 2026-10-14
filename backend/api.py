@@ -29,6 +29,7 @@ from . import proxy_store
 from . import redact
 from . import scheduler
 from . import tasks
+from . import tls_store
 from . import version
 from . import tray
 from . import updater
@@ -1393,6 +1394,21 @@ def test_proxy_id(proxy_id=None) -> dict:
     return result
 
 
+# ── TLS 版本策略（框架级） ───────────────────────────────────
+# 与代理同一套逐级继承：凭据 > 插件预设 > 类别预设 > 全局默认（auto）。
+
+def get_tls_options() -> dict:
+    """全局默认 TLS 版本 + 可选值，供「系统设置」渲染。"""
+    return {"ok": True, **tls_store.options()}
+
+
+def set_tls_version(value="") -> dict:
+    """设置全局默认 TLS 版本（``auto`` / ``1.0`` / ``1.1`` / ``1.2`` / ``1.3``）。"""
+    result = tls_store.set_global(value)
+    _log.info("全局 TLS 版本已设为 %s", result.get("tls_version"))
+    return {"ok": True, **tls_store.options()}
+
+
 # ── 类别级 / 插件级默认设置 ─────────────────────────────────
 # 框架只提供「存储 + 继承 + 注入」；哪些字段可预设由插件在 manifest 里自行声明
 # （默认全部非敏感字段可预设，加 "preset": false 可排除）。敏感字段永远不可预设。
@@ -1405,6 +1421,9 @@ def get_credential_defaults(credential_type: str) -> dict:
         "uses_proxy": plugin_manager.plugin_uses_proxy(credential_type),
         # 给「使用代理」下拉里那项做括注：该插件选「跟随上层设置」时实际会走哪个出口
         "inherited_proxy": proxy_store.describe_inherited(credential_type),
+        # 同上，给「TLS 版本」下拉里「跟随上层」那项做括注
+        "inherited_tls": tls_store.describe_inherited(credential_type),
+        "tls_versions": list(tls_store.VERSIONS),
     }
 
 
@@ -1420,6 +1439,7 @@ def get_scope_options(scope: str, scope_key: str, credential_type: str = "") -> 
             for p in db.list_plugins()
             if (p.get("category") or "") == scope_key
         )
+    data["tls_versions"] = list(tls_store.VERSIONS)
     return {"ok": True, **data}
 
 

@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
 import { normalizeOptions, visibleFields } from '@/utils/format'
 import ProxySelect from '@/components/ProxySelect.vue'
+import TlsSelect from '@/components/TlsSelect.vue'
 
 /**
  * 类别 / 插件的「默认设置」对话框（两处入口共用：凭据目录右键、插件管理页）。
@@ -30,6 +31,9 @@ const proxyMode = ref('global')
 const proxyId = ref(null)
 // 该作用域下有没有走代理的插件（没有就不显示代理项——SMTP 这类插件本就不走 HTTP 代理）
 const usesProxy = ref(true)
+// TLS 版本（空 = 不在此层指定）
+const tlsVersion = ref('')
+const tlsVersions = ref(['auto', '1.0', '1.1', '1.2', '1.3'])
 
 // 条件显隐：预设表单里也按 show_if 只显示当前模式需要的字段
 const visibleFieldList = computed(() => visibleFields(fields.value, values.value))
@@ -49,10 +53,15 @@ async function load() {
     fields.value = (res && res.fields) || []
     const raw = { ...((res && res.values) || {}) }
     usesProxy.value = !res || res.uses_proxy !== false
+    if (res && Array.isArray(res.tls_versions) && res.tls_versions.length) {
+      tlsVersions.value = res.tls_versions
+    }
     proxyMode.value = raw._proxy_mode || 'global'
     proxyId.value = raw._proxy_id ?? null
+    tlsVersion.value = raw._tls_version || ''
     delete raw._proxy_mode
     delete raw._proxy_id
+    delete raw._tls_version
     values.value = raw
   } catch (err) {
     ElMessage.error(err.message || '加载默认设置失败')
@@ -81,6 +90,8 @@ async function save() {
     const payload = { ...values.value }
     payload._proxy_mode = proxyMode.value || 'global'
     if (proxyMode.value === 'proxy' && proxyId.value) payload._proxy_id = proxyId.value
+    // TLS 版本：空 = 不在此层指定，不带该键
+    if (tlsVersion.value) payload._tls_version = tlsVersion.value
     const res = await api.setScopeOptions(props.scope, props.scopeKey, payload, props.credentialType)
     if (res && res.ok === false) {
       ElMessage.error(res.message || '保存失败')
@@ -111,6 +122,7 @@ async function clearAll() {
     values.value = {}
     proxyMode.value = 'global'
     proxyId.value = null
+    tlsVersion.value = ''
     ElMessage.success('已清空')
     emit('saved')
   } catch (err) {
@@ -139,6 +151,17 @@ async function clearAll() {
           <div class="field-hint">
             在这层指定出口，或「不在此层指定」让其继续往上找（插件 → 类别 → 全局）。
             新建凭据时按 凭据 &gt; 插件 &gt; 类别 &gt; 全局 的优先级解析
+          </div>
+        </el-form-item>
+
+        <el-form-item v-if="usesProxy" label="TLS 版本">
+          <TlsSelect
+            v-model="tlsVersion"
+            :versions="tlsVersions"
+            follow-label="不在此层指定"
+          />
+          <div class="field-hint">
+            在这层固定 TLS 版本，或「不在此层指定」让其继续往上找（插件 → 类别 → 全局）。
           </div>
         </el-form-item>
 

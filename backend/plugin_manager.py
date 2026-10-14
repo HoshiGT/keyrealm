@@ -22,6 +22,7 @@ plugins/.state.json 里（禁用即卸载模块，凭据与插件目录原样保
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -32,6 +33,7 @@ from . import icon_ink
 from . import logger
 from . import proxy_store
 from . import redact
+from . import tls_store
 from .paths import app_dir
 from .plugin_base import (
     VerifyResult,
@@ -552,15 +554,33 @@ def _redact_result(credential_type: str, data: dict, result: VerifyResult) -> Ve
     return result
 
 
+def _log_tls_policy(what: str, credential_type: str, resolved) -> None:
+    """记下本次调用显式指定的 TLS 版本（跟随全局默认时不记）。"""
+    try:
+        if resolved is tls_store.UNSET:
+            return
+        _log.info("%s %s：TLS 版本 = %s", what, credential_type, resolved)
+    except Exception:  # noqa: BLE001 - 记日志绝不能影响调用本身
+        pass
+
+
+@contextlib.contextmanager
+def _credential_scopes(credential_type: str, data: dict, what: str):
+    """代理 + TLS 版本两个作用域收在一处并统一记日志。会联网的插件调用都应包在这里。"""
+    with proxy_store.credential_proxy_scope(data, credential_type) as outlet:
+        with tls_store.credential_tls_scope(data, credential_type) as tls_ver:
+            _log_proxy_outlet(what, credential_type, outlet, data)
+            _log_tls_policy(what, credential_type, tls_ver)
+            yield
+
+
 def verify_credential(credential_type: str, data: dict) -> VerifyResult:
-    """调用插件验证凭据（含「按凭据解析代理」与「欠费探测」）"""
+    """调用插件验证凭据（含「按凭据解析代理 / TLS 版本」与「欠费探测」）"""
     module = get_module(credential_type)
     if module is None:
         return VerifyResult(status="error", message=_module_missing_error(credential_type))
-    # 代理作用域收口在这里：单条 / 批量 / MCP / 定时 四条路径都经此函数，
-    # 因此各条凭据的「用哪个代理」自动生效且线程隔离（见 proxy_store）。
-    with proxy_store.credential_proxy_scope(data, credential_type) as outlet:
-        _log_proxy_outlet("验证", credential_type, outlet, data)
+    # 作用域收口：单条 / 批量 / MCP / 定时 四条路径都经此函数
+    with _credential_scopes(credential_type, data, "验证"):
         result = call_verify(module, data)
         _apply_quota_probe(credential_type, module, data, result)
     return _redact_result(credential_type, data, result)
@@ -656,8 +676,7 @@ def plugin_capabilities(credential_type: str, data: dict) -> dict:
     module = get_module(credential_type)
     if module is None:
         return {"available": None, "note": "", "error": True}
-    with proxy_store.credential_proxy_scope(data, credential_type) as outlet:
-        _log_proxy_outlet("权限探测", credential_type, outlet, data)
+    with _credential_scopes(credential_type, data, "权限探测"):
         return call_capabilities(module, data)
 
 
@@ -666,8 +685,7 @@ def run_plugin_action(credential_type: str, action_id: str, params: dict, data: 
     module = get_module(credential_type)
     if module is None:
         return {"ok": False, "error": _module_missing_error(credential_type)}
-    with proxy_store.credential_proxy_scope(data, credential_type) as outlet:
-        _log_proxy_outlet("操作", credential_type, outlet, data)
+    with _credential_scopes(credential_type, data, "操作"):
         return call_run_action(module, action_id, params, data)
 
 
@@ -679,8 +697,7 @@ def plugin_models(credential_type: str, data: dict, force: bool = False) -> list
     module = get_module(credential_type)
     if module is None:
         return []
-    with proxy_store.credential_proxy_scope(data, credential_type) as outlet:
-        _log_proxy_outlet("模型列表", credential_type, outlet, data)
+    with _credential_scopes(credential_type, data, "模型列表"):
         return call_list_models(module, data, force)
 
 
@@ -697,8 +714,7 @@ def stream_plugin_action(credential_type: str, action_id: str, params: dict, dat
     module = get_module(credential_type)
     if module is None:
         return {"ok": False, "error": _module_missing_error(credential_type)}
-    with proxy_store.credential_proxy_scope(data, credential_type) as outlet:
-        _log_proxy_outlet("流式操作", credential_type, outlet, data)
+    with _credential_scopes(credential_type, data, "流式操作"):
         return call_stream_action(module, action_id, params, data, on_delta,
                                   on_progress, should_cancel)
 
