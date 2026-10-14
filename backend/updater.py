@@ -71,8 +71,13 @@ SETTING_CHANNEL = "update_channel"
 # 启动时是否自动检查更新（缺省 = 开启，见 get_auto_check）
 SETTING_AUTO_CHECK = "update_auto_check"
 
-# 备份里默认跳过的 data/ 子目录（logs 可能很大；installed_plugins 是旧缓存）
-_BACKUP_SKIP_DIRS = {"logs", "installed_plugins"}
+# 备份里默认跳过的 data/ 子目录：
+# - ``logs``：可能很大，且运行中一直被写入；
+# - ``installed_plugins``：旧缓存；
+# - ``webview``：**WebView2 的用户数据目录**（Cache / Local Storage …）。它由**正在运行的**
+#   WebView 独占，备份时一读就 `Permission denied`——而它只是可再生的缓存（localStorage 里的
+#   偏好丢了也不影响凭据）。**应用内「准备阶段」做备份时它必然被锁**，故必须跳过。
+_BACKUP_SKIP_DIRS = {"logs", "installed_plugins", "webview"}
 
 
 def _now() -> str:
@@ -854,10 +859,17 @@ def run_migrations(*, root: Optional[Any] = None, apply: bool = False,
 # ── 备份 / 恢复 ───────────────────────────────────────────
 
 def _zip_add_tree(zf: zipfile.ZipFile, src: Path, arc_prefix: str,
-                  skip_names: Optional[set] = None) -> None:
+                  skip_names: Optional[set] = None) -> list:
+    """把 ``src`` 整棵目录塞进 zip；**读不了的文件跳过并返回说明**。
+
+    「跳过而不是整包失败」是有意的：更新前的备份失败会**直接挡住更新**，而读取失败多半只是
+    某个文件被运行中的程序占用（WebView 缓存、日志……），不该因此让用户更新不了。被跳过的
+    条目会汇总到 ``make_backup`` 的返回里，如实告诉用户。
+    """
     if not src.is_dir():
-        return
+        return []
     skip = skip_names or set()
+    skipped: list[str] = []
     for path in sorted(src.rglob("*")):
         rel = path.relative_to(src)
         if any(part in skip for part in rel.parts):
@@ -865,7 +877,11 @@ def _zip_add_tree(zf: zipfile.ZipFile, src: Path, arc_prefix: str,
         if "__pycache__" in rel.parts or path.suffix == ".pyc":
             continue
         if path.is_file():
-            zf.write(path, f"{arc_prefix}/{rel.as_posix()}")
+            try:
+                zf.write(path, f"{arc_prefix}/{rel.as_posix()}")
+            except OSError as exc:      # PermissionError / 文件被占用 / 中途消失
+                skipped.append(f"{rel.as_posix()}（{type(exc).__name__}）")
+    return skipped
 
 
 def make_backup(*, root: Optional[Any] = None, kind: str = "formal", keep: int = 1) -> dict:
@@ -882,18 +898,22 @@ def make_backup(*, root: Optional[Any] = None, kind: str = "formal", keep: int =
     stamp = time.strftime("%Y%m%d-%H%M%S")
     dest = bdir / f"keyrealm-backup-{kind}-{version.APP_VERSION}-{stamp}.zip"
     members: list[str] = []
+    skipped: list[str] = []
     try:
         with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
             exe = root / _exe_name()
             if exe.is_file():
-                zf.write(exe, exe.name)
-                members.append(exe.name)
-            _zip_add_tree(zf, root / "plugins", "plugins")
-            # data/：DB 单独做一致性快照，其余直接收（跳过 logs / 旧缓存）
-            _zip_add_tree(zf, root / "data", "data",
-                          skip_names=set(_BACKUP_SKIP_DIRS) | {"credentials.db",
-                                                               "credentials.db-wal",
-                                                               "credentials.db-shm"})
+                try:
+                    zf.write(exe, exe.name)
+                    members.append(exe.name)
+                except OSError as exc:      # 可执行文件被占用（运行中）时同样只跳过
+                    skipped.append(f"{exe.name}（{type(exc).__name__}）")
+            skipped += _zip_add_tree(zf, root / "plugins", "plugins")
+            # data/：DB 单独做一致性快照，其余直接收（跳过 logs / webview 等运行中会被锁的目录）
+            skipped += _zip_add_tree(zf, root / "data", "data",
+                                     skip_names=set(_BACKUP_SKIP_DIRS) | {"credentials.db",
+                                                                          "credentials.db-wal",
+                                                                          "credentials.db-shm"})
             db_path = root / "data" / "credentials.db"
             if db_path.is_file():
                 snap = db_path.with_name("credentials.db.snapshot")
@@ -910,9 +930,12 @@ def make_backup(*, root: Optional[Any] = None, kind: str = "formal", keep: int =
         os.chmod(dest, 0o600)  # 含真实密钥，限权（Windows 上基本无效，忽略）
     except OSError:
         pass
+    message = "备份含真实密钥（凭据库 / 密钥文件），请妥善保管"
+    if skipped:
+        shown = "、".join(skipped[:3]) + ("…" if len(skipped) > 3 else "")
+        message += f"；{len(skipped)} 个文件被占用已跳过（不影响更新）：{shown}"
     return {"ok": True, "path": str(dest), "bytes": dest.stat().st_size,
-            "members": members,
-            "message": "备份含真实密钥（凭据库 / 密钥文件），请妥善保管"}
+            "members": members, "skipped": skipped, "message": message}
 
 
 def restore_backup(zip_path: Path, *, root: Optional[Any] = None) -> dict:
