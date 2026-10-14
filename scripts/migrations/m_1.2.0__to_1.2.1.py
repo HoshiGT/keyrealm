@@ -1,4 +1,4 @@
-"""1.2.0 → 1.3.0：清掉两条**再也没人读**的 settings 死键。
+"""1.2.0 → 1.2.1：清掉两条**再也没人读**的 settings 死键。
 
 - ``data_version``：早期「数据版本号」（`version.DATA_VERSION`）方案的残留——后来改用
   `SCHEMA_VERSION`、又改成幂等，这个键再没人读写。
@@ -8,7 +8,7 @@
 """
 
 FROM_VERSION = "1.2.0"
-TO_VERSION = "1.3.0"
+TO_VERSION = "1.2.1"
 
 _DEAD_KEYS = ("data_version", "data_schema_version")
 
