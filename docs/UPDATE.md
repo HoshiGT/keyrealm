@@ -50,7 +50,8 @@ Keyrealm 可以在程序内检查并一键更新。**两种渠道的更新方式
    - 测试版：备份 + 拉取源码 + 装依赖 + 构建（不确定时长，进度条走不定态）。
 6. 准备成功 → **程序自动关闭**，交棒给脱离进程完成**解压替换 / 安装 / 数据库迁移 / 重启**。
    这几步的输出落 **`data/logs/update-*.log`**（**两平台都不弹控制台窗口**）。
-7. 重启后，设置页「上次更新」显示**逐阶段报告**（✓/✗ + 日志路径）。
+7. 重启后，设置页「上次更新」显示**版本更迭**（`旧 (commit) → 新 (commit)`——测试版两版的版本号
+   常常相同，靠 commit 哈希才看得出换了版本）与**逐阶段报告**（✓/✗ + 日志路径）。
 
 > **准备失败或取消 → 程序不退出**：错误直接显示在卡片上，可重试。
 > 交棒一步走的是**脱离进程**：先把它起起来、确认起来了，才关闭本程序；顺序不可颠倒。
@@ -183,7 +184,7 @@ scripts/restart.sh --wait
 | `.update-meta/` | 从预编译包解出的 `version.json` + `migrations/`（正式版更新后才有） | 忽略 |
 | `data/.update-request.json` | 应用交给交棒进程的请求（含 `prepared` 指针） | 忽略（`data/`） |
 | `data/.update-prepared.json` | **准备产物清单**（版本 / 包路径 / sha256 / staging / 目标 schema） | 忽略（`data/`） |
-| `data/.update-status.json` | 更新进度与结果（含逐阶段 `report`），重启后由新应用读取展示 | 忽略（`data/`） |
+| `data/.update-status.json` | 更新进度与结果（含 `from`/`to` 版本与 `from_commit`/`to_commit`、逐阶段 `report`），重启后由新应用读取展示 | 忽略（`data/`） |
 | `data/.update-check.json` | **最近一次「检查更新」的结果**（持久化：换页 / 重启后界面仍显示，直到被新结果替换） | 忽略（`data/`） |
 | `data/logs/update-*.log` | 交棒进程（POSIX）无终端时的输出 | 忽略 |
 | `data/logs/build-*.log` | 构建输出（排障用） | 忽略 |

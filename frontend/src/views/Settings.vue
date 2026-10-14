@@ -356,6 +356,14 @@ function stageLabel(name) {
   return STAGE_LABELS[name] || name
 }
 
+// 「上次更新」的版本更迭文案：`（1.3.0 (0c1c3ff) → 1.3.0 (68f89e1)）`。
+// 测试版两版的版本号常常相同，只有 commit 哈希才看得出确实换了版本。
+function updateTransition(status) {
+  if (!status || !status.from) return ''
+  const one = (v, c) => `${v || '?'}${c ? ` (${c})` : ''}`
+  return `（${one(status.from, status.from_commit)} → ${one(status.to, status.to_commit)}）`
+}
+
 // 准备进度：total<=0（总量未知，如构建）走不定态
 const preparePercent = computed(() => {
   const t = updatePrepareTask.value
@@ -984,8 +992,7 @@ onMounted(() => refreshAll(false))
         v-if="updateLastStatus && updateLastStatus.finished_at"
         class="update-alert"
         :type="updateLastStatus.ok ? 'success' : 'warning'"
-        :title="`上次更新：${updateLastStatus.message || ''}`
-          + (updateLastStatus.from ? `（${updateLastStatus.from} → ${updateLastStatus.to || '?'}）` : '')"
+        :title="`上次更新：${updateLastStatus.message || ''}${updateTransition(updateLastStatus)}`"
         :closable="false"
         show-icon
       >

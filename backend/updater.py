@@ -1584,7 +1584,10 @@ def prepare_update(kind: str = "formal", *, root: Optional[Any] = None, frontend
             return {"ok": False, "canceled": True, "kind": kind, "message": "已取消"}
     done.append("backup")
 
-    prepared = {"kind": kind, "version": to_ver, "commit": commit}
+    # 「更新前的版本 / 提交」必须**在拉源码之前**定下来并写进清单：test 渠道一旦对齐到新源码，
+    # 现查 git（version.build_id 源码运行时是实时 git）拿到的就是**新** commit 了，事后无法还原。
+    prepared = {"kind": kind, "version": to_ver, "commit": commit,
+                "from_version": local["version"], "from_commit": local["commit"]}
 
     if kind == "formal":
         name = release_asset_name(to_ver)
@@ -1696,7 +1699,14 @@ def apply_update(kind: str = "formal", *, root: Optional[Any] = None, frontend: 
         return {"ok": False, "message": "等待应用退出超时"}
     log("应用已退出，开始执行更新。")
 
-    frm = version.APP_VERSION
+    # 「更新前」的版本与提交：交棒进程里现查 git 已是**新** commit（test 渠道源码在准备阶段就
+    # 前进了），所以优先用准备清单里固定下来的值；无清单（CLI 完整流程）时在此刻读——此刻还没拉源码。
+    if prepared:
+        frm = prepared.get("from_version") or version.APP_VERSION
+        frm_commit = prepared.get("from_commit") or ""
+    else:
+        _l0 = local_info(root)
+        frm, frm_commit = _l0["version"], _l0["commit"]
     report: list = []
     try:
         if kind == "formal":
@@ -1724,7 +1734,13 @@ def apply_update(kind: str = "formal", *, root: Optional[Any] = None, frontend: 
     else:
         single_instance.release()
     _clear_prepared(root)
-    final = _finish(root, kind, frm, result, stages, report=report)
+    # 「更新后」的提交：准备清单里记着远端 commit；CLI 流程回落现查（此时源码已更新到新提交）。
+    to_commit = prepared.get("commit") or ""
+    if not to_commit and kind == "test":
+        _p = _git(["rev-parse", "HEAD"], cwd=root)
+        to_commit = (_p.stdout or "").strip() if _p.returncode == 0 else ""
+    final = _finish(root, kind, frm, result, stages, report=report,
+                    frm_commit=frm_commit, to_commit=to_commit)
     log(("✓ " if final.get("ok") else "✗ ") + str(final.get("message", "")))
     if not final.get("ok"):
         log("（更新失败：本次未替换程序文件，原程序仍可用。"
@@ -1872,7 +1888,8 @@ def _apply_test(root: Path, *, frontend: bool, do_backup: bool, do_migrate: bool
 
 
 def _finish(root: Path, kind: str, frm: str, result: dict, stages: list,
-            *, report: Optional[list] = None) -> dict:
+            *, report: Optional[list] = None,
+            frm_commit: str = "", to_commit: str = "") -> dict:
     ok = bool(result.get("ok"))
     to = result.get("to") or version.APP_VERSION
     msg = "更新完成" if ok else result.get("message", "更新失败")
@@ -1880,7 +1897,10 @@ def _finish(root: Path, kind: str, frm: str, result: dict, stages: list,
         msg = f"已更新到 {to}"
     _write_status(root, {
         "phase": "done" if ok else "failed", "ok": ok, "kind": kind,
-        "from": frm, "to": to, "message": msg, "stages": stages,
+        "from": frm, "to": to,
+        # 版本号（测试版两版常相同）之外再记提交哈希——界面上「上次更新」靠它区分测试版的变更。
+        "from_commit": frm_commit, "to_commit": to_commit,
+        "message": msg, "stages": stages,
         "report": report or [], "log": _latest_update_log(root),
         "finished_at": _now(),
     })
