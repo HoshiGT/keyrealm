@@ -1,6 +1,6 @@
 {
   "name": "Cloudflare",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "credential_type": "cloud_cloudflare",
   "author": "Keyrealm",
   "description": "验证 Cloudflare API Token 或 Global API Key 有效性",

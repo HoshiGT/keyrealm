@@ -89,9 +89,9 @@
 | LLM 模型 | 18 | OpenAI（含 Codex / ChatGPT 登录态）、Anthropic、Gemini、DeepSeek、Moonshot、智谱 GLM、阿里百炼、火山方舟、文心、MiniMax、NVIDIA、OpenRouter、硅基流动、华为云 MaaS、商汤日日新、CodeBuddy、OpenAI 兼容、New API |
 | API 服务 | 8 | Firecrawl、Tavily、秘塔 AI 搜索、Coze（扣子）、Dify、FOFA、Google API、百度人脸 |
 | 即时通讯 | 10 | 飞书、钉钉、企业微信、Telegram（Bot / api_id+hash）、Discord、QQ 频道机器人、微信 iLink Bot、微信公众号、微信小程序 |
-| 云服务商 | 11 | 阿里云、腾讯云、AWS、GCP、华为云、Firebase、京东云、UCloud、百度智能云、火山引擎、天翼云 |
+| 云服务商 | 12 | 阿里云、腾讯云、AWS、GCP、华为云、Firebase、京东云、UCloud、百度智能云、火山引擎、天翼云、Cloudflare |
 | 对象存储 | 2 | S3 兼容对象存储（MinIO / Ceph 等自建）、匿名对象存储（公开桶检测：匿名列举/读取/写探测） |
-| 域名解析 | 4 | DNSPod、DuckDNS、GoDaddy、Cloudflare |
+| 域名解析 | 3 | DNSPod、DuckDNS、GoDaddy |
 | 开发者平台 | 4 | GitHub、Hugging Face、Weights & Biases、npm |
 | 地图 | 3 | 高德地图、百度地图、腾讯地图（腾讯位置服务） |
 | 交易所 | 2 | OKX、Binance |

@@ -37,8 +37,7 @@ plugins/
 │   ├── category.json
 │   ├── dnspod/
 │   ├── duckdns/
-│   ├── godaddy/
-│   └── cloudflare/
+│   └── godaddy/
 ├── dev/                        # 类别目录（开发者平台）
 │   ├── category.json
 │   ├── github/
@@ -70,7 +69,8 @@ plugins/
 │   ├── ucloud/                 # UCloud（签名器 ucloud_signer.py）
 │   ├── baiducloud/             # 百度智能云 BCE（签名器 bce_signer.py）
 │   ├── volcengine/             # 火山引擎（签名器 volc_signer.py）
-│   └── ctyun/                  # 天翼云 EOP（签名器 eop_signer.py）
+│   ├── ctyun/                  # 天翼云 EOP（签名器 eop_signer.py）
+│   └── cloudflare/             # Cloudflare（API Token / Email + Global API Key）
 ├── map/                        # 类别目录（地图）
 │   ├── category.json
 │   ├── amap/                   # 高德地图 Key（Web 服务 / JS API / iOS / Android / 小程序）
@@ -1025,7 +1025,7 @@ sensenova（商汤日日新，OpenAI 兼容）、codebuddy（腾讯 CodeBuddy �
 **api/ 类别（8 个）**：firecrawl（网页抓取）、tavily（搜索）、metaso（秘塔 AI 搜索）、fofa（FOFA 网络空间测绘）、
 coze（字节扣子）、dify（Dify 应用 / 工作流）、google_api_credentials（Google API，一对 key/secret）、baidu_face（百度人脸，人脸识别）。
 
-**dns/ 类别（4 个）**：dnspod、duckdns、godaddy、cloudflare（从 cloud/ 移入：它就是域名解析类）。
+**dns/ 类别（3 个）**：dnspod、duckdns、godaddy。
 
 **dev/ 类别（4 个）**：github（令牌）、huggingface、wandb（Weights & Biases）、npm（npm 访问令牌）。
 
@@ -1039,10 +1039,11 @@ wechat_mp（微信公众号）、wechat_miniprogram（微信小程序）。
 `cgi-bin/token` 换 access_token（只读；顺带取关注者列表 / 小程序基础信息与接口配额），二者据
 拿到的是公众号还是小程序的凭据分别独立成插件——同 AppID 在两种主体下不通用。
 
-**cloud/ 类别（11 个）**：aliyun（阿里云 AK/SK）、tencentcloud（腾讯云 SecretId/Key）、aws（AWS Access Key）、
+**cloud/ 类别（12 个）**：aliyun（阿里云 AK/SK）、tencentcloud（腾讯云 SecretId/Key）、aws（AWS Access Key）、
 gcp（GCP 服务账号）、huaweicloud（华为云 AK/SK）、firebase（Firebase 管理密钥）、
 jdcloud（京东云 AK/SK）、ucloud（UCloud PublicKey/PrivateKey）、baiducloud（百度智能云 BCE AK/SK）、
-volcengine（火山引擎 AK/SK）、ctyun（天翼云 AK/SK）。
+volcengine（火山引擎 AK/SK）、ctyun（天翼云 AK/SK）、
+cloudflare（Cloudflare API Token，或 Email + Global API Key）。
 国内五家（京东云 / UCloud / 百度智能云 / 火山引擎 / 天翼云）**一律只用只读接口做校验**
 （IAM 列举 / GetRegion / DescribeRegions / 资源池列表），且各自提供一组只读查询操作
 （身份、地域、可用区、云主机等）；`region` / `region_id` 为选填默认地域，只影响查询与部分端点选择，
@@ -1154,8 +1155,8 @@ smtp 的 TLS **默认最低 1.2**——
   > 老库里 `llm_doubao` 类型的凭据用 `python scripts/migrate_doubao_to_ark.py` 一次性迁移
   > （默认只演练，`--apply` 才写库）。
 - **dns**：
-  - dnspod / godaddy / cloudflare —— **域名（站点）列表 → 行内「解析」下钻到解析记录 → 行内「修改」**，
-    以及行内「新增」；前两者是 `write`，Cloudflare 用同一个表单（留空 `record_id` 即新增）
+  - dnspod / godaddy —— **域名（站点）列表 → 行内「解析」下钻到解析记录 → 行内「修改」**，
+    以及行内「新增」；两者都是 `write`
   - duckdns —— 当前解析（`list`：A / TXT 两行）→ 行内「修改」下钻到「更新解析」（`write`），
     另有「清除 TXT」（`write`）。DuckDNS 没有域名列表接口（一个 token 对应自有子域名），
     查询经 Cloudflare DoH；更新/清除走其 `update` 接口
@@ -1193,6 +1194,8 @@ smtp 的 TLS **默认最低 1.2**——
   > 五家都用**只读**接口做校验（IAM 列举 / GetRegion / DescribeRegions / 资源池列表），
   > `region` / `region_id` 为选填默认地域、只影响查询与部分端点选择，**校验本身不依赖它**。
   > 写新云插件时**不要**凭印象重写签名——各家的签名器自成一份模块，细节见本节末尾附录。
+  - cloudflare —— **域名（站点）列表 → 行内「解析」下钻到解析记录 → 行内「修改」**，以及行内「新增」
+    （同一个表单，留空 `record_id` 即新增）
 - **storage**：s3（**任意 S3 兼容对象存储**）—— `list_buckets`（桶列表）→ 行内「预览」下钻 `list_objects`
   （文件夹 / 文件分行，可继续进入前缀）；文件行「下载」（`save_to` 单对象）、文件夹行「打包下载」
   （zip，上限 1000 个 / 512 MiB，超出如实报错而非静默截断）。端点自填（支持 `host:port`），

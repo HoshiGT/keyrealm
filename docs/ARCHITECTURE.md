@@ -155,10 +155,10 @@ plugins/
 │   ├── deepseek/
 │   └── …                     # 共 18 个 LLM 子插件
 ├── api/                      # API 服务类别：firecrawl / tavily / metaso / fofa / coze / dify / google_api_credentials / baidu_face（共 8 个）
-├── dns/                      # 域名解析：dnspod / duckdns / godaddy / cloudflare
+├── dns/                      # 域名解析：dnspod / duckdns / godaddy
 ├── dev/                      # 开发者平台：github / huggingface / wandb / npm
 ├── im/                       # 即时通讯：feishu / dingtalk / wecom / telegram / telegram_apihash / discord / qq_bot / wechat_ilink / wechat_mp / wechat_miniprogram（dingtalk、wecom 为「应用 / Webhook 双形态」）
-├── cloud/                    # 云服务商：aliyun / tencentcloud / aws / gcp / huaweicloud / firebase / jdcloud / ucloud / baiducloud / volcengine / ctyun（另含 google_sa.py 协议级共享模块）
+├── cloud/                    # 云服务商：aliyun / tencentcloud / aws / gcp / huaweicloud / firebase / jdcloud / ucloud / baiducloud / volcengine / ctyun / cloudflare（另含 google_sa.py 协议级共享模块）
 ├── map/                      # 地图：amap（高德）/ baidu（百度）/ tencent（腾讯位置服务）
 ├── exchange/                 # 交易所：okx / binance
 ├── storage/                  # 对象存储：s3（任意 S3 兼容 / MinIO）/ anon（匿名桶探测）（另含 storage_s3v4.py、storage_common.py 类别共享模块）
