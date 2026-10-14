@@ -765,9 +765,7 @@ onMounted(() => refreshAll(false))
         <div class="setting-info">
           <div class="setting-label">轻量模式</div>
           <div class="setting-desc">
-            最小化到托盘时释放界面（销毁当前网页）以省内存，从托盘打开窗口时重新加载。
-            代价：重新打开需要等待界面重建，且释放时未保存的编辑内容会丢失；
-            后台的 MCP 服务与定时任务不受影响。
+            最小化到托盘时销毁界面以省内存，重新打开需重建（未保存的编辑会丢失）；后台服务不受影响。
           </div>
         </div>
         <el-switch v-model="lightMode" :loading="lightModeSaving" @change="applyLightMode" />
@@ -783,7 +781,7 @@ onMounted(() => refreshAll(false))
           <div class="setting-desc">
             {{
               autostart.supported
-                ? '开机后自动启动本程序。开关直接读写操作系统的自启条目，不依赖本程序自身的配置。'
+                ? '开机后自动启动本程序（直接读写系统自启条目）。'
                 : '当前平台不支持设置开机自启动。'
             }}
           </div>
@@ -807,8 +805,7 @@ onMounted(() => refreshAll(false))
         <div class="setting-info">
           <div class="setting-label">自动检测更新</div>
           <div class="setting-desc">
-            每次程序启动（以及解锁）后在后台自动查一次有没有新版本，发现时会弹通知提醒。
-            默认开启；关掉后仍可在下面手动「检查更新」。
+            启动后后台查一次新版本，有则弹通知；关掉后仍可手动「检查更新」。
           </div>
         </div>
         <el-switch
@@ -824,8 +821,7 @@ onMounted(() => refreshAll(false))
         <div class="setting-info">
           <div class="setting-label">更新渠道</div>
           <div class="setting-desc">
-            正式版：对比 GitHub Release 的最新正式版，**下载对应平台的预编译包替换当前程序**（不编译）。
-            测试版：跟到 main 最新提交，**从源码重新构建**（本机没有源码会先拉一份到程序目录）。
+            正式版：下载预编译包替换当前程序；测试版：从源码重新构建。
           </div>
         </div>
         <el-radio-group v-model="updateChannel" @change="applyUpdateChannel">
@@ -840,8 +836,7 @@ onMounted(() => refreshAll(false))
         <div class="setting-info">
           <div class="setting-label">更新代理</div>
           <div class="setting-desc">
-            检查与更新（git / pip / npm）走哪个出口。可跟随「网络与代理」的全局默认、强制直连，
-            或**指定下面的某个代理**——本机直连 GitHub 不通时，在这里选一个代理即可。
+            更新与构建走哪个出口；直连 GitHub 不通时在这里选一个代理。
           </div>
           <div v-if="updateProxySpec !== 'direct'" class="setting-path">
             当前出网：{{ updateProxyResolved || '直连（未配置代理）' }}
@@ -865,9 +860,7 @@ onMounted(() => refreshAll(false))
         <div class="setting-info">
           <div class="setting-label">访问令牌</div>
           <div class="setting-desc">
-            本仓库为私有时的访问凭据：填一个 GitHub PAT（经典或细粒度，只需对本仓库的
-            Contents: read 权限）。令牌经主密码加密后保存，明文不落库、不进命令行；
-            公开仓库留空即可。
+            私有仓库填 GitHub PAT（Contents: read）；公开仓库留空。令牌加密保存，明文不落库。
           </div>
           <div v-if="updateTokenConfigured" class="setting-path">
             已配置：{{ updateTokenMask }}
@@ -900,7 +893,6 @@ onMounted(() => refreshAll(false))
             <template v-else>
               检查 GitHub 上是否有新版本（只读，不改动本机）。
             </template>
-            出网代理由上面的「更新代理」决定。
           </div>
           <div v-if="updateResult && updateResult.ok" class="setting-path">
             出网：{{ updateResult.proxy ? updateResult.proxy : '直连（未配置代理）' }}
@@ -1016,8 +1008,7 @@ onMounted(() => refreshAll(false))
         <div class="setting-info">
           <div class="setting-label">默认代理</div>
           <div class="setting-desc">
-            凭据没有单独指定代理时用它。可在下面维护多个代理、各自取名；其它模块一律按 id 引用。
-            支持 http / https / socks5。环境变量 VAULT_PROXY 仍可覆盖（外部变量优先）。
+            凭据未单独指定时用它。支持 http / https / socks5；环境变量 VAULT_PROXY 优先。
           </div>
         </div>
         <div class="inline-row">
