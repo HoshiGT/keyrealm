@@ -40,7 +40,7 @@ Keyrealm 可以在程序内检查并一键更新。**两种渠道的更新方式
 1. 查 GitHub Release 的最新正式版标签；与本机 `APP_VERSION` 比，更高才继续。
 2. **备份**当前程序（可执行文件 + `plugins/` + `data/`）。
 3. **下载**对应平台的包 `Keyrealm-<版本>-<平台>.zip`
-   （平台取当前系统与架构：`windows-x64` / `macos-arm64` / `macos-x64` / `linux-x64`）。
+   （平台取当前系统与架构；目前 CI 发布的只有 `windows-x64` 与 `macos-arm64`）。
 4. **解压替换**到程序目录（可执行文件 + `plugins/`；包内 `.update-meta/` 也在内，见 §4）。
    **`data/` 目录绝不覆盖**。
 5. 读包内 `.update-meta/version.json` 的 `schema_version`，**逐级迁移**数据库。
@@ -151,7 +151,8 @@ scripts/restart.sh --wait
 ## 9. 边界与已知限制
 
 - **正式版**要求 GitHub 上已发布**当前平台**的预编译包；目前 CI 只出 **Windows（x64）与 macOS
-  （arm64 / x64）**，**Linux 无预编译包**（pywebview 依赖 GTK/WebKitGTK，打包成本高）。
+  （Apple Silicon / arm64）**；**macOS Intel（x64）与 Linux 暂不出**（Linux 的 pywebview 依赖
+  GTK/WebKitGTK，打包成本高）。
 - **测试版**要求本机能构建（git + Python + Node）；从 Releases 装、机器上又什么都没有时，只能走正式版。
 - **macOS 预编译包未签名**：首次打开会被 Gatekeeper 拦（右键→「打开」，或 `xattr -dr com.apple.quarantine <文件>`）。
 - **Windows** 需 WebView2 Runtime（Win10/11 通常自带）。

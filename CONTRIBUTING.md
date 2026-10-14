@@ -237,7 +237,8 @@ keyrealm/
 打 tag（`vX.Y.Z`）会触发 **`.github/workflows/release.yml`**：在三个 runner 上并行构建，把产物挂到
 该 tag 的 GitHub Release，用户下载即用。
 
-- 矩阵：`windows-latest`（x64）、`macos-13`（Intel）、`macos-latest`（Apple Silicon）。
+- 矩阵：`windows-latest`（x64）、`macos-latest`（Apple Silicon）。暂不出 macOS Intel 与 Linux 版；
+  以后要加 macOS Intel 就补一条 `macos-13` / `macos-x64`。
   **必须矩阵**——PyInstaller **不能跨平台编译**，每个平台只能在对应系统上构建。
 - 每个 runner：装 Python + Node → `pip install -r requirements.txt pyinstaller` → `npm ci` →
   `python scripts/build.py --frontend --output release` → 把 `release/`（可执行文件 + `plugins/`

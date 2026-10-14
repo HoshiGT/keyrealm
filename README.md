@@ -104,7 +104,7 @@
 ### Windows / macOS
 
 从 [Releases](../../releases) 下载对应平台的压缩包
-（`Keyrealm-<版本>-windows-x64.zip` / `macos-arm64.zip` / `macos-x64.zip`），解压后直接运行，免安装。
+（`Keyrealm-<版本>-windows-x64.zip` / `macos-arm64.zip`），解压后直接运行，免安装。
 
 - **Windows**：运行 `Keyrealm.exe`。需要 **WebView2 Runtime**（Windows 10/11 通常已内置；
   若启动时报缺 WebView2，从微软官网装一次即可）。

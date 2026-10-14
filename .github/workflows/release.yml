@@ -29,9 +29,7 @@ jobs:
         include:
           - os: windows-latest
             pkg: windows-x64
-          - os: macos-13        # Intel（macos-latest 已是 Apple Silicon）
-            pkg: macos-x64
-          - os: macos-latest    # Apple Silicon
+          - os: macos-latest    # Apple Silicon（暂不出 Intel 版；以后要加就再加一条 macos-13 / macos-x64）
             pkg: macos-arm64
 
     steps:
