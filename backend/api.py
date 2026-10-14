@@ -199,18 +199,19 @@ def _sensitive_keys(credential_type: str) -> set:
 
 
 def run_data_upgrades() -> dict:
-    """把库里遗留的**老格式凭据数据**升级到当前格式（幂等；只在数据版本落后时执行）。
+    """把库里遗留的**老格式凭据数据**升级到当前数据结构版本（幂等；同一版本不重复跑）。
+
+    **判据就是 `SCHEMA_VERSION`**（不另立版本号）：`settings.data_schema_version` 落后于它时
+    才跑一次——也就是**数据结构变过**（含"只是凭据格式变了"那种，见 `m_1.0.0__to_1.1.0.py`）。
 
     **必须解锁后调用**：凭据的敏感字段是加密的，没有主密码读不出来——所以这一步做不到结构
     迁移 `m_*.py` 里（那些跑在更新交棒阶段、应用已退出）。规则见 `backend/data_upgrades.py`；
     导入备份在落库前走同一套规则。
     """
-    try:
-        cur = int(db.get_setting("data_version", "0") or 0)
-    except (TypeError, ValueError):
-        cur = 0
-    if cur >= version.DATA_VERSION:
-        return {"ok": True, "upgraded": 0, "from": cur, "to": version.DATA_VERSION}
+    target = version.SCHEMA_VERSION
+    cur = (db.get_setting("data_schema_version", "") or "").strip()
+    if cur == target:
+        return {"ok": True, "upgraded": 0, "from": cur, "to": target}
     key = _get_key()
     if key is None:
         return {"ok": False, "message": "保险库未解锁，无法升级数据"}
@@ -232,8 +233,8 @@ def run_data_upgrades() -> dict:
             data_plain={k: v for k, v in new.items() if k not in sensitive},
         )
         upgraded += 1
-    db.set_setting("data_version", str(version.DATA_VERSION))
-    return {"ok": True, "upgraded": upgraded, "from": cur, "to": version.DATA_VERSION}
+    db.set_setting("data_schema_version", target)
+    return {"ok": True, "upgraded": upgraded, "from": cur, "to": target}
 
 
 def lock_vault() -> dict:

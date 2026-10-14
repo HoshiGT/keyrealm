@@ -222,8 +222,10 @@ plugins/
 > 别指望它变粗；glob 形式的 `**`（如 `**/*.py`）不受影响。
 
 > **插件只描述「当前」格式，不写数据兼容**：字段改了形态（拆开 / 合并 / 改名）时，**不要在
-> `verify` / `validate` 里做双格式容忍**（例如"字段里出现 `|` 就拆开"）。历史数据由**数据升级**
-> 负责转换（`backend/data_upgrades.py`，在导入备份与更新后执行），插件只认当前形态即可。
+> `verify` / `validate` 里做双格式容忍**（例如"字段里出现 `|` 就拆开"）。这属于**数据结构变化**：
+> 按 `backend/version.py` 的规矩**提升 `SCHEMA_VERSION`** 并在 `scripts/migrations/` **留一跳脚本**
+> （哪怕表结构没动）；老数据由 `backend/data_upgrades.py` 的规则在**导入备份**与**更新后解锁时**
+> 转成当前格式，插件只认当前形态即可。
 
 > **插件 logo 的来源与许可**：内置插件的品牌图标是**随包分发**的第三方商标图形，取自
 > [Simple Icons](https://simpleicons.org/)（CC0-1.0）、Iconify 的 `thesvg` 集合（MIT）、
