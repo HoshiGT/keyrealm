@@ -208,6 +208,7 @@ scripts/restart.sh --wait
 | 更新进程在跑但看不到进度 | 交棒阶段应用已退出，进度看 **`data/logs/update-*.log`**（Windows 也一样，不再弹控制台窗口）；结论在重启后的「上次更新」报告里。 |
 | **更新后什么都没发生、版本还是旧的** | 逐条看：① **`data/logs/update-*.log`**——交棒进程**每个里程碑都打一行**（启动横幅 / 等待退出 / 应用已退出 / 各阶段 / 结论），失败原因也在里面；② **`data/.update-status.json`**——`phase`/`message` 说明停在哪一步（如「等待应用退出超时」＝程序没完全退出）；③ 应用内**「设置 → 更新 → 上次更新」**，失败会在下次启动时**弹通知**。全程**不会**静默：失败也保证不替换任何文件。 |
 | 替换时报 **`WinError 32`（另一个程序正在使用此文件）** | 交棒进程**自己就运行在待替换的 `Keyrealm.exe` 上**，而 Windows 下**运行中的 exe 不能原地覆盖**。程序已改为**先把旧 exe 改名成 `Keyrealm.old` 腾出路径**再放新的（改名允许），正常不再报此错。若仍报，多半是**别处的残留进程**（没退干净的旧实例 / 杀毒软件锁定）占着 exe：关掉所有 Keyrealm 进程与相关杀软后重试，或用 `scripts/build_update.sh --kind test` 手动补完。 |
+| 重启时报 **`Failed to execute script 'pyiboot01_bootstrap'`** / **`_MEI…\base_library.zip` 不存在** | PyInstaller onefile 的坑：父进程把临时解压目录经 **`_MEIPASS2`** 交给子进程，子进程会**复用**同一份 `_MEI`，而父进程一退出就把它删了——新 exe 再去读 `base_library.zip` 就 `FileNotFoundError`。已修：所有脱离子进程都带 **`PYINSTALLER_RESET_ENVIRONMENT=1`**（`updater._PYI_ENV`），让新 exe 解压自己的一份。**遇到此错的老版本：手动双击 `Keyrealm.exe` 即可启动**（手动启动不继承这个变量），再更新到含修复的版本即可。 |
 | 迁移报「迁移链断档」 | 目标结构版本与现有脚本之间缺一跳。补齐 `m_<缺的from>__to_*.py` 或核对 `SCHEMA_VERSION`。 |
 | 迁移报「检测到应用正在运行」 | 应用没完全退出。先退出应用再 `--apply`。 |
 | 重启后没起来 | 看 `data/logs/relaunch-*.log`；或手动 `scripts/restart.sh`。 |

@@ -209,9 +209,17 @@ def _git_auth_env(token: Optional[str] = None) -> dict:
     }
 
 
+# PyInstaller onefile：父进程把临时解压目录经 `_MEIPASS2` 传给子进程，子进程会**复用**同一份
+# `_MEI` 而不自己解压；可父进程一退出就删掉那份目录 —— 子进程再去读 `base_library.zip` 就是
+# `FileNotFoundError`。官方为此提供 `PYINSTALLER_RESET_ENVIRONMENT=1`：让子进程**忽略继承的
+# `_MEIPASS2`**、解压自己的一份。我们所有「脱离启动的 PyInstaller 子进程」（交棒进程、重启起来
+# 的新 exe）都必须带上它——否则就会出现「替换成功、重启却报 `_MEI...\base_library.zip` 缺失」。
+_PYI_ENV = {"PYINSTALLER_RESET_ENVIRONMENT": "1"}
+
+
 def _child_env(extra: Optional[dict] = None, token: Optional[str] = None) -> dict:
-    """子进程环境 = 当前环境 + 更新代理 + 私有仓库认证（+ 额外项）。"""
-    return {**os.environ, **proxy_env(), **_git_auth_env(token), **(extra or {})}
+    """子进程环境 = 当前环境 + 隔离 PyInstaller 临时目录 + 更新代理 + 私有仓库认证（+ 额外项）。"""
+    return {**os.environ, **_PYI_ENV, **proxy_env(), **_git_auth_env(token), **(extra or {})}
 
 
 def _short(text: Any, limit: int = 200) -> str:
@@ -1206,8 +1214,11 @@ def spawn_detached(argv: list[str], *, cwd: Path, log: Optional[Path] = None,
 
     Windows：``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP``（切断控制台继承）；
     POSIX：``start_new_session=True``（新会话，脱离控制终端）。
+
+    环境里固定带上 ``PYINSTALLER_RESET_ENVIRONMENT=1``（见 ``_PYI_ENV``）——重启起来的新 exe
+    也是本函数起的，不带它就会复用父进程的 `_MEI` 而随父进程退出一起失效。
     """
-    full_env = {**os.environ, **(env or {})}
+    full_env = {**os.environ, **_PYI_ENV, **(env or {})}
     kwargs: dict = {}
     if os.name == "nt":
         kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP

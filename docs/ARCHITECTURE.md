@@ -690,6 +690,11 @@ POSIX 走 `start_new_session`）→ **确认子进程起来之后**才调 `_clos
 **跨进程 / 跨重启通信**：全程写 `data/.update-status.json`（阶段、成败、from/to）；新应用启动后
 由前端「设置 → 更新」卡片读取展示。
 
+> **子进程环境必须隔离 PyInstaller 临时目录**：onefile 的父进程把解压目录经 `_MEIPASS2` 传给子进程，
+> 子进程会**复用**同一份 `_MEI`；父进程一退出就删掉它，子进程（交棒进程 / 重启起来的新 exe）再去读
+> `base_library.zip` 就崩。所以 `spawn_detached` / `_child_env` 一律带上
+> **`PYINSTALLER_RESET_ENVIRONMENT=1`**（`updater._PYI_ENV`），让子进程解压自己的一份。
+
 **备份**：可执行文件 + `plugins/` + `data/`（DB 走 `sqlite3 backup()` 一致性快照，`logs/`/`webview/` 排除）
 **再外加一份全量导出 `data/keyrealm-full-backup.json`**（复用「备份」功能，见 §备份），
 打成一个 zip 落 `backups/`（gitignored、0600、**含真实密钥**），**只留一份**。构建失败不覆盖旧
