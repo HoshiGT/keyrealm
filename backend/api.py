@@ -1602,19 +1602,72 @@ def set_update_token(token: str) -> dict:
     return {"ok": True, "configured": True, "mask": mask_secret(token)}
 
 
-def start_update(kind: str = "formal", restart: bool = True, terminal: str = "auto") -> dict:
-    """「立即更新」：先把更新脚本起成脱离进程，再关闭程序（交棒）。
+# 「立即更新」的准备任务 id（同一时刻只允许一个在跑）
+_update_task_id: Optional[str] = None
 
-    退出走 `_close_quit_cb`（= main._quit_app），与「关闭窗口→直接退出」同一条路径，
-    因此停服务 / 停托盘 / 销毁窗口的表现一致。
+
+def start_update(kind: str = "formal", restart: bool = True, terminal: str = "auto") -> dict:
+    """「立即更新」：**应用内先准备**（备份 + 下载 / 拉源码 / 装依赖 / 构建，带进度、可取消），
+    准备成功后再**交棒**给脱离进程（替换 / 迁移 / 重启）并退出程序。
+
+    与旧实现的关键区别：**不再一点就退**——最耗时的准备阶段留在应用内，用户看得到进度。
+    准备失败 / 取消 / 无更新一律**不退出应用**。退出走 `_close_quit_cb`（= main._quit_app），
+    与「关闭窗口 → 直接退出」同一条路径。
     """
-    # 交棒前确保令牌已注入 env——脱离进程会继承它（见 updater._spawn_updater）。
-    _sync_update_token()
-    result = updater.start_update(kind, restart=restart, terminal=terminal,
-                                  quit_cb=_close_quit_cb)
-    if result.get("ok"):
-        _log.info("已发起程序内更新（渠道=%s）", kind)
-    return result
+    global _update_task_id
+    kind = kind if kind in updater.CHANNELS else "formal"
+    if kind == "test" and not updater.git_available():
+        return {"ok": False, "message": "测试版需要从源码构建：本机未安装 git，无法拉取源码。"}
+    if _update_task_id and (tasks.get(_update_task_id) or {}).get("status") == tasks.RUNNING:
+        return {"ok": False, "message": "已有更新准备在进行中，请稍候或先取消"}
+
+    _sync_update_token()   # 私有仓库下载需要令牌（注入 env，交棒子进程会继承）
+
+    label = "正式版" if kind == "formal" else "测试版"
+    task = tasks.create("update", f"准备更新（{label}）")
+    tid = task["id"]
+    _update_task_id = tid
+
+    def _run() -> None:
+        try:
+            res = updater.prepare_update(
+                kind,
+                progress_cb=lambda c, t, s: tasks.progress(tid, c, t, s),
+                should_cancel=tasks.should_cancel(tid),
+            )
+        except Exception as exc:  # noqa: BLE001 - 准备边界兜底，不退出应用
+            _log.exception("准备更新异常")
+            res = {"ok": False, "message": f"准备更新异常：{type(exc).__name__}"}
+
+        if res.get("canceled"):
+            tasks.finish(tid, ok=False, canceled=True, error="已取消")
+            _log.info("更新准备已取消（渠道=%s）", kind)
+            return
+        if not res.get("ok"):
+            msg = res.get("message", "准备失败")
+            tasks.finish(tid, ok=False, error=msg)
+            push_event("vault:update_failed", {"kind": kind, "message": msg})
+            _log.warning("更新准备失败：%s", msg)
+            return
+        if not res.get("has_update"):
+            tasks.finish(tid, ok=True, output=res.get("message", "已是最新"))
+            return
+
+        # 准备成功 → 交棒（起脱离进程 + 关闭应用）
+        hs = updater.begin_handoff(kind, restart=restart, terminal=terminal,
+                                   quit_cb=_close_quit_cb, prepared=res.get("prepared"))
+        if hs.get("ok"):
+            tasks.finish(tid, ok=True, output=hs.get("message", "已开始更新"))
+            _log.info("已发起程序内更新（渠道=%s，已准备）", kind)
+        else:
+            msg = hs.get("message", "交棒失败")
+            tasks.finish(tid, ok=False, error=msg)
+            push_event("vault:update_failed", {"kind": kind, "message": msg})
+            _log.warning("交棒失败：%s", msg)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "task_id": tid, "preparing": True,
+            "message": "已开始准备更新（准备完成后程序将自动关闭并重启）"}
 
 
 # ── Logging ───────────────────────────────────────────────

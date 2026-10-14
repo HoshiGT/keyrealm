@@ -24,10 +24,13 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:  # noqa: BLE001
         pass
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _logutil import tee_run_log  # noqa: E402
 from backend import updater  # noqa: E402
 
 
 def main() -> int:
+    tee_run_log("check_version")
     ap = argparse.ArgumentParser(description="检查 Keyrealm 是否有新版本（默认正式版口径）")
     ap.add_argument("--kind", choices=list(updater.CHANNELS), default="formal",
                     help="formal=正式版（看版本号）/ test=测试版（看版本号+commit）")

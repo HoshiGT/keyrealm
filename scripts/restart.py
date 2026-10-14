@@ -21,10 +21,13 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:  # noqa: BLE001
         pass
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _logutil import tee_run_log  # noqa: E402
 from backend import updater  # noqa: E402
 
 
 def main() -> int:
+    tee_run_log("restart")
     ap = argparse.ArgumentParser(description="重启 Keyrealm")
     ap.add_argument("--wait", action="store_true", help="先等应用完全退出再重启")
     args = ap.parse_args()

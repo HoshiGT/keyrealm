@@ -1,19 +1,27 @@
-"""程序内更新（从源码编译）—— 检查 / 构建 / 数据库迁移 / 重启的**唯一实现**。
+"""程序内更新（从源码编译）—— 检查 / 准备 / 交棒（构建·迁移·替换）/ 重启的**唯一实现**。
 
 设计要点
 --------
 - **唯一实现，双入口复用**：本模块既被应用内（`backend/api.py` 转发）调用，也被
-  `scripts/{check_version,build_update,db_update,restart}.py` 四个独立 CLI 复用（它们只做
-  argparse → 转发到这里）。逻辑只写一份。
+  `scripts/{build_update,db_update,restart}.py` 等 CLI 复用（它们只做 argparse → 转发到这里）。
+  逻辑只写一份。（`check_version.py` 是纯 CLI 检查入口——「检查更新」已由应用内承担，
+  故**只剩它一个 .py**，不再配 `.sh`/`.bat` 薄引导。）
 - **放 `backend/` 而不是 `scripts/`**：冻结的 exe 只打包 `main.py` 的 import 图（`backend/` +
   `frontend/dist` + `assets`），`scripts/` 不进 exe —— 应用内的 `check_update()` 必须在 exe 内
   可调用。本模块只依赖标准库级内部模块（`paths`/`version`/`database`/`single_instance`），
-  因此**任何 Python 3.11+ 都能 import 它**（含 venv 尚未创建时），四个脚本据此复用。
+  因此**任何 Python 3.11+ 都能 import 它**（含 venv 尚未创建时）。
 - **只读检查不碰工作区**：`check_update()` 用 `git clone --depth 1` 到临时目录读远端版本，
   用完即删；真正前进工作区的是 `fetch_latest()`（`git fetch --depth 1` + `merge --ff-only`）。
-- **交棒顺序不可颠倒**：应用内 `start_update()` 必须**先把更新脚本起成脱离进程、再退出应用**，
-  否则窗口一销毁就没机会再 spawn。更新脚本第一件事是 `wait_for_app_exit()`（借单实例锁判断
-  应用是否已退）。
+- **两段式：准备（应用内）+ 交棒（脱离进程）**：
+  - `prepare_update()` 在**应用进程内**跑（程序不退出、可报进度、可取消）——
+    备份 + 下载预编译包 / 拉源码 + 装依赖 + 构建到 `staging_dir`；结果写 `prepared_file`。
+  - `begin_handoff()` 再写请求文件、起脱离进程、延时关应用；脱离进程跑 `apply_update()`——
+    用准备产物**走快路径**（解压替换 / 安装 staging → 迁移 → 重启），**无产物则回落完整流程**
+    （`scripts/build_update.py` CLI 走的正是这条）。
+  - **交棒顺序不可颠倒**：必须**先把更新进程起起来、再退出应用**。更新进程第一件事是
+    `wait_for_app_exit()`（借单实例锁判断应用是否已退）。
+  - **构建 / 迁移 / 替换必须留在交棒阶段**：`build.py` 会覆盖运行中的可执行文件、
+    `run_migrations` 带单实例锁，两者都要求应用已退出。
 
 两档更新方式**不同**：
 - **正式版（formal）**：对比 **GitHub Release 的最新正式版标签**（`vX.Y.Z`），有新版就**下载对应
@@ -24,6 +32,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import platform
@@ -197,6 +206,15 @@ def _short(text: Any, limit: int = 200) -> str:
     return s[:limit]
 
 
+def _sha256(path: Path, *, chunk: int = 1 << 20) -> str:
+    """文件 SHA-256（分块读，避免大包整块进内存）。"""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(chunk), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 # ── 路径 ──────────────────────────────────────────────────
 
 def repo_root(root: Optional[Any] = None) -> Path:
@@ -222,6 +240,16 @@ def status_file(root: Optional[Any] = None) -> Path:
 
 def request_file(root: Optional[Any] = None) -> Path:
     return _data_dir(root) / ".update-request.json"
+
+
+def prepared_file(root: Optional[Any] = None) -> Path:
+    """「准备阶段」产物清单（应用内写好，交棒进程读它走快路径）。"""
+    return _data_dir(root) / ".update-prepared.json"
+
+
+def staging_dir(root: Optional[Any] = None) -> Path:
+    """测试版构建的**落点**：不覆盖运行中的程序文件，交棒时再由 ``_install_staged`` 安装。"""
+    return repo_root(root) / "build" / "staged"
 
 
 def migrations_dirs(root: Optional[Any] = None) -> list:
@@ -306,9 +334,16 @@ def release_asset_name(ver: str) -> str:
 
 
 def release_asset_url(ver: str) -> str:
-    """按 CI 的命名约定拼出 Release 资产下载地址（无需 GitHub API，也就没有速率限制）。"""
+    """按 CI 的命名约定拼出 Release 资产下载地址（无需 GitHub API，也就没有速率限制）。
+
+    ``KEYREALM_UPDATE_ASSET_BASE`` 可覆盖基址（默认 GitHub 的 ``releases/download``），
+    便于离线自测下载段（指向本地静态服务）。私有仓库仍需令牌走 API，见 ``download_release_asset``。
+    """
     tag = ver if ver.startswith("v") else f"v{ver}"
-    return f"https://github.com/{REPO_SLUG}/releases/download/{tag}/{release_asset_name(ver)}"
+    base = os.environ.get("KEYREALM_UPDATE_ASSET_BASE", "").strip().rstrip("/")
+    if not base:
+        base = f"https://github.com/{REPO_SLUG}/releases/download"
+    return f"{base}/{tag}/{release_asset_name(ver)}"
 
 
 def latest_release_tag(*, timeout: float = 30) -> dict:
@@ -344,22 +379,32 @@ def latest_release_tag(*, timeout: float = 30) -> dict:
     return {"ok": True, "version": best, "tag": f"v{best}"}
 
 
-def download_release_asset(ver: str, dest: Path, *, token: Optional[str] = None) -> dict:
-    """下载某正式版的预编译包到 ``dest``。
+def download_release_asset(ver: str, dest: Path, *, token: Optional[str] = None,
+                           progress_cb: Optional[Callable[[int, int], None]] = None,
+                           should_cancel: Optional[Callable[[], bool]] = None) -> dict:
+    """下载某正式版的预编译包到 ``dest``（**流式**，可报进度、可取消）。
 
     - **有令牌**（私有仓库）：走 GitHub API 的资产端点——先 `/releases/tags/<tag>` 找到同名资产，
       再 `/releases/assets/<id>` 带 `Accept: application/octet-stream` 取字节。公开下载 URL 对私有仓库会 **404**。
-    - **无令牌**（公开仓库）：直接用 `releases/download/<tag>/<asset>` 公开 URL。
-    两者都走「更新代理」，先写 `.part` 再原子替换。
+    - **无令牌**（公开仓库）：直接用 `releases/download/<tag>/<asset>` 公开 URL（基址可经
+      ``KEYREALM_UPDATE_ASSET_BASE`` 覆盖，便于离线自测）。
+    两者都走「更新代理」，先写 `.part` 再原子替换。``progress_cb(done, total)`` 按块回调
+    （``total`` 取 ``Content-Length``，未知为 0）；``should_cancel()`` 为真则中止并清掉 `.part`。
+    返回含 ``sha256``（供交棒阶段校验产物未损坏）。
     """
     tok = _resolve_token(token)
     version = ver[1:] if str(ver).startswith("v") else str(ver)
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".part")
     try:
         import httpx
     except Exception:  # noqa: BLE001
         return {"ok": False, "message": "缺少 httpx，无法下载预编译包"}
+
+    def _canceled() -> bool:
+        return bool(should_cancel and should_cancel())
+
     try:
         with httpx.Client(proxy=update_proxy(),
                           timeout=httpx.Timeout(connect=15.0, read=180.0, write=180.0, pool=15.0),
@@ -377,19 +422,40 @@ def download_release_asset(ver: str, dest: Path, *, token: Optional[str] = None)
                                  if a.get("name") == name), None)
                 if not asset_id:
                     return {"ok": False, "message": f"该 Release 里没有 {name}（该平台可能尚未发布对应包）"}
-                resp = client.get(f"{api}/releases/assets/{asset_id}",
-                                  headers={"Authorization": f"Bearer {tok}",
-                                           "Accept": "application/octet-stream"})
+                url = f"{api}/releases/assets/{asset_id}"
+                req_headers = {"Authorization": f"Bearer {tok}",
+                               "Accept": "application/octet-stream"}
             else:
-                resp = client.get(release_asset_url(version))
-            if resp.status_code != 200:
-                return {"ok": False, "message": f"下载失败（HTTP {resp.status_code}）"}
-            tmp = dest.with_name(dest.name + ".part")
-            tmp.write_bytes(resp.content)
-            tmp.replace(dest)
+                url = release_asset_url(version)
+                req_headers = {}
+
+            with client.stream("GET", url, headers=req_headers) as resp:
+                if resp.status_code != 200:
+                    return {"ok": False, "message": f"下载失败（HTTP {resp.status_code}）"}
+                total = int(resp.headers.get("Content-Length") or 0)
+                done = 0
+                if progress_cb:
+                    progress_cb(0, total)
+                with open(tmp, "wb") as fh:
+                    for chunk in resp.iter_bytes(64 * 1024):
+                        if _canceled():
+                            return {"ok": False, "canceled": True, "message": "已取消下载"}
+                        fh.write(chunk)
+                        done += len(chunk)
+                        if progress_cb:
+                            progress_cb(done, total)
     except Exception as exc:  # noqa: BLE001
+        tmp.unlink(missing_ok=True)
         return {"ok": False, "message": f"下载失败：{type(exc).__name__}"}
-    return {"ok": True, "bytes": dest.stat().st_size}
+    if _canceled():
+        tmp.unlink(missing_ok=True)
+        return {"ok": False, "canceled": True, "message": "已取消下载"}
+    try:
+        tmp.replace(dest)
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        return {"ok": False, "message": f"写入失败：{exc}"}
+    return {"ok": True, "bytes": dest.stat().st_size, "sha256": _sha256(dest)}
 
 
 def update_meta_dir(root: Optional[Any] = None) -> Path:
@@ -400,6 +466,19 @@ def update_meta_dir(root: Optional[Any] = None) -> Path:
 def read_release_meta(directory: Path) -> dict:
     """读 ``.update-meta/version.json``（``{app_version, schema_version, commit}``）；不存在返回 {}。"""
     return _read_json(Path(directory) / "version.json") or {}
+
+
+def _zip_schema(zip_path: Path) -> str:
+    """读发布包内 ``.update-meta/version.json`` 的 ``schema_version``（**不解压**，应用内即可预览迁移目标）。"""
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            names = [n for n in zf.namelist() if n.endswith(".update-meta/version.json")]
+            if not names:
+                return ""
+            data = json.loads(zf.read(names[0]).decode("utf-8", "replace"))
+            return str(data.get("schema_version") or "")
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def extract_release_zip(zip_path: Path, app_dir: Path) -> dict:
@@ -839,9 +918,13 @@ def latest_backup(*, root: Optional[Any] = None) -> Optional[Path]:
 
 def fetch_latest(*, root: Optional[Any] = None, branch: str = DEFAULT_BRANCH,
                  force: bool = False) -> dict:
-    """``git fetch --depth 1`` + ``merge --ff-only``：把工作区快进到远端。
+    """``git fetch origin <branch>`` + ``merge --ff-only``：把工作区快进到远端。
 
     脏工作区默认**拒绝**（避免覆盖用户未提交的改动）；``force=True`` 时先 ``git stash`` 再合。
+
+    **不用 ``--depth 1``**：浅取会在 FETCH_HEAD 处切出浅边界，本地既有的历史与它「接不上」，
+    ``merge --ff-only`` 会报 **`refusing to merge unrelated histories`** 而**静默失败**——
+    只要本地真的落后于远端就必然踩到（本机复现）。普通 fetch 只传本地缺的对象，开销可接受。
     """
     root = repo_root(root)
     if not git_available():
@@ -858,8 +941,7 @@ def fetch_latest(*, root: Optional[Any] = None, branch: str = DEFAULT_BRANCH,
         st = _git(["stash", "push", "-u", "-m", "keyrealm-update-autostash"], cwd=root)
         stashed = st.returncode == 0
     try:
-        fe = _git(["fetch", "--depth", str(CLONE_DEPTH), "origin", branch],
-                  cwd=root, timeout=180)
+        fe = _git(["fetch", "origin", branch], cwd=root, timeout=180)
     except subprocess.TimeoutExpired:
         return {"ok": False, "message": "git fetch 超时（网络不可用？）"}
     if fe.returncode != 0:
@@ -874,11 +956,16 @@ def fetch_latest(*, root: Optional[Any] = None, branch: str = DEFAULT_BRANCH,
 # ── 构建 ──────────────────────────────────────────────────
 
 def run_build(*, root: Optional[Any] = None, frontend: bool = True,
-              extra_args: Optional[list] = None, python: Optional[str] = None) -> dict:
+              extra_args: Optional[list] = None, python: Optional[str] = None,
+              output: Optional[Any] = None,
+              should_cancel: Optional[Callable[[], bool]] = None) -> dict:
     """跑 ``scripts/build.py``。``python`` 指定用哪个解释器（默认 ``sys.executable``）。
 
-    冻结 exe 里的自更新要**用 venv 的解释器**构建（``sys.executable`` 是 exe，跑不了脚本），
-    故由调用方传入 ``ensure_venv()`` 的路径。
+    - 冻结 exe 里的自更新要**用 venv 的解释器**构建（``sys.executable`` 是 exe，跑不了脚本），
+      故由调用方传入 ``ensure_venv()`` 的路径。
+    - ``output`` 指定产物落点（默认仓库根）。**准备阶段**（应用还在跑）必须传 ``staging_dir``——
+      默认落点会覆盖运行中的可执行文件，而运行中的程序文件不可覆盖。
+    - 构建输出落 ``data/logs/build-*.log`` 便于排障；``should_cancel()`` 为真则终止构建。
     """
     root = repo_root(root)
     build = root / "scripts" / "build.py"
@@ -888,16 +975,39 @@ def run_build(*, root: Optional[Any] = None, frontend: bool = True,
     cmd = [py, str(build)]
     if frontend:
         cmd.append("--frontend")
+    if output:
+        cmd += ["--output", str(output)]
     cmd += list(extra_args or [])
     _log.info("开始构建：%s", " ".join(cmd))
+    log = root / "data" / "logs" / f"build-{time.strftime('%Y%m%d-%H%M%S')}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    sink = open(log, "ab")
     try:
-        # 构建里的 npm install / npm run build 也要走更新代理
-        rc = subprocess.run(cmd, cwd=str(root), env=_child_env()).returncode
+        proc = subprocess.Popen(cmd, cwd=str(root), env=_child_env(),
+                                stdout=sink, stderr=subprocess.STDOUT)
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "message": f"构建无法启动：{exc}"}
+        sink.close()
+        return {"ok": False, "message": f"构建无法启动：{exc}", "log": str(log)}
+    finally:
+        sink.close()   # 子进程持有自己的 fd，父侧随即关闭即可
+    while True:
+        if should_cancel and should_cancel():
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            return {"ok": False, "canceled": True, "log": str(log), "message": "已取消构建"}
+        try:
+            rc = proc.wait(timeout=1.0)
+            break
+        except subprocess.TimeoutExpired:
+            continue
     if rc != 0:
-        return {"ok": False, "returncode": rc, "message": f"构建失败（退出码 {rc}）"}
-    return {"ok": True, "returncode": 0, "message": "构建完成"}
+        tail = _short(log.read_text(encoding="utf-8", errors="replace")[-800:]) if log.is_file() else ""
+        return {"ok": False, "returncode": rc, "log": str(log),
+                "message": f"构建失败（退出码 {rc}）{('：' + tail) if tail else ''}"}
+    return {"ok": True, "returncode": 0, "log": str(log), "message": "构建完成"}
 
 
 def ensure_deps(*, root: Optional[Any] = None, extra: tuple = ("pyinstaller",),
@@ -929,7 +1039,9 @@ def ensure_deps(*, root: Optional[Any] = None, extra: tuple = ("pyinstaller",),
 def _venv_python(root: Optional[Any] = None) -> Path:
     """项目下虚拟环境的解释器路径（Linux `.venv/bin/python` / Windows `.venv\\Scripts\\python.exe`）。"""
     base = repo_root(root) / ".venv"
-    return base / ("Scripts" / "python.exe" if os.name == "nt" else "bin" / "python")
+    if os.name == "nt":
+        return base / "Scripts" / "python.exe"
+    return base / "bin" / "python"
 
 
 def ensure_venv(root: Optional[Any] = None) -> dict:
@@ -1084,6 +1196,74 @@ def read_request(root: Optional[Any] = None) -> dict:
     return _read_json(request_file(root)) or {}
 
 
+# ── 准备产物清单（应用内写、交棒进程读）──────────────────────
+# 交棒进程据此走「快路径」：校验 sha256 后跳过已完成的下载 / 拉源码 / 构建。
+# 陈旧（超 TTL）或校验失败一律视为无效 → 回落完整流程（CLI 走的正是这条）。
+PREPARED_SCHEMA = 1
+_PREPARED_TTL = 24 * 3600     # 准备产物有效期（秒）
+_REQUEST_TTL = 24 * 3600      # 请求文件有效期（秒）——顺带修「陈旧请求覆盖 CLI --kind」的老坑
+
+
+def _write_json_atomic(path: Path, payload: dict) -> bool:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+        return True
+    except OSError as exc:
+        _log.warning("写 %s 失败：%s", path.name, exc)
+        return False
+
+
+def read_prepared(root: Optional[Any] = None) -> dict:
+    return _read_json(prepared_file(root)) or {}
+
+
+def _write_prepared(root: Optional[Any], payload: dict) -> None:
+    _write_json_atomic(prepared_file(root),
+                       {**payload, "schema": PREPARED_SCHEMA, "prepared_at": _now()})
+
+
+def _clear_prepared(root: Optional[Any] = None) -> None:
+    try:
+        prepared_file(root).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _age_seconds(stamp: Any) -> Optional[float]:
+    """时间戳距现在多少秒（解析失败返回 None）。"""
+    try:
+        t = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except Exception:  # noqa: BLE001
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - t).total_seconds()
+
+
+def _validate_prepared(root: Optional[Any], prepared: dict) -> bool:
+    """准备产物是否仍可信：结构完整、未过期、formal 的包存在且 sha256 一致。"""
+    if not prepared or int(prepared.get("schema") or 0) != PREPARED_SCHEMA:
+        return False
+    age = _age_seconds(prepared.get("prepared_at"))
+    if age is None or age > _PREPARED_TTL or age < -60:
+        return False
+    kind = prepared.get("kind")
+    if kind == "formal":
+        ap = Path(str(prepared.get("asset_path") or ""))
+        want = str(prepared.get("asset_sha256") or "")
+        if not ap.is_file() or not want or _sha256(ap) != want:
+            return False
+    elif kind == "test":
+        if not (repo_root(root) / "main.py").is_file():
+            return False
+    else:
+        return False
+    return True
+
+
 # ── 编排：更新主流程 ──────────────────────────────────────
 
 def _relaunch_spec(root: Path) -> dict:
@@ -1093,32 +1273,221 @@ def _relaunch_spec(root: Path) -> dict:
     return {"frozen": False, "exe": sys.executable, "argv": [str(root / "main.py")], "cwd": str(root)}
 
 
+# 阶段 → 界面文案
+_STAGE_LABELS = {
+    "backup": "备份", "download": "下载预编译包", "source": "获取源码",
+    "deps": "准备构建环境", "build": "构建", "extract": "解压替换",
+    "install": "安装新版本", "migrate": "迁移数据库", "restart": "重启",
+}
+
+
+def stage_label(name: str) -> str:
+    return _STAGE_LABELS.get(name, name)
+
+
+def _prep_stages(kind: str) -> list:
+    """**准备阶段**（应用进程内）的阶段名。"""
+    return ["backup", "download"] if kind == "formal" else ["backup", "source", "deps", "build"]
+
+
+def _commit_stages(kind: str) -> list:
+    """**交棒阶段**（脱离进程）的阶段名。"""
+    return ["extract", "migrate", "restart"] if kind == "formal" else ["install", "migrate", "restart"]
+
+
 def _stages_for(kind: str) -> list:
+    """两段合起来（供界面展示完整流程）。"""
+    return _prep_stages(kind) + _commit_stages(kind)
+
+
+ProgressCb = Callable[[int, int, str], None]   # (当前, 总量, 文案)
+
+
+def _status_stage(root: Optional[Any], kind: str, stages: list, name: str,
+                  message: str, done: list, percent: Optional[int] = None) -> None:
+    """写一条「阶段进行中」的状态（供界面显示阶段 + 进度）。"""
+    idx = stages.index(name) + 1 if name in stages else None
+    _write_status(root, {
+        "phase": name, "ok": None, "kind": kind, "stages": stages,
+        "stage": name, "stage_label": stage_label(name),
+        "stage_index": idx, "stage_total": len(stages),
+        "done_stages": list(done), "percent": percent, "message": message,
+    })
+
+
+def _install_staged(staging: Any, root: Path) -> dict:
+    """把 staging 里构建好的产物安装进程序目录（换可执行文件 + 覆盖 ``plugins/``）。"""
+    staging, root = Path(staging), Path(root)
+    if not staging.is_dir():
+        return {"ok": False, "message": "未找到构建产物（staging 目录不存在）"}
+    exe_src = staging / _exe_name()
+    if exe_src.is_file():
+        try:
+            shutil.copy2(exe_src, root / _exe_name())
+        except OSError as exc:
+            return {"ok": False, "message": f"替换可执行文件失败：{exc}"}
+    plugins_src = staging / "plugins"
+    if plugins_src.is_dir():
+        try:
+            shutil.copytree(plugins_src, root / "plugins", dirs_exist_ok=True)
+        except OSError as exc:
+            return {"ok": False, "message": f"安装插件失败：{exc}"}
+    return {"ok": True}
+
+
+def prepare_update(kind: str = "formal", *, root: Optional[Any] = None, frontend: bool = True,
+                   do_backup: bool = True, force: bool = False,
+                   progress_cb: Optional[ProgressCb] = None,
+                   should_cancel: Optional[Callable[[], bool]] = None,
+                   log: Callable[[str], None] = print) -> dict:
+    """**准备阶段**（应用进程内跑，程序不退出）：备份 + 下载预编译包 / 拉源码 + 装依赖 + 构建。
+
+    产物写 ``prepared_file``，交棒进程据此走快路径。``progress_cb(current, total, text)`` 报进度；
+    ``should_cancel()`` 为真则尽快中止（下载按块、步骤之间）——但**源码一旦更新即不再接受取消**
+    （工作区已前进，取消会让源码领先于数据库）。返回 ``{ok, has_update, kind, prepared, ...}``；
+    无更新时 ``has_update=False`` 且不写清单。
+    """
+    root = repo_root(root)
+    kind = kind if kind in CHANNELS else "formal"
+    stages = _prep_stages(kind)
+    done: list[str] = []
+    _clear_prepared(root)
+
+    def _cancelled() -> bool:
+        return bool(should_cancel and should_cancel())
+
+    def _prog(cur: int, total: int, text: str = "") -> None:
+        if progress_cb:
+            progress_cb(cur, total, text)
+
+    local = local_info(root)
     if kind == "formal":
-        return ["backup", "download", "migrate", "restart"]
-    return ["backup", "source", "deps", "build", "migrate", "restart"]
+        rel = latest_release_tag()
+        if not rel.get("ok"):
+            return {"ok": False, "kind": kind, "message": rel.get("message") or "查询最新正式版失败"}
+        to_ver, commit, to_schema = rel["version"], "", ""
+        if not _semver_gt(to_ver, local["version"]):
+            return {"ok": True, "has_update": False, "kind": kind, "to_version": local["version"],
+                    "message": f"已是最新正式版（{local['version']}）"}
+    else:
+        remote = remote_info(root=root)
+        if not remote.get("ok"):
+            return {"ok": False, "kind": kind, "message": remote.get("message") or "获取远端源码信息失败"}
+        cmp = compare(kind, local, remote)
+        if not cmp["has_update"]:
+            return {"ok": True, "has_update": False, "kind": kind, "remote": remote,
+                    "to_version": remote.get("version") or local["version"], "message": cmp["reason"]}
+        to_ver = remote.get("version") or local["version"]
+        commit, to_schema = remote.get("commit", ""), remote.get("schema_version", "")
+
+    if _cancelled():
+        return {"ok": False, "canceled": True, "kind": kind, "message": "已取消"}
+
+    if do_backup:
+        _status_stage(root, kind, stages, "backup", "备份旧产物…", done)
+        _prog(0, 0, "备份中…")
+        bk = make_backup(root=root, kind=kind)
+        if not bk.get("ok"):
+            return {"ok": False, "kind": kind, "message": bk.get("message", "备份失败")}
+        log(f"已备份 → {bk['path']}")
+        if _cancelled():
+            return {"ok": False, "canceled": True, "kind": kind, "message": "已取消"}
+    done.append("backup")
+
+    prepared = {"kind": kind, "version": to_ver, "commit": commit}
+
+    if kind == "formal":
+        name = release_asset_name(to_ver)
+        _status_stage(root, kind, stages, "download", f"下载预编译包 {name}…", done)
+        dest = backups_dir(root) / f"_asset-{to_ver}.zip"
+        dl = download_release_asset(to_ver, dest,
+                                    progress_cb=lambda d, t: _prog(d, t, f"下载 {name}…"),
+                                    should_cancel=should_cancel)
+        if not dl.get("ok"):
+            return {"ok": False, "canceled": bool(dl.get("canceled")), "kind": kind,
+                    "message": dl.get("message", "下载失败")}
+        done.append("download")
+        prepared.update({
+            "asset_name": name, "asset_path": str(dest),
+            "asset_bytes": dl.get("bytes"), "asset_sha256": dl.get("sha256"),
+            "schema_version": _zip_schema(dest) or to_schema or local["schema_version"],
+        })
+        log(f"已下载（{(dl.get('bytes') or 0) // 1024} KB）")
+    else:
+        _status_stage(root, kind, stages, "source", "获取最新源码…", done)
+        _prog(0, 0, "获取源码…")
+        src = ensure_source(root=root, force=force)
+        if not src.get("ok"):
+            return {"ok": False, "kind": kind, "message": src.get("message", "获取源码失败")}
+        log(src.get("message", "源码已就绪"))
+        done.append("source")
+        should_cancel = None      # 提交点：源码已更新，此后不再接受取消
+        _status_stage(root, kind, stages, "deps", "准备构建环境（虚拟环境 + 依赖）…", done)
+        _prog(0, 0, "准备构建环境…")
+        vn = ensure_venv(root=root)
+        if not vn.get("ok"):
+            return {"ok": False, "kind": kind, "message": vn.get("message")}
+        py = vn["python"]
+        dp = ensure_deps(root=root, python=py)
+        if not dp.get("ok"):
+            return {"ok": False, "kind": kind, "message": dp.get("message")}
+        log(dp.get("message", "依赖已就绪"))
+        done.append("deps")
+        _status_stage(root, kind, stages, "build", "从源码构建到临时目录（scripts/build.py --frontend）…", done)
+        _prog(0, 0, "构建中（可能需要几分钟）…")
+        out = staging_dir(root)
+        bd = run_build(root=root, frontend=frontend, python=py, output=out)
+        if not bd.get("ok"):
+            return {"ok": False, "kind": kind, "message": bd.get("message", "构建失败"),
+                    "log": bd.get("log")}
+        log(bd.get("message", "构建完成"))
+        done.append("build")
+        meta = source_meta(root)
+        prepared.update({
+            "staging_dir": str(out), "venv_python": py,
+            "asset_path": "", "asset_sha256": "", "asset_bytes": None,
+            "schema_version": meta.get("schema_version") or to_schema or local["schema_version"],
+        })
+
+    _write_prepared(root, prepared)
+    _write_status(root, {"phase": "prepared", "ok": True, "kind": kind, "stages": stages,
+                         "done_stages": done, "percent": 100, "message": "准备完成"})
+    return {"ok": True, "has_update": True, "kind": kind, "to_version": to_ver,
+            "commit": commit, "prepared": prepared, "stages": stages}
+
+
+def _latest_update_log(root: Optional[Any] = None) -> str:
+    logs = sorted((repo_root(root) / "data" / "logs").glob("update-*.log"))
+    return str(logs[-1]) if logs else ""
 
 
 def apply_update(kind: str = "formal", *, root: Optional[Any] = None, frontend: bool = True,
                  do_backup: bool = True, do_migrate: bool = True, do_restart: bool = True,
                  force: bool = False, dry_run: bool = False,
                  log: Callable[[str], None] = print) -> dict:
-    """更新主流程：等应用退出 → 按渠道执行 → 迁移 → 重启（全程写状态文件）。
+    """更新**交棒主流程**：等应用退出 → 用「准备产物」走快路径（无则回落完整流程）→ 迁移 → 重启。
 
-    - **正式版**：下载对应平台的预编译包 → 解压替换 → 迁移 → 重启（**不编译**）。
-    - **测试版**：获取/拉取源码 → 装依赖 → 构建 → 迁移 → 重启。
+    - 有有效 ``prepared_file`` → 跳过备份/下载/拉源码/装依赖/构建，直接解压替换或安装 → 迁移 → 重启。
+    - 无清单（如 ``scripts/build_update.py`` 单独跑）→ 回落完整流程（formal 自行下载；test 自行拉源码 + 构建）。
 
     由 ``main.py --self-update``（应用内交棒）或 ``scripts/build_update.py`` 调用。
     """
     root = repo_root(root)
     req = read_request(root)
-    kind = (req.get("kind") or kind) if req else kind
+    # 只采信**时效内**的请求文件；陈旧请求不得覆盖 CLI 传入的 kind（老坑）。
+    if req and (_age_seconds(req.get("requested_at")) or 1e9) <= _REQUEST_TTL:
+        kind = req.get("kind") or kind
     kind = kind if kind in CHANNELS else "formal"
     stages = _stages_for(kind)
 
+    prepared = read_prepared(root)
+    if not _validate_prepared(root, prepared):
+        prepared = {}          # 缺失 / 过期 / sha256 不符 → 回落完整流程
+
     if dry_run:
-        log(f"演练（{kind}）：将依次执行 " + " → ".join(stages))
-        return {"ok": True, "dry_run": True, "kind": kind, "stages": stages}
+        log(f"演练（{kind}）：将依次执行 " + " → ".join(stages)
+            + ("（使用准备产物）" if prepared else "（无准备产物，走完整流程）"))
+        return {"ok": True, "dry_run": True, "kind": kind, "stages": stages, "prepared": bool(prepared)}
 
     _write_status(root, {"phase": "waiting", "ok": None, "kind": kind, "stages": stages,
                          "message": "等待应用退出…"})
@@ -1128,126 +1497,176 @@ def apply_update(kind: str = "formal", *, root: Optional[Any] = None, frontend: 
         return {"ok": False, "message": "等待应用退出超时"}
 
     frm = version.APP_VERSION
+    report: list = []
     try:
         if kind == "formal":
-            result = _apply_formal(root, do_backup=do_backup, do_migrate=do_migrate, log=log)
+            result = _apply_formal(root, do_backup=do_backup, do_migrate=do_migrate, log=log,
+                                   prepared=prepared, stages=stages, report=report)
         else:
             result = _apply_test(root, frontend=frontend, do_backup=do_backup,
-                                 do_migrate=do_migrate, force=force, log=log)
+                                 do_migrate=do_migrate, force=force, log=log,
+                                 prepared=prepared, stages=stages, report=report)
     except Exception as exc:  # noqa: BLE001 - 编排边界兜底，如实报错
         _log.exception("更新流程异常")
         result = {"ok": False, "message": f"更新异常：{type(exc).__name__}"}
 
     prefer = result.pop("prefer_restart", "auto")
     if do_restart and result.get("ok"):
-        _write_status(root, {"phase": "restart", "ok": None, "kind": kind, "stages": stages,
-                             "message": "重启程序…"})
+        _status_stage(root, kind, stages, "restart", "重启程序…", [s["stage"] for s in report])
         single_instance.release()          # 必须先放锁，否则新应用会把自己当第二实例退出
         rl = relaunch_app(root=root, prefer=prefer)
         if rl.get("ok"):
             log(f"已重启（pid={rl.get('pid')}）")
+            report.append({"stage": "restart", "ok": True, "message": "已重启", "at": _now()})
         else:
             result = {"ok": False, "message": rl.get("message", "重启失败")}
+            report.append({"stage": "restart", "ok": False, "message": rl.get("message", ""), "at": _now()})
     else:
         single_instance.release()
-    return _finish(root, kind, frm, result, stages)
+    _clear_prepared(root)
+    return _finish(root, kind, frm, result, stages, report=report)
 
 
-def _apply_formal(root: Path, *, do_backup: bool, do_migrate: bool,
-                  log: Callable[[str], None]) -> dict:
-    """正式版：查最新正式版 → 备份 → 下载预编译包 → 解压替换 → 迁移。重启偏好 ``exe``。"""
-    def stage(name: str, message: str) -> None:
-        _write_status(root, {"phase": name, "ok": None, "kind": "formal",
-                             "stages": _stages_for("formal"), "message": message})
+def _apply_formal(root: Path, *, do_backup: bool, do_migrate: bool, log: Callable[[str], None],
+                  prepared: dict, stages: list, report: list) -> dict:
+    """正式版：查最新正式版 →（备份）→ 下载预编译包 → 解压替换 → 迁移。重启偏好 ``exe``。
 
-    stage("download", "查询最新正式版…")
-    rel = latest_release_tag()
-    if not rel.get("ok"):
-        return {"ok": False, "message": rel.get("message", "查询最新正式版失败")}
-    ver = rel["version"]
-    if not _semver_gt(ver, version.APP_VERSION):
-        return {"ok": True, "to": version.APP_VERSION, "prefer_restart": "exe",
-                "message": f"已是最新正式版（{version.APP_VERSION}）"}
+    ``prepared`` 有效时跳过备份与下载（准备阶段已做、且包已校验 sha256）。
+    """
+    if prepared:
+        tmp = Path(str(prepared.get("asset_path") or ""))
+        ver = str(prepared.get("version") or "")
+        report.append({"stage": "backup", "ok": True, "message": "准备阶段已备份", "at": _now()})
+        report.append({"stage": "download", "ok": True, "message": "准备阶段已下载并校验", "at": _now()})
+        log(f"使用准备阶段已下载的包：{tmp.name}")
+    else:
+        _status_stage(root, "formal", stages, "download", "查询最新正式版…", [])
+        rel = latest_release_tag()
+        if not rel.get("ok"):
+            return {"ok": False, "message": rel.get("message", "查询最新正式版失败")}
+        ver = rel["version"]
+        if not _semver_gt(ver, version.APP_VERSION):
+            return {"ok": True, "to": version.APP_VERSION, "prefer_restart": "exe",
+                    "message": f"已是最新正式版（{version.APP_VERSION}）"}
+        if do_backup:
+            _status_stage(root, "formal", stages, "backup", "备份旧产物…", [])
+            bk = make_backup(root=root, kind="formal")
+            if not bk.get("ok"):
+                return {"ok": False, "message": bk.get("message", "备份失败")}
+            report.append({"stage": "backup", "ok": True, "message": "已备份", "at": _now()})
+            log(f"已备份 → {bk['path']}（{bk['message']}）")
+        else:
+            report.append({"stage": "backup", "ok": True, "message": "跳过（--no-backup）", "at": _now()})
+        tmp = backups_dir(root) / f"_asset-{ver}.zip"
+        _status_stage(root, "formal", stages, "download", f"下载预编译包 {release_asset_name(ver)}…", [])
+        dl = download_release_asset(ver, tmp)
+        if not dl.get("ok"):
+            return {"ok": False, "message": f"{dl.get('message')}（该平台可能尚未发布对应包）"}
+        kb = (dl.get("bytes") or 0) // 1024
+        report.append({"stage": "download", "ok": True, "message": f"已下载 {kb} KB", "at": _now()})
+        log(f"已下载（{kb} KB）")
 
-    if do_backup:
-        stage("backup", "备份旧产物…")
-        bk = make_backup(root=root, kind="formal")
-        if not bk.get("ok"):
-            return {"ok": False, "message": bk.get("message", "备份失败")}
-        log(f"已备份 → {bk['path']}（{bk['message']}）")
-
-    stage("download", f"下载预编译包 {release_asset_name(ver)}…")
-    tmp = backups_dir(root) / f"_asset-{ver}.zip"
-    dl = download_release_asset(ver, tmp)
-    if not dl.get("ok"):
-        return {"ok": False, "message": f"{dl.get('message')}（该平台可能尚未发布对应包）"}
-    log(f"已下载（{dl.get('bytes', 0) // 1024} KB）")
-
+    _status_stage(root, "formal", stages, "extract", "解压替换…", [s["stage"] for s in report])
     ex = extract_release_zip(tmp, root)
     tmp.unlink(missing_ok=True)
     if not ex.get("ok"):
         return {"ok": False, "message": ex.get("message")}
+    report.append({"stage": "extract", "ok": True, "message": "已解压替换", "at": _now()})
 
     if do_migrate:
-        stage("migrate", "迁移数据库结构…")
-        to_schema = str(read_release_meta(update_meta_dir(root)).get("schema_version") or "")
+        _status_stage(root, "formal", stages, "migrate", "迁移数据库结构…", [s["stage"] for s in report])
+        to_schema = str(prepared.get("schema_version")
+                        or read_release_meta(update_meta_dir(root)).get("schema_version") or "")
         if to_schema:
             mg = run_migrations(root=root, apply=True, guard=False, to=to_schema)
             if not mg.get("ok"):
                 return {"ok": False, "message": mg.get("message")}
             log(mg.get("message", "数据库已就绪"))
+            report.append({"stage": "migrate", "ok": True, "message": mg.get("message", ""), "at": _now()})
+        else:
+            report.append({"stage": "migrate", "ok": True, "message": "目标结构版本未知，跳过", "at": _now()})
+    else:
+        report.append({"stage": "migrate", "ok": True, "message": "跳过（--no-migrate）", "at": _now()})
     return {"ok": True, "to": ver, "prefer_restart": "exe"}
 
 
 def _apply_test(root: Path, *, frontend: bool, do_backup: bool, do_migrate: bool,
-                force: bool, log: Callable[[str], None]) -> dict:
-    """测试版：备份 → 获取源码 → 建/补环境 → 构建 → 迁移。重启偏好按当前形态。"""
-    def stage(name: str, message: str) -> None:
-        _write_status(root, {"phase": name, "ok": None, "kind": "test",
-                             "stages": _stages_for("test"), "message": message})
+                force: bool, log: Callable[[str], None], prepared: dict, stages: list,
+                report: list) -> dict:
+    """测试版：备份 → 获取源码 → 建/补环境 → 构建 → 迁移。重启偏好按当前形态。
 
-    if do_backup:
-        stage("backup", "备份旧产物…")
-        bk = make_backup(root=root, kind="test")
-        if not bk.get("ok"):
-            return {"ok": False, "message": bk.get("message", "备份失败")}
-        log(f"已备份 → {bk['path']}")
+    ``prepared`` 有效时源码与构建产物已在准备阶段就绪，此处只需**安装 staging** 再迁移。
+    """
+    def _done() -> list:
+        return [s["stage"] for s in report]
 
-    stage("source", "获取最新源码…")
-    src = ensure_source(root=root, force=force)
-    if not src.get("ok"):
-        return {"ok": False, "message": src.get("message")}
-    log(src.get("message", "源码已就绪"))
+    if prepared:
+        for st, msg in (("backup", "准备阶段已备份"), ("source", "准备阶段已获取源码"),
+                        ("deps", "准备阶段已装依赖"), ("build", "准备阶段已构建到临时目录")):
+            report.append({"stage": st, "ok": True, "message": msg, "at": _now()})
+        vn = ensure_venv(root=root)      # 幂等兜底：确保构建环境仍在
+        if not vn.get("ok"):
+            return {"ok": False, "message": vn.get("message")}
+        _status_stage(root, "test", stages, "install", "安装新版本（构建产物就位）…", _done())
+        ins = _install_staged(prepared.get("staging_dir"), root)
+        if not ins.get("ok"):
+            return {"ok": False, "message": ins.get("message")}
+        report.append({"stage": "install", "ok": True, "message": "已安装", "at": _now()})
+        log("已安装构建产物")
+    else:
+        if do_backup:
+            _status_stage(root, "test", stages, "backup", "备份旧产物…", [])
+            bk = make_backup(root=root, kind="test")
+            if not bk.get("ok"):
+                return {"ok": False, "message": bk.get("message", "备份失败")}
+            report.append({"stage": "backup", "ok": True, "message": "已备份", "at": _now()})
+            log(f"已备份 → {bk['path']}")
+        else:
+            report.append({"stage": "backup", "ok": True, "message": "跳过（--no-backup）", "at": _now()})
 
-    stage("deps", "准备构建环境（虚拟环境 + 依赖）…")
-    vn = ensure_venv(root=root)
-    if not vn.get("ok"):
-        return {"ok": False, "message": vn.get("message")}
-    py = vn["python"]
-    dp = ensure_deps(root=root, python=py)
-    if not dp.get("ok"):
-        return {"ok": False, "message": dp.get("message")}
-    log(dp.get("message", "依赖已就绪"))
+        _status_stage(root, "test", stages, "source", "获取最新源码…", _done())
+        src = ensure_source(root=root, force=force)
+        if not src.get("ok"):
+            return {"ok": False, "message": src.get("message")}
+        report.append({"stage": "source", "ok": True, "message": src.get("message", ""), "at": _now()})
+        log(src.get("message", "源码已就绪"))
 
-    stage("build", "从源码构建（scripts/build.py --frontend）…")
-    bd = run_build(root=root, frontend=frontend, python=py)
-    if not bd.get("ok"):
-        return {"ok": False, "message": bd.get("message")}
-    log(bd.get("message", "构建完成"))
+        _status_stage(root, "test", stages, "deps", "准备构建环境（虚拟环境 + 依赖）…", _done())
+        vn = ensure_venv(root=root)
+        if not vn.get("ok"):
+            return {"ok": False, "message": vn.get("message")}
+        py = vn["python"]
+        dp = ensure_deps(root=root, python=py)
+        if not dp.get("ok"):
+            return {"ok": False, "message": dp.get("message")}
+        report.append({"stage": "deps", "ok": True, "message": dp.get("message", ""), "at": _now()})
+        log(dp.get("message", "依赖已就绪"))
+
+        _status_stage(root, "test", stages, "build", "从源码构建（scripts/build.py --frontend）…", _done())
+        # app 已退出，可直接构建到程序目录（覆盖运行中的 exe 此时已无冲突）
+        bd = run_build(root=root, frontend=frontend, python=py, output=root)
+        if not bd.get("ok"):
+            return {"ok": False, "message": bd.get("message")}
+        report.append({"stage": "build", "ok": True, "message": "构建完成", "at": _now()})
+        report.append({"stage": "install", "ok": True, "message": "构建产物已就位", "at": _now()})
+        log(bd.get("message", "构建完成"))
 
     meta = source_meta(root)                       # 新源码的版本（迁移目标）
     if do_migrate and meta.get("schema_version"):
-        stage("migrate", "迁移数据库结构…")
+        _status_stage(root, "test", stages, "migrate", "迁移数据库结构…", _done())
         mg = run_migrations(root=root, apply=True, guard=False, to=meta["schema_version"])
         if not mg.get("ok"):
             return {"ok": False, "message": mg.get("message")}
+        report.append({"stage": "migrate", "ok": True, "message": mg.get("message", ""), "at": _now()})
         log(mg.get("message", "数据库已就绪"))
-
+    else:
+        report.append({"stage": "migrate", "ok": True, "message": "跳过", "at": _now()})
     return {"ok": True, "to": meta.get("app_version") or version.APP_VERSION,
             "prefer_restart": "exe" if is_frozen() else "source"}
 
 
-def _finish(root: Path, kind: str, frm: str, result: dict, stages: list) -> dict:
+def _finish(root: Path, kind: str, frm: str, result: dict, stages: list,
+            *, report: Optional[list] = None) -> dict:
     ok = bool(result.get("ok"))
     to = result.get("to") or version.APP_VERSION
     msg = "更新完成" if ok else result.get("message", "更新失败")
@@ -1256,6 +1675,7 @@ def _finish(root: Path, kind: str, frm: str, result: dict, stages: list) -> dict
     _write_status(root, {
         "phase": "done" if ok else "failed", "ok": ok, "kind": kind,
         "from": frm, "to": to, "message": msg, "stages": stages,
+        "report": report or [], "log": _latest_update_log(root),
         "finished_at": _now(),
     })
     _log.info("更新流程结束：ok=%s %s", ok, msg)
@@ -1285,24 +1705,25 @@ def _spawn_updater(root: Path, kind: str, terminal: str) -> int:
     return spawn_detached(argv, cwd=root, log=log, env=env)
 
 
-def start_update(kind: str = "formal", *, root: Optional[Any] = None,
-                 restart: bool = True, terminal: str = "auto",
-                 quit_cb: Optional[Callable[[], None]] = None) -> dict:
-    """应用内「立即更新」：写请求文件 → 起脱离进程 → 关程序（交棒）。
+def begin_handoff(kind: str = "formal", *, root: Optional[Any] = None, restart: bool = True,
+                  terminal: str = "auto", quit_cb: Optional[Callable[[], None]] = None,
+                  prepared: Optional[dict] = None) -> dict:
+    """**交棒**：写请求文件（带 ``prepared`` 指针）→ 起脱离进程 → 延时关闭应用。
 
     **顺序不可颠倒**：先把自更新进程起起来，确认起来了，再退出应用。
-    正式版只需能联网下载预编译包；测试版需要能拿到源码（有 git 即可，本机没源码会自动拉）。
+    ``prepared`` 为准备产物清单（缺省读 ``prepared_file``）；交棒进程据它走快路径。
     """
     root = repo_root(root)
     kind = kind if kind in CHANNELS else "formal"
     if kind == "test" and not git_available():
         return {"ok": False, "message": "测试版需要从源码构建：本机未安装 git，无法拉取源码。"}
+    if not isinstance(prepared, dict):
+        prepared = read_prepared(root)
 
     req = {"kind": kind, "restart": bool(restart), "terminal": terminal or "auto",
-           "requested_at": _now(), "relaunch": _relaunch_spec(root)}
-    path = request_file(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(req, ensure_ascii=False, indent=2), encoding="utf-8")
+           "requested_at": _now(), "relaunch": _relaunch_spec(root),
+           "prepared": bool(prepared), "prepared_file": prepared_file(root).name}
+    _write_json_atomic(request_file(root), req)
 
     try:
         pid = _spawn_updater(root, kind, req["terminal"])
@@ -1310,8 +1731,8 @@ def start_update(kind: str = "formal", *, root: Optional[Any] = None,
         _log.error("启动更新进程失败：%s", exc)
         return {"ok": False, "message": f"无法启动更新进程：{exc}"}
 
-    _log.info("已启动更新进程 pid=%s（渠道=%s）", pid, kind)
-    _write_status(root, {"phase": "spawned", "ok": None, "kind": kind,
+    _log.info("已启动更新进程 pid=%s（渠道=%s，准备产物=%s）", pid, kind, bool(prepared))
+    _write_status(root, {"phase": "spawned", "ok": None, "kind": kind, "stages": _stages_for(kind),
                          "message": "已启动更新进程，等待应用退出…"})
 
     if quit_cb is not None:
@@ -1325,6 +1746,16 @@ def start_update(kind: str = "formal", *, root: Optional[Any] = None,
 
         threading.Thread(target=_later, daemon=True).start()
 
-    hint = "将下载预编译包并替换当前程序" if kind == "formal" else "将从源码重新构建"
+    if kind == "formal":
+        hint = "将解压替换当前程序" if prepared else "将下载预编译包并替换当前程序"
+    else:
+        hint = "将安装新版本并重启" if prepared else "将从源码重新构建"
     return {"ok": True, "pid": pid,
             "message": f"已开始更新：程序将关闭，{hint}，完成后自动重启。"}
+
+
+def start_update(kind: str = "formal", *, root: Optional[Any] = None,
+                 restart: bool = True, terminal: str = "auto",
+                 quit_cb: Optional[Callable[[], None]] = None) -> dict:
+    """兼容入口：**旧语义**（不准备、直接交棒）。新流程用 ``prepare_update`` + ``begin_handoff``。"""
+    return begin_handoff(kind, root=repo_root(root), restart=restart, terminal=terminal, quit_cb=quit_cb)

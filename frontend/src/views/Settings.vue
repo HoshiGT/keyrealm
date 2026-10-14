@@ -1,9 +1,9 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Connection, Delete, Edit, Key, Lock, Plus, Refresh } from '@element-plus/icons-vue'
 
-import { api } from '@/api'
+import { api, EVENTS, onEvent } from '@/api'
 import ThemePicker from '@/components/ThemePicker.vue'
 import { useAppStore } from '@/stores/app'
 import { useProxyStore } from '@/stores/proxy'
@@ -334,15 +334,51 @@ async function applyAutostart(value) {
   }
 }
 
-/* ── 程序内更新（从源码编译）──────────────────────────────
+/* ── 程序内更新 ────────────────────────────────────────────
    检查只读：后端用 git 浅克隆读远端版本，不改本机工作区。
-   「立即更新」是交棒动作——后端起更新进程后关闭程序，前端点完切到提示态即可。 */
+   「立即更新」= 应用内先「准备」（备份 + 下载/拉源码/装依赖/构建，带进度、可取消），
+   准备成功后再「交棒」给脱离进程（替换/迁移/重启）并自动关闭程序。 */
 const updateChannel = ref('formal')
 const updateChecking = ref(false)
 const updateResult = ref(null)     // check_update 的结果
 const updateLastStatus = ref(null) // 上次更新的结果（data/.update-status.json）
 const dbMigration = ref(null)      // { disk, app, needs_migration, chain }
-const updating = ref(false)
+const updating = ref(false)            // 正在准备 / 等待交棒
+const updatePrepareTask = ref(null)    // 准备阶段的后台任务快照（vault:tasks，kind==='update'）
+const updateFailed = ref('')           // 准备/交棒失败原因（此时**不退出**应用）
+
+// 更新阶段 → 界面文案（与后端 updater._STAGE_LABELS 对齐）
+const STAGE_LABELS = {
+  backup: '备份', download: '下载预编译包', source: '获取源码', deps: '准备构建环境',
+  build: '构建', extract: '解压替换', install: '安装新版本', migrate: '迁移数据库', restart: '重启',
+}
+function stageLabel(name) {
+  return STAGE_LABELS[name] || name
+}
+
+// 准备进度：total<=0（总量未知，如构建）走不定态
+const preparePercent = computed(() => {
+  const t = updatePrepareTask.value
+  if (!t || !t.total || t.total <= 0) return 0
+  return Math.min(100, Math.round((t.current / t.total) * 100))
+})
+const prepareIndeterminate = computed(() => {
+  const t = updatePrepareTask.value
+  return !t || !t.total || t.total <= 0
+})
+
+// 发现更新的标题：测试版突出 commit 哈希
+const updateFoundTitle = computed(() => {
+  const r = updateResult.value
+  if (!r || !r.ok || !r.has_update) return ''
+  const v = (r.latest && r.latest.version) || ''
+  const c = (r.latest && r.latest.commit) || ''
+  if (r.kind === 'test' && c) {
+    if (v && r.current && v === r.current.version) return `发现新提交 ${c}`
+    return `发现新版本 ${v}（${c}）`
+  }
+  return `发现新版本 ${v}`
+})
 
 // 更新代理：与应用内每凭据的「使用代理」同一套语义，但这里是**全局**一份。
 // 选择值 = 'global' | 'direct' | <某代理 id>。
@@ -483,26 +519,71 @@ async function checkUpdate() {
 
 async function doUpdate() {
   const isFormal = updateChannel.value === 'formal'
-  const what = isFormal ? '下载预编译包并替换当前程序' : '从源码重新构建'
-  const cost = isFormal ? '' : '构建需要几分钟，'
+  const what = isFormal ? '下载预编译包' : '拉取源码并重新构建'
   try {
     await ElMessageBox.confirm(
-      `将关闭程序，${what}，完成后自动重启。${cost}期间请勿手动打开程序。是否继续？`,
+      `将先在程序内${what}（这一步有进度、可取消）；准备完成后程序会自动关闭以完成替换/迁移，然后重启。是否继续？`,
       '立即更新',
       { type: 'warning', confirmButtonText: '立即更新', cancelButtonText: '取消' },
     )
   } catch {
     return
   }
+  updateFailed.value = ''
+  updatePrepareTask.value = null
   updating.value = true
   try {
-    await api.startUpdate(updateChannel.value, true, 'auto')
-    // 成功时后端会在约 0.6 秒后关闭程序，界面停在「更新进行中」提示即可。
+    const res = await api.startUpdate(updateChannel.value, true, 'auto')
+    if (res && res.ok === false) {
+      updating.value = false
+      ElMessage.error(res.message || '无法开始更新')
+    }
+    // ok：后端在后台准备，进度经 vault:tasks 推送（见 onEvent 订阅）
   } catch (err) {
     updating.value = false
     ElMessage.error(err.message || '无法开始更新')
   }
 }
+
+async function cancelUpdate() {
+  const t = updatePrepareTask.value
+  if (!t || !t.id) return
+  try {
+    await api.cancelTask(t.id)
+  } catch { /* 忽略：协作式取消，后端会在检查点停下 */ }
+}
+
+// 订阅后台任务：只认「更新」这一条，用它驱动准备进度与状态
+let _offTasks = null
+let _offUpdateFailed = null
+onMounted(() => {
+  _offTasks = onEvent(EVENTS.tasksChanged, (snapshot) => {
+    if (!snapshot || snapshot.kind !== 'update') return
+    updatePrepareTask.value = snapshot
+    if (snapshot.status === 'running') {
+      updating.value = true
+      updateFailed.value = ''
+    } else if (snapshot.status === 'done') {
+      // 完成 = 即将交棒关闭（程序随即退）；保留 `updating` 让提示停在「即将关闭」态
+      if (snapshot.output) ElMessage.success(snapshot.output)
+    } else if (snapshot.status === 'canceled') {
+      updating.value = false
+      updateFailed.value = ''
+      ElMessage.info('已取消更新准备')
+    } else {
+      updating.value = false
+      updateFailed.value = snapshot.error || '准备更新失败'
+    }
+  })
+  _offUpdateFailed = onEvent(EVENTS.updateFailed, (d) => {
+    updating.value = false
+    updateFailed.value = (d && d.message) || '更新失败'
+  })
+})
+onUnmounted(() => {
+  if (_offTasks) _offTasks()
+  if (_offUpdateFailed) _offUpdateFailed()
+})
 
 const refreshing = ref(false)
 
@@ -766,14 +847,18 @@ onMounted(() => refreshAll(false))
           : (updateResult.has_update ? 'info' : 'success')"
         :title="updateResult.ok === false
           ? (updateResult.message || '检查更新失败')
-          : (updateResult.has_update
-            ? `发现新版本 ${updateResult.latest && updateResult.latest.version}`
-            : '已是最新版本')"
+          : (updateResult.has_update ? updateFoundTitle : '已是最新版本')"
         :closable="false"
         show-icon
       >
         <template v-if="updateResult.ok">
           <div>{{ updateResult.reason }}</div>
+          <div v-if="updateResult.kind === 'test' && updateResult.latest && updateResult.latest.commit">
+            远端提交：{{ updateResult.latest.commit }}
+            <span v-if="updateResult.current && updateResult.current.commit">
+              （本地 {{ updateResult.current.commit }}）
+            </span>
+          </div>
           <div v-if="updateResult.db_change">
             数据库结构将逐级迁移：{{ (updateResult.db_chain || []).join(' → ') }}
           </div>
@@ -790,9 +875,37 @@ onMounted(() => refreshAll(false))
         v-if="updating"
         class="mb-12"
         type="warning"
-        title="更新进行中：程序即将关闭并在终端中重建，完成后自动重启。"
+        :title="updatePrepareTask && updatePrepareTask.status === 'running'
+          ? '正在准备更新（准备好后程序会自动关闭并重启）'
+          : '准备完成，程序即将关闭以完成安装/构建…'"
         :closable="false"
         show-icon
+      >
+        <div v-if="updatePrepareTask" class="prepare-line">
+          <el-progress
+            class="prepare-bar"
+            :percentage="preparePercent"
+            :indeterminate="prepareIndeterminate"
+            :show-text="!prepareIndeterminate"
+          />
+          <span class="prepare-text">{{ updatePrepareTask.text || updatePrepareTask.title }}</span>
+        </div>
+        <div class="update-action">
+          <el-button
+            v-if="updatePrepareTask && updatePrepareTask.status === 'running'"
+            size="small"
+            @click="cancelUpdate"
+          >取消</el-button>
+        </div>
+      </el-alert>
+
+      <el-alert
+        v-if="updateFailed"
+        class="mb-12"
+        type="error"
+        :title="`更新失败：${updateFailed}`"
+        show-icon
+        @close="updateFailed = ''"
       />
 
       <el-alert
@@ -813,7 +926,16 @@ onMounted(() => refreshAll(false))
           + (updateLastStatus.from ? `（${updateLastStatus.from} → ${updateLastStatus.to || '?'}）` : '')"
         :closable="false"
         show-icon
-      />
+      >
+        <div v-if="(updateLastStatus.report || []).length" class="report-list">
+          <div v-for="(s, i) in updateLastStatus.report" :key="i" class="report-item">
+            <span :class="s.ok ? 'report-ok' : 'report-bad'">{{ s.ok ? '✓' : '✗' }}</span>
+            <span class="report-stage">{{ stageLabel(s.stage) }}</span>
+            <span class="report-msg">{{ s.message }}</span>
+          </div>
+        </div>
+        <div v-if="updateLastStatus.log" class="setting-path">日志：{{ updateLastStatus.log }}</div>
+      </el-alert>
     </el-card>
 
     <el-card shadow="never">
@@ -1122,6 +1244,54 @@ onMounted(() => refreshAll(false))
   gap: 8px;
   width: 420px;
   max-width: 100%;
+}
+
+/* ── 更新：准备进度 + 上次更新的逐阶段报告 ─────────────── */
+.prepare-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.prepare-bar {
+  flex: 1;
+  min-width: 120px;
+}
+
+.prepare-text {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.report-list {
+  margin-top: 8px;
+}
+
+.report-item {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.9;
+}
+
+.report-ok {
+  color: var(--el-color-success);
+  font-weight: 700;
+}
+
+.report-bad {
+  color: var(--el-color-danger);
+  font-weight: 700;
+}
+
+.report-stage {
+  min-width: 96px;
+}
+
+.report-msg {
+  color: var(--el-text-color-secondary);
 }
 
 /* ── 代理列表 ───────────────────────────────────────── */

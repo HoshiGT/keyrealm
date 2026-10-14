@@ -28,10 +28,13 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:  # noqa: BLE001
         pass
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _logutil import tee_run_log  # noqa: E402
 from backend import updater  # noqa: E402
 
 
 def main() -> int:
+    tee_run_log("build_update")
     ap = argparse.ArgumentParser(description="Keyrealm 一键更新（备份→编译→迁移→重启）")
     ap.add_argument("--kind", choices=list(updater.CHANNELS), default="formal")
     ap.add_argument("--no-frontend", action="store_true", help="跳过 npm run build")

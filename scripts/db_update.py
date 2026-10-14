@@ -23,10 +23,13 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:  # noqa: BLE001
         pass
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _logutil import tee_run_log  # noqa: E402
 from backend import updater  # noqa: E402
 
 
 def main() -> int:
+    tee_run_log("db_update")
     ap = argparse.ArgumentParser(description="逐级迁移 Keyrealm 数据库结构（默认只演练）")
     ap.add_argument("--apply", action="store_true", help="真正写库（默认只演练，不改任何东西）")
     ap.add_argument("--list", action="store_true", help="只列出版本与迁移链")

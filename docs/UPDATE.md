@@ -23,8 +23,13 @@ Keyrealm 可以在程序内检查并一键更新。**两种渠道的更新方式
 > **Contents: read**）。令牌用**主密码加密**后存本地 settings，**明文不落库**；对 `git` 的认证是
 > 经**环境变量注入**的 `http.extraheader`，**不写进 URL / 命令行**（否则会出现在 `ps` 与错误信息里）。
 > 检查、更新，以及交棒起的更新子进程都会自动带上。**锁库即清**内存中的令牌；公开仓库留空即可。
-> 命令行单独跑四个脚本时用环境变量 **`KEYREALM_UPDATE_TOKEN`**（或用 `KEYREALM_UPDATE_REMOTE`
+> 命令行单独跑脚本时用环境变量 **`KEYREALM_UPDATE_TOKEN`**（或用 `KEYREALM_UPDATE_REMOTE`
 > 把远端指向别处，便于离线自测）。
+
+> **两段式**：应用内「立即更新」先跑 **准备阶段**（备份 + 下载预编译包 / 拉源码 + 装依赖 + 构建，
+> 全程在**应用进程内**、带进度、可取消），准备成功后才**交棒**给一个脱离进程做
+> **构建 / 解压替换 / 数据库迁移 / 重启**——这几步要覆盖运行中的程序文件、且要独占数据库，
+> 必须等应用退出。因此：**准备阶段看得到实时进度，交棒阶段看终端窗口/日志，重启后看「上次更新」的逐阶段报告**。
 
 ---
 
@@ -34,26 +39,36 @@ Keyrealm 可以在程序内检查并一键更新。**两种渠道的更新方式
 
 1. 选**更新渠道**（正式版 / 测试版）。
 2. 选**更新代理**（跟随全局默认 / 直连 / 指定某个代理）；（私有仓库）填**访问令牌**。
-3. 点**检查更新**：只读，比对 GitHub 上的最新版本（不改动本机）。
+3. 点**检查更新**：只读，比对 GitHub 上的最新版本（不改动本机）。**测试版会一并显示远端 commit 哈希**
+   （版本号相同、仅提交不同时，标题会写成「发现新提交 `<commit>`」）。
 4. 有更新 → 显示「发现新版本 X」（正式版还会显示将下载的包名）+ **立即更新**按钮。
-5. 点**立即更新** → 二次确认 → **程序关闭**，在一个终端窗口里执行更新，完成后**自动重启**。
-   卡片会显示「上次更新」的结果（新版本启动后读取）。
+5. 点**立即更新** → 二次确认 → **准备阶段在应用内进行**（卡片显示进度条，可**取消**）：
+   - 正式版：备份 + 下载预编译包（按字节显示百分比）。
+   - 测试版：备份 + 拉取源码 + 装依赖 + 构建（不确定时长，进度条走不定态）。
+6. 准备成功 → **程序自动关闭**，交棒给脱离进程完成**解压替换 / 安装 / 数据库迁移 / 重启**。
+   这几步在**终端窗口（Windows）/ `data/logs/update-*.log`（POSIX）** 里能看到输出。
+7. 重启后，设置页「上次更新」显示**逐阶段报告**（✓/✗ + 日志路径）。
 
-> 应用内这一步是**交棒**：后端先把自更新进程起成一个**脱离进程**，确认起来了，才关闭本程序。
-> 顺序不可颠倒——先关程序就没机会再起更新进程了。
+> **准备失败或取消 → 程序不退出**：错误直接显示在卡片上，可重试。
+> 交棒一步走的是**脱离进程**：先把它起起来、确认起来了，才关闭本程序；顺序不可颠倒。
 
 ---
 
 ## 2. 正式版：下载预编译包（不编译）
 
+**准备阶段（应用内，程序不退出）**：
 1. 查 GitHub Release 的最新正式版标签；与本机 `APP_VERSION` 比，更高才继续。
 2. **备份**当前程序（可执行文件 + `plugins/` + `data/`）。
-3. **下载**对应平台的包 `Keyrealm-<版本>-<平台>.zip`
-   （平台取当前系统与架构；目前 CI 发布的只有 `windows-x64` 与 `macos-arm64`）。
-4. **解压替换**到程序目录（可执行文件 + `plugins/`；包内 `.update-meta/` 也在内，见 §4）。
+3. **下载**对应平台的包 `Keyrealm-<版本>-<平台>.zip` 到 `backups/_asset-<版本>.zip`
+   （平台取当前系统与架构；目前 CI 发布的只有 `windows-x64` 与 `macos-arm64`），算 **SHA-256**。
+4. 写**准备清单** `data/.update-prepared.json`（版本 / 包路径 / sha256 / 目标 `schema_version`）。
+
+**交棒阶段（应用退出后）**：
+5. **校验**清单里的包存在且 sha256 一致（不符则**回落到重新下载**）。
+6. **解压替换**到程序目录（可执行文件 + `plugins/`；包内 `.update-meta/` 也在内，见 §4）。
    **`data/` 目录绝不覆盖**。
-5. 读包内 `.update-meta/version.json` 的 `schema_version`，**逐级迁移**数据库。
-6. 重启新的可执行文件。
+7. 读包内 `.update-meta/version.json` 的 `schema_version`，**逐级迁移**数据库。
+8. 重启新的可执行文件。
 
 > **源码部署也可用**：选了正式版，就等于切到官方的预编译二进制（以后重启跑的是它）。
 > 想留在源码部署，用**测试版**（从源码构建）或手动 `git pull`。
@@ -62,14 +77,21 @@ Keyrealm 可以在程序内检查并一键更新。**两种渠道的更新方式
 
 ## 3. 测试版：从源码构建
 
+**准备阶段（应用内，程序不退出）**：
 1. 备份当前程序。
 2. **获取源码**：程序目录是 git 仓库就快进到 `main`；**不是就就地初始化并检出**
    （`git init` + `fetch` + `checkout` —— 即把程序目录转成源码部署；可执行文件、`data/` 等未跟踪文件原样保留）。
-3. **准备构建环境**：项目下没有 `.venv` 就现建一个，再装 `requirements.txt` + `pyinstaller`
-   （全程走「更新代理」）。
-4. `python scripts/build.py --frontend`（前端 + PyInstaller）。
-5. 读**新源码**的 `SCHEMA_VERSION` 与 `APP_VERSION`，逐级迁移数据库。
-6. 重启（源码部署重启 `python main.py`；二进制部署重启构建出的可执行文件）。
+   > **这一步是「提交点」**：源码一更新，工作区就前进了，而数据库还没迁移——所以此后**不再接受取消**，
+   > 会直接进入构建并交棒。若交棒失败，用 `scripts/build_update.sh --kind test` 手动补完（回落流程会补做构建/迁移/替换）。
+3. **准备构建环境**：项目下没有 `.venv` 就现建一个，再装 `requirements.txt` + `pyinstaller`（全程走「更新代理」）。
+4. `python scripts/build.py --frontend --output build/staged` —— **构建到 `build/staged/`**，
+   不触碰运行中的程序文件（默认落点会覆盖运行中的可执行文件）。
+5. 写**准备清单** `data/.update-prepared.json`（commit / `staging_dir` / venv 解释器 / 目标 `schema_version`）。
+
+**交棒阶段（应用退出后）**：
+6. **安装** `build/staged/`（可执行文件 + `plugins/`）到程序目录。
+7. 读**新源码**的 `SCHEMA_VERSION` 与 `APP_VERSION`，逐级迁移数据库。
+8. 重启（源码部署重启 `python main.py`；二进制部署重启构建出的可执行文件）。
 
 > **需要能构建**：本机要有 **git**、**Python 3.11+**、**Node.js 18+**。缺哪样都会明确报出来。
 > 只想「下载即用」而不想装这些，用**正式版**。
@@ -95,35 +117,42 @@ Keyrealm 可以在程序内检查并一键更新。**两种渠道的更新方式
 
 - **内容**：可执行文件 + `plugins/` + `data/`（数据库走 SQLite 一致性快照；`logs/` 排除）。
 - **位置**：`backups/keyrealm-backup-<渠道>-<版本>-<时间戳>.zip`，**只保留一份**（写新备份前删旧的）。
+  应用内更新在**准备阶段**就备份（因此准备失败或取消时也会留下一份 zip）。
 - **⚠ 含真实密钥**：`data/` 里有 `credentials.db` 与明文密钥文件；备份 zip 因此**含明文**，
   以 `0600` 落盘、目录已被 `.gitignore` 忽略，请自行妥善保管。
 - **恢复**：`scripts/build_update.sh --rollback` 会把备份解压覆盖回程序目录；也可手动解压。
 
 ---
 
-## 6. 命令行（四个独立脚本）
+## 6. 命令行脚本
 
-四个能力各自独立、**无交互**、可单独运行。逻辑只有一份（`backend/updater.py`），
-`.sh` / `.bat` 只是**薄引导**（找 Python；缺 `.venv` 就自动建并装依赖，全程不问话）。
+逻辑只有一份（`backend/updater.py`），`.sh` / `.bat` 只是**薄引导**（找 Python；缺 `.venv` 就
+自动建并装依赖，全程不问话）。**每个脚本都会把本次运行输出另存一份到 `data/logs/<脚本名>-<时间戳>.log`**
+（跨平台：记在 Python 入口，`.bat` 无需 `tee`）。
 
 | 能力 | Linux/macOS | Windows | 底层脚本 |
 |---|---|---|---|
-| 版本检查 | `scripts/check_version.sh` | `.bat` | `check_version.py` |
 | 更新（备份→下载/构建→迁移→重启） | `scripts/build_update.sh` | `.bat` | `build_update.py` |
 | 数据库更新（逐级） | `scripts/db_update.sh` | `.bat` | `db_update.py` |
 | 程序重启 | `scripts/restart.sh` | `.bat` | `restart.py` |
+| 版本检查（无头 CLI，便于脚本/CI 消费） | —（直接 `python scripts/check_version.py`） | — | `check_version.py` |
+
+> **「检查更新」没有 shell 包装**：它已由应用内承担（应用进程内跑）。`check_version.py` 保留为
+> **纯 Python 无头 CLI**（`--json` 便于自动化），不再配 `.sh`/`.bat`。
 
 ```bash
-scripts/check_version.sh --kind formal          # 或 --kind test；--json 便于脚本消费
-scripts/build_update.sh --kind formal           # 正式版：下载预编译包
-scripts/build_update.sh --kind test             # 测试版：从源码构建
-scripts/build_update.sh --dry-run               # 只打印将执行的步骤
+python scripts/check_version.py --kind formal    # 或 --kind test；--json 便于脚本消费
+scripts/build_update.sh --kind formal            # 正式版：自行下载预编译包（回落完整流程）
+scripts/build_update.sh --kind test              # 测试版：自行拉源码 + 构建
+scripts/build_update.sh --dry-run                # 只打印将执行的步骤（含「是否使用准备产物」）
 scripts/build_update.sh --no-restart --no-frontend
-scripts/build_update.sh --rollback [<zip>]      # 从备份恢复
-scripts/db_update.sh --list                     # 版本与迁移链
+scripts/build_update.sh --rollback [<zip>]       # 从备份恢复
+scripts/db_update.sh --list                      # 版本与迁移链
 scripts/restart.sh --wait
 ```
 
+> **应用内 vs 命令行**：应用内「立即更新」是 **准备（应用内，带进度）+ 交棒**；`build_update.sh`
+> 是一次性**完整流程**（自行下载/拉源码/构建）。两者都可用——前者体验好，后者适合无人值守。
 > 离线自测：`KEYREALM_UPDATE_REMOTE` 指向本地 bare 仓库即可，不联网也能验证检查 / 更新逻辑。
 
 ---
@@ -133,11 +162,15 @@ scripts/restart.sh --wait
 | 路径 | 作用 | 是否入库 |
 |---|---|---|
 | `backups/*.zip` | 更新前备份（含密钥） | 忽略 |
-| `backups/_asset-*.zip` | 正式版下载的预编译包（用完即删） | 忽略 |
+| `backups/_asset-*.zip` | 正式版下载的预编译包（就位后即删） | 忽略 |
+| `build/staged/` | 测试版**准备阶段**的构建落点（交棒时安装进程序目录） | 忽略（`build/`） |
 | `.update-meta/` | 从预编译包解出的 `version.json` + `migrations/`（正式版更新后才有） | 忽略 |
-| `data/.update-request.json` | 应用交给更新进程的请求 | 忽略（`data/`） |
-| `data/.update-status.json` | 更新进度与结果，重启后由新应用读取展示 | 忽略（`data/`） |
-| `data/logs/update-*.log` | 无终端时的更新输出 | 忽略 |
+| `data/.update-request.json` | 应用交给交棒进程的请求（含 `prepared` 指针） | 忽略（`data/`） |
+| `data/.update-prepared.json` | **准备产物清单**（版本 / 包路径 / sha256 / staging / 目标 schema） | 忽略（`data/`） |
+| `data/.update-status.json` | 更新进度与结果（含逐阶段 `report`），重启后由新应用读取展示 | 忽略（`data/`） |
+| `data/logs/update-*.log` | 交棒进程（POSIX）无终端时的输出 | 忽略 |
+| `data/logs/build-*.log` | 构建输出（排障用） | 忽略 |
+| `data/logs/<脚本名>-*.log` | 命令行脚本每次运行的输出 | 忽略 |
 | `Keyrealm` / `Keyrealm.exe` / `Keyrealm.old` | 构建产物与回滚副本 | 忽略（`Keyrealm*`） |
 
 ---
@@ -153,6 +186,9 @@ scripts/restart.sh --wait
 | 正式版报「该 Release 里没有 …zip」 | 认证成功但该 Release 里没有本平台/架构的包（CI 只出了 Windows 与 macOS）。 |
 | 测试版报「未安装 git」/「创建虚拟环境失败」 | 测试版要从源码构建：需要 git、Python 3.11+、Node.js 18+。缺哪样按提示补。 |
 | 测试版报「工作区有未提交改动」 | 程序目录是仓库且有本地改动。先 commit/stash，或加 `--force`（先 `git stash` 再合并）。 |
+| 应用内「立即更新」正准备时**失败/取消** | 这是**准备阶段**（应用进程内），**程序不会退出**，错误显示在卡片上，可重试；也可改用 `scripts/build_update.sh` 一次性补完。 |
+| 准备完成后**交棒失败**（更新进程没起来） | 应用不退出。正式版用 `scripts/build_update.sh --kind formal`、测试版用 `--kind test` 手动补完（回落流程会补做替换/构建/迁移）。 |
+| 更新进程在跑但看不到进度 | 交棒阶段应用已退出：Windows 看**独立 CMD 窗口**，POSIX 看 `data/logs/update-*.log`；结论在重启后的「上次更新」报告里。 |
 | 迁移报「迁移链断档」 | 目标结构版本与现有脚本之间缺一跳。补齐 `m_<缺的from>__to_*.py` 或核对 `SCHEMA_VERSION`。 |
 | 迁移报「检测到应用正在运行」 | 应用没完全退出。先退出应用再 `--apply`。 |
 | 重启后没起来 | 看 `data/logs/relaunch-*.log`；或手动 `scripts/restart.sh`。 |
@@ -177,7 +213,8 @@ scripts/restart.sh --wait
 1. `py -3 scripts\_bootstrap.bat` → 建出 `.venv\Scripts\python.exe` 并装好依赖。
 2. `scripts\build_update.bat --dry-run` → 打印将执行的步骤，中文不乱码。
 3. 启动应用 → 设置 → 更新 → **检查更新** → 有更新时点**立即更新**。
-4. 正式版：确认**下载对应平台的包并替换**、程序自动重启；测试版：确认弹出**独立 CMD 窗口**执行构建。
-5. 构建/替换产物 `Keyrealm.exe` 落在**仓库根**；`backups\` 里有且仅有一份 zip（正式版还会短暂出现 `_asset-*.zip`）。
-6. 更新完成后程序**自动重启**；设置页「上次更新」显示结果。
+4. 确认**准备阶段在应用内进行**（卡片显示进度条、可取消）；准备完成后程序自动关闭，
+   弹**独立 CMD 窗口**完成替换/迁移/重启。
+5. 构建/替换产物 `Keyrealm.exe` 落在**仓库根**；`backups\` 里有且仅有一份 zip（正式版就位前还会短暂出现 `_asset-*.zip`）；测试版的构建落点在 `build\staged\`。
+6. 更新完成后程序**自动重启**；设置页「上次更新」显示**逐阶段报告**（✓/✗ + 日志路径）。
 7. 应用运行期间再跑一次 `scripts\db_update.bat --apply` → 应被单实例闸门拒绝。

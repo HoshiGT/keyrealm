@@ -121,6 +121,8 @@ export const EVENTS = {
   // 后台任务变更。detail 是**发生变化的那一条任务快照**（不是全量列表），
   // 消费方就地更新/插入对应行即可；拿不到快照时才回退到 listTasks()。
   tasksChanged: 'vault:tasks',
+  // 更新准备/交棒失败（准备阶段在应用内跑，失败时**不退出**）。detail={kind,message}。
+  updateFailed: 'vault:update_failed',
 }
 
 export const api = {
@@ -320,7 +322,8 @@ export const api = {
   updateStatus: () => call('update_status'),
   // 磁盘数据库结构版本与源码版本的差异：{ok, disk, app, needs_migration, chain}
   dbMigrationStatus: () => call('db_migration_status'),
-  // 立即更新：起更新进程后关闭程序。顺序须与 VaultApi.start_update(kind, restart, terminal) 一致。
+  // 立即更新：**应用内先准备**（备份+下载/拉源码/装依赖/构建，带进度、可取消），准备成功后交棒并自动关闭程序。
+  // 返回 {ok, task_id, preparing}；准备进度经 vault:tasks（kind==='update'）推送。
   startUpdate: (kind = 'formal', restart = true, terminal = 'auto') =>
     call('start_update', kind, restart, terminal),
 }

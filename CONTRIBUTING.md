@@ -171,7 +171,7 @@ keyrealm/
 │   └── mcp_server.py        # MCP Server（SSE）
 ├── assets/                  # 应用图标资源（由 scripts/make_icon.py 生成）
 ├── scripts/                 # 构建与生成脚本（build / pack_source / check_schema / gen_mock_assets；
-│                            #   程序内更新：check_version / build_update / db_update / restart + migrations/）
+│                            #   程序内更新：build_update / db_update / restart + check_version(.py) + migrations/）
 ├── plugins/                 # 插件源码（打包时作为外部目录，不进 exe）
 ├── frontend/                # Vue 3 前端
 │   ├── src/{views,components,stores,api}/
@@ -195,21 +195,26 @@ keyrealm/
   事件名、`VAULT_*` 环境变量、`data/`、`credentials.db`、`master.key`、插件 `credential_type`。
   详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §1.1。
 
-## 7. 程序内更新（从源码编译）
+## 7. 程序内更新
 
 应用内「设置 → 更新」可检查并一键更新（**面向源码运行**的部署；打包分发的 exe 走 Releases）。
-**唯一实现在 `backend/updater.py`**，被应用内（`backend/api.py` → `main.py::VaultApi`）与四个
-独立脚本共用；脚本只做 argparse → 转发。
+**唯一实现在 `backend/updater.py`**，被应用内（`backend/api.py` → `main.py::VaultApi`）与命令行脚本共用。
+
+**两段式**：应用内「立即更新」= **准备（应用进程内，带进度、可取消）** + **交棒（脱离进程）**。
+`prepare_update()` 备份 + 下载预编译包 / 拉源码 + 装依赖 + 构建到 `build/staged/`；准备成功才
+`begin_handoff()` 起脱离进程跑 `apply_update()`（解压替换 / 安装 + 迁移 + 重启）。
+**构建 / 迁移 / 替换必须留在交棒阶段**——`build.py` 会覆盖运行中的可执行文件、`run_migrations`
+要独占数据库，两者都要求应用已退出。
 
 | 能力 | 脚本 | 说明 |
 |---|---|---|
-| 版本检查 | `scripts/check_version.{py,sh,bat}` | 只读：`git clone --depth 1` 到临时目录读远端版本，不碰工作区 |
-| 构建更新 | `scripts/build_update.{py,sh,bat}` | 等应用退出 → 备份 → `git fetch` → `build.py --frontend` → 迁移 → 重启 |
+| （检查更新） | 无 shell 包装；`scripts/check_version.py` | 应用内已承担；`.py` 保留为**无头 CLI**，`--json` 便于自动化 |
+| 构建更新 | `scripts/build_update.{py,sh,bat}` | **完整流程**：等应用退出 → 备份 → `git fetch` → `build.py --frontend` → 迁移 → 重启（无准备产物时的回落路径） |
 | 数据库更新 | `scripts/db_update.{py,sh,bat}` | 逐级迁移（默认演练，`--apply` 才写） |
 | 程序重启 | `scripts/restart.{py,sh,bat}` | 脱离终端重启应用 |
 
 - `.sh`/`.bat` 只做「找 / 装 Python」（缺 `.venv` 就 `python -m venv` 并装 `requirements.txt`
-  + `pyinstaller`），再 `exec` 调同名 `.py`；**全程无交互**。
+  + `pyinstaller`），再 `exec` 调同名 `.py`；**全程无交互**。每次运行输出另存 `data/logs/<脚本名>-*.log`。
 - **两档口径**：正式版按 `APP_VERSION` 比大小；测试版按「版本号 **或** commit」任一不同。
   两档都跟踪 `main`。渠道存 `settings.update_channel`。
 

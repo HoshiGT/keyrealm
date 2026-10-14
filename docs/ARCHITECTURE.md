@@ -631,18 +631,26 @@ pywebview 没有「再次显示」事件可挂（`Form.Shown` 只触发一次，
 
 **职责**：应用内检查 GitHub 最新源码并一键更新（备份 → 从源码重编译 → 逐级迁移数据库 → 重启）。
 
-**唯一实现放 `backend/updater.py`**：应用内（`backend/api.py` 转发 → `main.py::VaultApi`）与四个
-独立脚本（`scripts/{check_version,build_update,db_update,restart}.py` + 各自 `.sh`/`.bat` 薄引导）
-**共用同一份**。之所以放 `backend/` 而不放 `scripts/`：冻结 exe 只打包 `main.py` 的 import 图，
+**唯一实现放 `backend/updater.py`**：应用内（`backend/api.py` 转发 → `main.py::VaultApi`）与命令行
+脚本（`scripts/{build_update,db_update,restart}.py` + 各自 `.sh`/`.bat` 薄引导；`check_version.py` 为
+无头 CLI）**共用同一份**。之所以放 `backend/` 而不放 `scripts/`：冻结 exe 只打包 `main.py` 的 import 图，
 `scripts/` 不进 exe —— 应用内的 `check_update()` 必须在 exe 内可调用。updater 只依赖标准库级的
 内部模块（`paths`/`version`/`database`/`single_instance`），因此**任何 Python 3.11+ 都能 import
-它**（含 venv 尚未创建时），四个脚本据此复用。
+它**（含 venv 尚未创建时），脚本据此复用。
 
-**两档更新方式不同**：**正式版**对比 **GitHub Release 的最新正式版标签**，更新时**下载对应平台的
-预编译包**（`Keyrealm-<版本>-<平台>.zip`）**替换当前程序**、迁移数据库、重启——**不编译**（源码部署
-会因此切成二进制）。**测试版**跟 `main`（版本号 **或** commit 任一不同即算有更新），更新时**从源码
-构建**：程序目录是仓库就快进，否则 `git init` + `fetch` + `checkout` **就地转成源码部署**，再建/补
-`.venv`、装依赖、`scripts/build.py --frontend`。渠道存 `settings.update_channel`。
+**两段式**：应用内「立即更新」拆成 **准备**（`prepare_update()`，应用进程内、带进度、可取消：
+备份 + 下载预编译包 / 拉源码 + 装依赖 + 构建到 `build/staged/`，写 `data/.update-prepared.json`）
+与 **交棒**（`begin_handoff()` 发请求 + 起脱离进程；脱离进程 `apply_update()` 用准备产物走**快路径**，
+无产物则**回落完整流程**）。**构建 / 迁移 / 替换必须留在交棒阶段**——`build.py::assemble_release`
+会 `copy2` 覆盖运行中的可执行文件、`run_migrations` 要独占数据库，两者都要求应用已退出。
+交棒顺序不可颠倒：**先起更新进程、再关闭应用**。
+
+**两档更新方式不同**：**正式版**对比 **GitHub Release 的最新正式版标签**，准备阶段**下载对应平台的
+预编译包**（`Keyrealm-<版本>-<平台>.zip`）并算 SHA-256；交棒阶段校验后**替换当前程序**、迁移数据库、
+重启——**不编译**（源码部署会因此切成二进制）。**测试版**跟 `main`（版本号 **或** commit 任一不同即
+算有更新），准备阶段**从源码构建**：程序目录是仓库就快进，否则 `git init` + `fetch` + `checkout`
+**就地转成源码部署**，再建/补 `.venv`、装依赖、`scripts/build.py --frontend --output build/staged`；
+交棒阶段安装该产物、迁移、重启。渠道存 `settings.update_channel`。
 
 **更新代理**（`settings.update_proxy_mode` / `update_proxy_id`）：跟随全局默认 / 直连 / 指定某个代理，
 环境变量 `KEYREALM_UPDATE_PROXY` 可覆盖。git 的代理经 `git -c http.proxy=…` 注入（**压过 git 全局
