@@ -1003,7 +1003,10 @@ onMounted(() => refreshAll(false))
         :closable="false"
         show-icon
       >
-        <div>下次更新时会自动逐级迁移（{{ (dbMigration.chain || []).join(' → ') }}）。</div>
+        <div>
+          解锁时会自动逐级迁移（{{ (dbMigration.chain || []).join(' → ') }}）。
+          若这条一直显示，说明自动迁移没成功，请看 <code>data/logs/</code> 下的日志。
+        </div>
       </el-alert>
 
       <el-alert

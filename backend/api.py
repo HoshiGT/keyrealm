@@ -182,6 +182,16 @@ def unlock(password: str) -> dict:
     _set_key(key)
     idle_lock.touch()
     tray.update_tray()
+    # 代码比库新（手动构建换了代码 / 导入过更老的库）时，**先把结构补到位**——
+    # 迁移不需要主密码，放在这里正好与紧随其后的数据升级串成一条线：结构 → 数据。
+    try:
+        sc = ensure_schema_current()
+        if sc.get("migrated"):
+            _log.info("数据库结构已自动升级：%s", sc.get("message") or sc.get("applied"))
+        elif not sc.get("ok"):
+            _log.warning("数据库结构升级失败：%s", sc.get("message"))
+    except Exception:  # noqa: BLE001 - 结构升级失败不该拖垮解锁（界面上会继续提示待迁移）
+        _log.exception("数据库结构升级失败（不影响解锁）")
     # 换版 / 更新后：把库里遗留的**老格式凭据数据**升级到当前格式（幂等；失败不能拖垮解锁）
     try:
         up = run_data_upgrades()
@@ -193,6 +203,22 @@ def unlock(password: str) -> dict:
     # 解锁后补跑一次「自动检测更新」——启动时应用还没解锁，私有仓库的检查多半没成
     start_auto_update_check()
     return {"ok": True, "message": "解锁成功"}
+
+
+def ensure_schema_current() -> dict:
+    """把**磁盘库**的结构升到当前代码的 ``SCHEMA_VERSION``（幂等）。
+
+    用在「**代码比库新**」的场合——手动构建换了代码、或导入了更老的库（结构版本只认磁盘上那一行，
+    换代码不会自动改它）。逐级迁移由运行器负责，**每跳成功后**才推进 ``settings.schema_version``，
+    所以版本号永远不会领先于实际结构。结构迁移**不需要主密码**，故在解锁时跑即可。
+    """
+    disk = (db.get_setting("schema_version", "") or "").strip()
+    if disk == version.SCHEMA_VERSION:
+        return {"ok": True, "migrated": False, "version": disk}
+    # guard=False：应用自己就在跑，不能（也不需要）去抢单实例锁
+    res = updater.run_migrations(apply=True, guard=False, to=version.SCHEMA_VERSION)
+    res["migrated"] = bool(res.get("ok") and (res.get("applied") or res.get("steps")))
+    return res
 
 
 def _sensitive_keys(credential_type: str) -> set:
@@ -1499,6 +1525,12 @@ def apply_backup_doc(doc: dict, dedupe: bool = True, source: str = "",
     key = _get_key()
     if key is None:
         return {"error": "vault_locked"}
+    # 导入按「当前插件字段表」填充，所以**先**把库结构补到当前版本——否则结构对不上会填错/填不进去。
+    # （版本号由迁移运行器在每跳成功后推进，不会抢跑。）
+    sc = ensure_schema_current()
+    if not sc.get("ok"):
+        return {"ok": False,
+                "message": f"数据库结构升级失败，已中止导入：{sc.get('message')}"}
     decrypt_key, need_msg = _resolve_decrypt_key(doc, key, orig_password)
     if decrypt_key is None:
         return {"ok": False, "need_password": True, "message": need_msg}
