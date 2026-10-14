@@ -175,6 +175,13 @@ _PINNED_VERSIONS = {
 }
 _VALID_MODES = ("auto", *_PINNED_VERSIONS)
 
+# OpenSSL 3 起不再默认允许「对端不支持 RFC 5746 安全重协商」的握手，于是**任何会改写
+# ServerHello 的前置中间设备**（企业网关、部分代理客户端）都会让握手死在
+# `UNSAFE_LEGACY_RENEGOTIATION_DISABLED`。这里恢复 OpenSSL 1.1 的默认行为——只放宽
+# 「允许连接」，**不**开 `ALLOW_UNSAFE_LEGACY_RENEGOTIATION`（那才是 CVE-2009-3555 那一类）。
+# `getattr` 兜底：旧版 Python（<3.12）没有这个常量，0x4 是 OpenSSL 里的同一个位。
+_OP_LEGACY_SERVER_CONNECT = getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x00000004)
+
 
 def tls_version() -> str:
     """本次请求的 TLS 版本策略：``auto``（默认）/ ``1.0`` / ``1.1`` / ``1.2`` / ``1.3``。
@@ -203,6 +210,7 @@ def _ssl_context(pinned: Optional[str], verify) -> ssl.SSLContext:
         context.verify_mode = ssl.CERT_NONE
     if pinned in _PINNED_VERSIONS:
         context.minimum_version = context.maximum_version = _PINNED_VERSIONS[pinned]
+    context.options |= _OP_LEGACY_SERVER_CONNECT
     return context
 
 
@@ -245,10 +253,9 @@ class _TlsPolicyTransport(httpx.HTTPTransport):
         self._kwargs = kwargs
         self._fallback: Optional[httpx.HTTPTransport] = None
         pinned = tls_mode if tls_mode in _PINNED_VERSIONS else None
-        if pinned or verify is False:
-            super().__init__(verify=_ssl_context(pinned, verify), **kwargs)
-        else:
-            super().__init__(verify=True, **kwargs)
+        # 一律自建 context（不传 verify=True）：`_ssl_context` 除了版本与校验，还挂着
+        # 兼容中间设备的开关，交给 httpx 默认上下文会漏掉它。
+        super().__init__(verify=_ssl_context(pinned, verify), **kwargs)
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         try:
