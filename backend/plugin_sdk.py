@@ -220,6 +220,18 @@ def _is_tls_failure(exc: BaseException) -> bool:
     return any(isinstance(item, (ssl.SSLError, ConnectionResetError)) for item in chain)
 
 
+def _chain_text(exc: BaseException, limit: int = 4) -> str:
+    """异常链压成一行，供日志定位（区分 RST / 证书 / 超时）。"""
+    seen: set[int] = set()
+    parts: list[str] = []
+    node: Optional[BaseException] = exc
+    while node is not None and id(node) not in seen and len(parts) < limit:
+        seen.add(id(node))
+        parts.append(f"{type(node).__name__}: {' '.join(str(node).split())[:120]}")
+        node = node.__cause__ or node.__context__
+    return " <- ".join(parts)
+
+
 class _TlsPolicyTransport(httpx.HTTPTransport):
     """``auto`` 下握手在连接阶段失败时，用 TLS 1.2 重发一次（证书校验照旧）。
 
@@ -246,9 +258,15 @@ class _TlsPolicyTransport(httpx.HTTPTransport):
                 raise
             if self._fallback is None:
                 log("TLS 握手在连接阶段失败（疑似目标只接受特定 TLS 版本）→ 回退 TLS 1.2 重试一次")
+                log(f"  首次失败原因：{_chain_text(exc)}")
                 self._fallback = httpx.HTTPTransport(
                     verify=_ssl_context("1.2", self._verify), **self._kwargs)
-            return self._fallback.handle_request(request)
+            try:
+                return self._fallback.handle_request(request)
+            except httpx.ConnectError as retry_exc:
+                log(f"  TLS 1.2 回退仍失败：{_chain_text(retry_exc)}")
+                raise
+
 
 
 def make_client(follow_redirects: bool = True,
