@@ -373,6 +373,68 @@ async function applyUpdateProxy(value) {
   }
 }
 
+// 访问令牌（私有仓库）：后端加密保存，前端只拿掩码；不回显明文。
+const updateTokenConfigured = ref(false)
+const updateTokenMask = ref('')
+const updateTokenInput = ref('')
+const updateTokenSaving = ref(false)
+
+async function loadUpdateToken() {
+  try {
+    const res = await api.getUpdateToken()
+    if (res && res.ok !== false) {
+      updateTokenConfigured.value = !!res.configured
+      updateTokenMask.value = res.mask || ''
+    }
+  } catch { /* 容错：不阻塞其它卡片 */ }
+}
+
+async function saveUpdateToken() {
+  const token = updateTokenInput.value.trim()
+  if (!token) {
+    ElMessage.warning('请粘贴访问令牌')
+    return
+  }
+  updateTokenSaving.value = true
+  try {
+    const res = await api.setUpdateToken(token)
+    if (res && res.ok === false) {
+      ElMessage.error(res.message || '保存访问令牌失败')
+      return
+    }
+    updateTokenInput.value = ''
+    updateTokenConfigured.value = !!res.configured
+    updateTokenMask.value = res.mask || ''
+    updateResult.value = null
+    ElMessage.success('访问令牌已保存')
+  } catch (err) {
+    ElMessage.error(err.message || '保存访问令牌失败')
+  } finally {
+    updateTokenSaving.value = false
+  }
+}
+
+async function clearUpdateToken() {
+  try {
+    await ElMessageBox.confirm(
+      '清除后，对私有仓库的检查与更新将恢复为匿名访问（会失败）。是否继续？',
+      '清除访问令牌',
+      { type: 'warning', confirmButtonText: '清除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await api.setUpdateToken('')
+    updateTokenConfigured.value = false
+    updateTokenMask.value = ''
+    updateResult.value = null
+    ElMessage.success('访问令牌已清除')
+  } catch (err) {
+    ElMessage.error(err.message || '清除访问令牌失败')
+  }
+}
+
 async function loadUpdateChannel() {
   try {
     const res = await api.getUpdateChannel()
@@ -459,6 +521,7 @@ async function refreshAll(showSpinner = true) {
       loadAutostart(),
       loadUpdateChannel(),
       loadUpdateProxy(),
+      loadUpdateToken(),
       loadUpdateStatus(),
       loadDbMigrationStatus(),
       proxyStore.fetch().catch(() => {}),
@@ -644,6 +707,34 @@ onMounted(() => refreshAll(false))
             :label="`${item.name}（${item.url}）`"
           />
         </el-select>
+      </div>
+
+      <el-divider />
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">访问令牌</div>
+          <div class="setting-desc">
+            本仓库为私有时的访问凭据：填一个 GitHub PAT（经典或细粒度，只需对本仓库的
+            Contents: read 权限）。令牌经主密码加密后保存，明文不落库、不进命令行；
+            公开仓库留空即可。
+          </div>
+          <div v-if="updateTokenConfigured" class="setting-path">
+            已配置：{{ updateTokenMask }}
+          </div>
+        </div>
+        <div class="token-input">
+          <el-input
+            v-model="updateTokenInput"
+            type="password"
+            show-password
+            clearable
+            placeholder="github_pat_… 或 ghp_…"
+            @keyup.enter="saveUpdateToken"
+          />
+          <el-button type="primary" :loading="updateTokenSaving" @click="saveUpdateToken">保存</el-button>
+          <el-button v-if="updateTokenConfigured" @click="clearUpdateToken">清除</el-button>
+        </div>
       </div>
 
       <el-divider />
@@ -1022,6 +1113,15 @@ onMounted(() => refreshAll(false))
 
 .proxy-input {
   width: 280px;
+}
+
+/* 访问令牌：输入框 + 保存/清除按钮，右对齐成一行 */
+.token-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 420px;
+  max-width: 100%;
 }
 
 /* ── 代理列表 ───────────────────────────────────────── */

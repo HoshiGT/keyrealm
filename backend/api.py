@@ -35,8 +35,10 @@ from . import verify_options
 from .crypto import (
     check_verify_token,
     create_verify_token,
+    decrypt,
     decrypt_dict,
     derive_key,
+    encrypt,
     encrypt_dict,
     generate_salt,
     generate_token,
@@ -187,6 +189,7 @@ def lock_vault() -> dict:
     「已解锁」的样子——密钥已经没了，前端必须知道。
     """
     _set_key(None)
+    os.environ.pop(updater.ENV_TOKEN, None)   # 锁库即清令牌，别把 PAT 留在进程 env 里
     push_event("vault:locked")
     tray.update_tray()
     return {"ok": True}
@@ -1496,6 +1499,7 @@ def import_backup() -> dict:
 def update_check(kind: str = "formal") -> dict:
     """检查更新（只读，不改工作区）。正式版看版本号，测试版看版本号 + commit。"""
     try:
+        _sync_update_token()
         return updater.check_update(kind)
     except Exception as e:  # noqa: BLE001 - 检查边界兜底，不把栈甩给前端
         _log.exception("检查更新失败")
@@ -1541,12 +1545,71 @@ def set_update_proxy(mode: str, proxy_id: str = "") -> dict:
     return updater.set_update_proxy(mode, proxy_id)
 
 
+# ── 更新访问令牌（私有仓库）───────────────────────────────
+# 本仓库若为私有，匿名访问 GitHub 会以「要用户名」失败（检查 TLS 报 401/403、公开资产 URL 报 404）。
+# 令牌用**主密码加密**后存 settings（与凭据同口径）；明文只在本进程 env 与内存里。
+# 一旦注入 env，updater 的 git / 下载，以及「交棒」起的更新子进程都会自动带上（见 updater.ENV_TOKEN）。
+
+def _sync_update_token(force: bool = False) -> str:
+    """把已存的令牌解密后注入本进程 env（幂等）；返回当前生效的令牌（无则 ``""``）。
+
+    ``force=True`` 时忽略 env 里的现值，重新按 settings 解析（保存/清除令牌后调用）。
+    未解锁 / 未配置 / 解密失败都不抛错——更新退化为「匿名走公开仓库」，只是对私有仓库会失败。
+    """
+    if not force:
+        cur = os.environ.get(updater.ENV_TOKEN, "")
+        if cur:
+            return cur
+    enc = db.get_setting(updater.SETTING_TOKEN, "")
+    if not enc:
+        os.environ.pop(updater.ENV_TOKEN, None)
+        return ""
+    key = _get_key()
+    if key is None:
+        return ""
+    try:
+        token = (decrypt(key, enc) or "").strip()
+    except Exception as e:  # noqa: BLE001 - 解密失败按「未配置」处理，别拖垮更新入口
+        _log.warning("解密更新访问令牌失败：%s", type(e).__name__)
+        return ""
+    if token:
+        os.environ[updater.ENV_TOKEN] = token
+    else:
+        os.environ.pop(updater.ENV_TOKEN, None)
+    return token
+
+
+def get_update_token() -> dict:
+    """更新访问令牌状态：是否已配置 + 掩码展示（**绝不**回明文）。"""
+    token = _sync_update_token()
+    return {"ok": True, "configured": bool(token), "mask": mask_secret(token)}
+
+
+def set_update_token(token: str) -> dict:
+    """保存 / 清除更新访问令牌（主密码加密后落库，并即时注入 env）。空串 = 清除。"""
+    token = (token or "").strip()
+    if not token:
+        db.set_setting(updater.SETTING_TOKEN, "")
+        os.environ.pop(updater.ENV_TOKEN, None)
+        _log.info("已清除更新访问令牌")
+        return {"ok": True, "configured": False, "mask": ""}
+    key = _get_key()
+    if key is None:
+        return {"ok": False, "message": "请先解锁后再保存访问令牌"}
+    db.set_setting(updater.SETTING_TOKEN, encrypt(key, token))
+    os.environ[updater.ENV_TOKEN] = token
+    _log.info("已保存更新访问令牌（%s）", mask_secret(token))
+    return {"ok": True, "configured": True, "mask": mask_secret(token)}
+
+
 def start_update(kind: str = "formal", restart: bool = True, terminal: str = "auto") -> dict:
     """「立即更新」：先把更新脚本起成脱离进程，再关闭程序（交棒）。
 
     退出走 `_close_quit_cb`（= main._quit_app），与「关闭窗口→直接退出」同一条路径，
     因此停服务 / 停托盘 / 销毁窗口的表现一致。
     """
+    # 交棒前确保令牌已注入 env——脱离进程会继承它（见 updater._spawn_updater）。
+    _sync_update_token()
     result = updater.start_update(kind, restart=restart, terminal=terminal,
                                   quit_cb=_close_quit_cb)
     if result.get("ok"):

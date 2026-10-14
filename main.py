@@ -312,6 +312,12 @@ class VaultApi:
     def set_update_proxy(self, mode: str, proxy_id: str = ""):
         return api.set_update_proxy(mode, proxy_id)
 
+    def get_update_token(self):
+        return api.get_update_token()
+
+    def set_update_token(self, token: str):
+        return api.set_update_token(token)
+
     def start_update(self, kind: str = "formal", restart: bool = True, terminal: str = "auto"):
         return api.start_update(kind, restart, terminal)
 

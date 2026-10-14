@@ -311,6 +311,9 @@ export const api = {
   // 更新走哪个代理：{mode: global|direct|proxy, proxy_id, resolved}。顺序同 VaultApi.set_update_proxy(mode, proxy_id)
   getUpdateProxy: () => call('get_update_proxy'),
   setUpdateProxy: (mode, proxyId = '') => call('set_update_proxy', mode, proxyId),
+  // 更新访问令牌（私有仓库）：{ok, configured, mask}。明文只在后端内存/env，前端只拿掩码。空串 = 清除。
+  getUpdateToken: () => call('get_update_token'),
+  setUpdateToken: (token) => call('set_update_token', token),
   // 检查更新：{ok, kind, has_update, reason, current, latest, db_change, db_chain, source_ok}
   checkUpdate: (kind = 'formal') => call('update_check', kind),
   // 上一次更新的结果（读 data/.update-status.json；无则 {}）

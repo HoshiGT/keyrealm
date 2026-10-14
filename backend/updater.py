@@ -155,9 +155,41 @@ def proxy_env() -> dict:
     return env
 
 
-def _child_env(extra: Optional[dict] = None) -> dict:
-    """子进程环境 = 当前环境 + 更新代理（+ 额外项）。"""
-    return {**os.environ, **proxy_env(), **(extra or {})}
+# 私有仓库：GitHub 访问令牌（PAT）。
+# 取值优先级：显式入参 > 环境变量 ``ENV_TOKEN``。应用内由 ``backend/api.py`` 解密 settings 后
+# 写入本进程 env（见 ``api._sync_update_token``）；四个独立脚本（``scripts/*.py``）直接读环境变量。
+# 令牌**绝不**进 URL / argv（会出现在 ``ps`` 与错误信息里），只经 env 传给 git。
+ENV_TOKEN = "KEYREALM_UPDATE_TOKEN"
+# settings 里的落库键：值 = 主密码加密后的密文（明文绝不落库）。
+SETTING_TOKEN = "update_token"
+
+
+def _resolve_token(token: Optional[str] = None) -> str:
+    return (token or os.environ.get(ENV_TOKEN, "") or "").strip()
+
+
+def _git_auth_env(token: Optional[str] = None) -> dict:
+    """有令牌时给 git 注入 HTTPS Basic 认证。
+
+    经 **env 注入 git 配置**（``GIT_CONFIG_COUNT/KEY_0/VALUE_0``）而不是把令牌写进 URL 或 argv
+    —— 后者会出现在 ``ps`` 与错误信息里。用户名固定用 GitHub 的 ``x-access-token``、密码取令牌。
+    """
+    tok = _resolve_token(token)
+    if not tok:
+        return {}
+    import base64
+
+    basic = base64.b64encode(f"x-access-token:{tok}".encode("utf-8")).decode("ascii")
+    return {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.extraheader",
+        "GIT_CONFIG_VALUE_0": f"Authorization: Basic {basic}",
+    }
+
+
+def _child_env(extra: Optional[dict] = None, token: Optional[str] = None) -> dict:
+    """子进程环境 = 当前环境 + 更新代理 + 私有仓库认证（+ 额外项）。"""
+    return {**os.environ, **proxy_env(), **_git_auth_env(token), **(extra or {})}
 
 
 def _short(text: Any, limit: int = 200) -> str:
@@ -293,7 +325,7 @@ def latest_release_tag(*, timeout: float = 30) -> dict:
         return {"ok": False, "error": "network", "message": "访问远端仓库超时" + _NET_HINT}
     if r.returncode != 0:
         return {"ok": False, "error": "network",
-                "message": f"无法访问远端仓库：{_short(r.stderr) or '未知错误'}" + _NET_HINT}
+                "message": f"无法访问远端仓库：{_short(r.stderr) or '未知错误'}" + _git_fail_hint(r.stderr)}
     versions: list[str] = []
     for line in (r.stdout or "").splitlines():
         ref = line.split("\t", 1)[-1].strip()
@@ -312,21 +344,46 @@ def latest_release_tag(*, timeout: float = 30) -> dict:
     return {"ok": True, "version": best, "tag": f"v{best}"}
 
 
-def download_release_asset(url: str, dest: Path) -> dict:
-    """下载 Release 资产到 ``dest``（走更新代理，先写 .part 再原子替换）。"""
+def download_release_asset(ver: str, dest: Path, *, token: Optional[str] = None) -> dict:
+    """下载某正式版的预编译包到 ``dest``。
+
+    - **有令牌**（私有仓库）：走 GitHub API 的资产端点——先 `/releases/tags/<tag>` 找到同名资产，
+      再 `/releases/assets/<id>` 带 `Accept: application/octet-stream` 取字节。公开下载 URL 对私有仓库会 **404**。
+    - **无令牌**（公开仓库）：直接用 `releases/download/<tag>/<asset>` 公开 URL。
+    两者都走「更新代理」，先写 `.part` 再原子替换。
+    """
+    tok = _resolve_token(token)
+    version = ver[1:] if str(ver).startswith("v") else str(ver)
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         import httpx
     except Exception:  # noqa: BLE001
         return {"ok": False, "message": "缺少 httpx，无法下载预编译包"}
-    dest = Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         with httpx.Client(proxy=update_proxy(),
                           timeout=httpx.Timeout(connect=15.0, read=180.0, write=180.0, pool=15.0),
                           follow_redirects=True, trust_env=False) as client:
-            resp = client.get(url)
+            if tok:
+                api = f"https://api.github.com/repos/{REPO_SLUG}"
+                gh = {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"}
+                meta = client.get(f"{api}/releases/tags/v{version}", headers=gh)
+                if meta.status_code != 200:
+                    return {"ok": False,
+                            "message": f"读取 Release 失败（HTTP {meta.status_code}）"
+                                       f"——请确认「访问令牌」有效且能访问本仓库"}
+                name = release_asset_name(version)
+                asset_id = next((a.get("id") for a in (meta.json().get("assets") or [])
+                                 if a.get("name") == name), None)
+                if not asset_id:
+                    return {"ok": False, "message": f"该 Release 里没有 {name}（该平台可能尚未发布对应包）"}
+                resp = client.get(f"{api}/releases/assets/{asset_id}",
+                                  headers={"Authorization": f"Bearer {tok}",
+                                           "Accept": "application/octet-stream"})
+            else:
+                resp = client.get(release_asset_url(version))
             if resp.status_code != 200:
-                return {"ok": False, "message": f"下载失败（HTTP {resp.status_code}）：{url}"}
+                return {"ok": False, "message": f"下载失败（HTTP {resp.status_code}）"}
             tmp = dest.with_name(dest.name + ".part")
             tmp.write_bytes(resp.content)
             tmp.replace(dest)
@@ -403,7 +460,8 @@ def git_available() -> bool:
     return shutil.which("git") is not None
 
 
-def _git(args: list[str], cwd: Optional[Path] = None, timeout: float = 60) -> subprocess.CompletedProcess:
+def _git(args: list[str], cwd: Optional[Path] = None, timeout: float = 60,
+         token: Optional[str] = None) -> subprocess.CompletedProcess:
     # 代理**必须经 ``-c http.proxy`` 传**：git 的 ``http.proxy`` 配置优先级**高于**
     # ``http_proxy``/``all_proxy`` 环境变量——用户全局 git 配置里若已有 ``http.proxy``，
     # 光设环境变量会被它盖掉，更新代理就形同虚设（本机就踩到过：全局配了 127.0.0.1:10809）。
@@ -415,11 +473,20 @@ def _git(args: list[str], cwd: Optional[Path] = None, timeout: float = 60) -> su
         cwd=str(cwd) if cwd else None,
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=timeout,
-        env=_child_env(),
+        env=_child_env(token=token),
     )
 
 
 _NET_HINT = "；若本机访问 GitHub 需要代理，请在「设置 → 网络与代理」配置默认代理（更新会复用该代理）后重试"
+# 私有仓库：匿名访问 GitHub 会以「要用户名」失败，这时该提示去填访问令牌
+_AUTH_HINT = "；若是私有仓库，请到「设置 → 更新 → 访问令牌」填一个 PAT（Contents: read）后重试"
+
+
+def _git_fail_hint(stderr: str) -> str:
+    text = str(stderr or "")
+    if "Username" in text or "Authentication" in text or "403" in text or "401" in text:
+        return _AUTH_HINT
+    return _NET_HINT
 
 
 def remote_info(*, branch: str = DEFAULT_BRANCH, root: Optional[Any] = None,
@@ -439,7 +506,7 @@ def remote_info(*, branch: str = DEFAULT_BRANCH, root: Optional[Any] = None,
         return {"ok": False, "error": "network", "message": "访问远端仓库超时（网络不可用？）" + _NET_HINT}
     if ls.returncode != 0:
         return {"ok": False, "error": "network",
-                "message": f"无法访问远端仓库：{_short(ls.stderr) or '未知错误'}" + _NET_HINT}
+                "message": f"无法访问远端仓库：{_short(ls.stderr) or '未知错误'}" + _git_fail_hint(ls.stderr)}
     line = (ls.stdout or "").strip().splitlines()
     commit = line[0].split()[0][:7] if line and line[0].split() else ""
     if not commit:
@@ -451,7 +518,7 @@ def remote_info(*, branch: str = DEFAULT_BRANCH, root: Optional[Any] = None,
                    "--branch", branch, url, str(tmp)], timeout=max(timeout, 90))
         if cl.returncode != 0:
             return {"ok": False, "error": "clone",
-                    "message": f"浅克隆失败：{_short(cl.stderr) or '未知错误'}" + _NET_HINT}
+                    "message": f"浅克隆失败：{_short(cl.stderr) or '未知错误'}" + _git_fail_hint(cl.stderr)}
         vfile = tmp / "backend" / "version.py"
         text = vfile.read_text(encoding="utf-8", errors="replace") if vfile.is_file() else ""
         app, schema = _read_version_module(text)
@@ -1111,7 +1178,7 @@ def _apply_formal(root: Path, *, do_backup: bool, do_migrate: bool,
 
     stage("download", f"下载预编译包 {release_asset_name(ver)}…")
     tmp = backups_dir(root) / f"_asset-{ver}.zip"
-    dl = download_release_asset(release_asset_url(ver), tmp)
+    dl = download_release_asset(ver, tmp)
     if not dl.get("ok"):
         return {"ok": False, "message": f"{dl.get('message')}（该平台可能尚未发布对应包）"}
     log(f"已下载（{dl.get('bytes', 0) // 1024} KB）")
