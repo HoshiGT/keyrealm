@@ -63,7 +63,7 @@ Keyrealm 可以在程序内检查并一键更新。**两种渠道的更新方式
 **准备阶段（应用内，程序不退出）**：
 1. 查 GitHub Release 的最新正式版标签；与本机 `APP_VERSION` 比，更高才继续。
 2. **备份**当前程序（可执行文件 + `plugins/` + `data/`）。
-3. **下载**对应平台的包 `Keyrealm-<版本>-<平台>.zip` 到 `backups/_asset-<版本>.zip`
+3. **下载**对应平台的包 `Keyrealm-<版本>-<平台>.zip` 到 `data/backup/_asset-<版本>.zip`
    （平台取当前系统与架构；目前 CI 发布的只有 `windows-x64` 与 `macos-arm64`），算 **SHA-256**。
 4. 写**准备清单** `data/.update-prepared.json`（版本 / 包路径 / sha256 / 目标 `schema_version`）。
 
@@ -137,7 +137,7 @@ Keyrealm 可以在程序内检查并一键更新。**两种渠道的更新方式
   用户数据目录，运行时被 WebView **独占**，一读就 `Permission denied`；它只是可再生的缓存）。
 - **读不了的文件会被跳过而不是让备份失败**：更新前的备份失败会**直接挡住更新**，而读取失败
   多半只是文件被运行中的程序占用——跳过的条目会**如实汇总**在「已备份」的提示里（`N 个文件被占用已跳过`）。
-- **位置**：`backups/keyrealm-backup-<渠道>-<版本>-<时间戳>.zip`，**只保留一份**（写新备份前删旧的）。
+- **位置**：`data/backup/keyrealm-backup-<渠道>-<版本>-<时间戳>.zip`，**只保留一份**（写新备份前删旧的）。
   应用内更新在**准备阶段**就备份（因此准备失败或取消时也会留下一份 zip）。
 - **⚠ 含真实密钥**：`data/` 里有 `credentials.db` 与明文密钥文件；备份 zip 因此**含明文**，
   以 `0600` 落盘、目录已被 `.gitignore` 忽略，请自行妥善保管。
@@ -182,8 +182,8 @@ scripts/restart.sh --wait
 
 | 路径 | 作用 | 是否入库 |
 |---|---|---|
-| `backups/*.zip` | 更新前备份（含密钥） | 忽略 |
-| `backups/_asset-*.zip` | 正式版下载的预编译包（就位后即删） | 忽略 |
+| `data/backup/*.zip` | 更新前备份（含密钥） | 忽略（`data/`） |
+| `data/backup/_asset-*.zip` | 正式版下载的预编译包（就位后即删） | 忽略（`data/`） |
 | `data/keyrealm-full-backup.json` | 更新前备份里随包的**全量导出**（原库损坏也能还原） | 忽略（`data/`） |
 | `.update-staged/` | 测试版**准备阶段**的构建落点（交棒时安装进程序目录，装完即清） | 忽略（`.update-staged/`） |
 | `.update-meta/` | 从预编译包解出的 `version.json` + `migrations/`（正式版更新后才有） | 忽略 |
@@ -208,7 +208,7 @@ scripts/restart.sh --wait
 | 正式版报「读取 Release 失败（HTTP 404）」 | 私有仓库下公开资产 URL 用不了：**没填访问令牌**或令牌权限不足（需 Contents: read）。在「设置 → 更新 → 访问令牌」填/换一个 PAT 后重试。 |
 | 正式版报「该 Release 里没有 …zip」 | 认证成功但该 Release 里没有本平台/架构的包（CI 只出了 Windows 与 macOS）。 |
 | 测试版报「未安装 git」/「创建虚拟环境失败」 | 测试版要从源码构建：需要 git、Python 3.11+、Node.js 18+。缺哪样按提示补。 |
-| 测试版更新时本地改动被丢弃 | 更新**默认直接拉最新、丢弃工作区改动**（部署目录里的改动多半是构建/依赖留下的痕迹，典型是 `npm install` 改写的 `frontend/package-lock.json`）。想保留就先 commit，或用 `scripts/build_update.sh --kind test --force`（先 `git stash` 再合并）。**未跟踪 / 被忽略的文件（`data/`、`backups/`…）不受影响。** |
+| 测试版更新时本地改动被丢弃 | 更新**默认直接拉最新、丢弃工作区改动**（部署目录里的改动多半是构建/依赖留下的痕迹，典型是 `npm install` 改写的 `frontend/package-lock.json`）。想保留就先 commit，或用 `scripts/build_update.sh --kind test --force`（先 `git stash` 再合并）。**未跟踪 / 被忽略的文件（`data/` 等）不受影响。** |
 | 应用内「立即更新」正准备时**失败/取消** | 这是**准备阶段**（应用进程内），**程序不会退出**，错误显示在卡片上，可重试；也可改用 `scripts/build_update.sh` 一次性补完。 |
 | 准备完成后**交棒失败**（更新进程没起来） | 应用不退出。正式版用 `scripts/build_update.sh --kind formal`、测试版用 `--kind test` 手动补完（回落流程会补做替换/构建/迁移）。 |
 | 更新进程在跑但看不到进度 | 交棒阶段应用已退出，进度看 **`data/logs/update-*.log`**（Windows 也一样，不再弹控制台窗口）；结论在重启后的「上次更新」报告里。 |

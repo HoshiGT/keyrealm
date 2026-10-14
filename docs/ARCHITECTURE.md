@@ -689,7 +689,7 @@ POSIX 走 `start_new_session`）→ **确认子进程起来之后**才调 `_clos
 
 **备份**：可执行文件 + `plugins/` + `data/`（DB 走 `sqlite3 backup()` 一致性快照，`logs/`/`webview/` 排除）
 **再外加一份全量导出 `data/keyrealm-full-backup.json`**（复用「备份」功能，见 §备份），
-打成一个 zip 落 `backups/`（gitignored、0600、**含真实密钥**），**只留一份**。构建失败不覆盖旧
+打成一个 zip 落 `data/backup/`（gitignored、0600、**含真实密钥**），**只留一份**。构建失败不覆盖旧
 产物（`assemble_release` 覆盖前留 `Keyrealm.old` 供回滚）；**更新流程换 exe 时沿用同一个 `Keyrealm.old`**
 ——Windows 上运行中的 exe 不能被覆盖（`WinError 32`），只能**先改名腾位**再放新的
 （`updater._replace_exe`；交棒进程自己就跑在这个 exe 上）。

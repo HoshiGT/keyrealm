@@ -339,7 +339,7 @@ def assemble_release(out_dir: Path) -> Path:
     if not built.exists():
         sys.exit(f"未找到构建产物：{built}")
 
-    # 不整体清空 out_dir：保留其中已存在的 data/（运行时数据）、backups/ 等无关文件，
+    # 不整体清空 out_dir：保留其中已存在的 data/（运行时数据，备份在 data/backup/）等无关文件，
     # 只替换本脚本负责的 exe（与、必要时、plugins/）。
     out_dir.mkdir(parents=True, exist_ok=True)
 

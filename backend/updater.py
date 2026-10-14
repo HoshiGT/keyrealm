@@ -77,8 +77,10 @@ SETTING_AUTO_CHECK = "update_auto_check"
 # - ``installed_plugins``：旧缓存；
 # - ``webview``：**WebView2 的用户数据目录**（Cache / Local Storage …）。它由**正在运行的**
 #   WebView 独占，备份时一读就 `Permission denied`——而它只是可再生的缓存（localStorage 里的
-#   偏好丢了也不影响凭据）。**应用内「准备阶段」做备份时它必然被锁**，故必须跳过。
-_BACKUP_SKIP_DIRS = {"logs", "installed_plugins", "webview"}
+#   偏好丢了也不影响凭据）。**应用内「准备阶段」做备份时它必然被锁**，故必须跳过；
+# - ``backup``：更新前的备份 zip 就落在这里（``data/backup/``）——不跳过的话，每次备份都会把
+#   上一份备份一起打进去，越滚越大。
+_BACKUP_SKIP_DIRS = {"logs", "installed_plugins", "webview", "backup"}
 
 
 def _now() -> str:
@@ -252,7 +254,8 @@ def _data_dir(root: Optional[Any] = None) -> Path:
 
 
 def backups_dir(root: Optional[Any] = None) -> Path:
-    return repo_root(root) / "backups"
+    # 放 `data/` 下：与用户数据同处、随备份/迁移一起走，且 `data/` 本就被 gitignore 覆盖
+    return repo_root(root) / "data" / "backup"
 
 
 def status_file(root: Optional[Any] = None) -> Path:
@@ -1034,7 +1037,7 @@ def fetch_latest(*, root: Optional[Any] = None, branch: str = DEFAULT_BRANCH,
     - ``discard=True``：**直接丢弃本地改动**（``git reset --hard FETCH_HEAD``）——**更新走的就是这条**。
       部署目录里的改动多半是构建/依赖留下的痕迹（典型是 ``npm install`` 改写的
       ``frontend/package-lock.json``），不该拦住更新；丢弃清单会记进日志。
-      **未跟踪 / 被 ignore 的文件（``data/``、``backups/``…）不受影响。**
+      **未跟踪 / 被 ignore 的文件（``data/`` 等）不受影响。**
     - 都不给：**拒绝**，避免覆盖用户未提交的改动。
 
     **不用 ``--depth 1``**：浅取会在 FETCH_HEAD 处切出浅边界，本地既有历史与它「接不上」，
