@@ -198,7 +198,11 @@ def get_category_icon(category: str) -> Optional[str]:
 
 
 def _plugin_rel_path(plugin_path: str) -> str:
-    """插件目录相对 plugins/ 的路径（如 llm/deepseek），供前端作为提示展示。"""
+    """把插件目录转成**相对 ``plugins/`` 的路径**（如 ``llm/deepseek``）——写库与展示都用它。
+
+    ``plugins.plugin_path`` 一律存相对值：绝对路径会把程序目录钉死，用户换一次目录就全部失效
+    （早期版本正是这么存的，``_resolve_plugin_path`` 里还留着兜底重定位）。
+    """
     if not plugin_path:
         return ""
     try:
@@ -220,7 +224,7 @@ def _icon_path(record: dict) -> Optional[Path]:
     if not icon or Path(icon).suffix.lower() not in _ICON_IMAGE_MIME:
         return None
     try:
-        plugin_dir = Path(record["plugin_path"]).resolve()
+        plugin_dir = _resolve_plugin_path(record).resolve()
         path = (plugin_dir / icon).resolve()
     except Exception:  # noqa: BLE001 —— 路径不可解析，等同「没有图标」
         return None
@@ -366,7 +370,7 @@ def sync_plugins():
                 version=manifest.version,
                 credential_type=ct,
                 fields_schema=manifest.fields_schema_json(),
-                plugin_path=str(plugin_dir),
+                plugin_path=_plugin_rel_path(str(plugin_dir)),
                 author=manifest.author,
                 description=manifest.description,
                 icon=manifest.icon,
@@ -444,15 +448,20 @@ def _module_missing_error(credential_type: str) -> str:
 
 
 def _resolve_plugin_path(record: dict) -> Path:
-    """取插件目录，记录里的绝对路径失效时就地重算。
+    """取插件目录。
 
-    记录里的 ``plugin_path`` 是**安装时写死的绝对路径**；一旦用户把整个程序目录搬到别处
-    （例如为绕开 Windows 图标缓存而换目录），旧路径就指向不存在的文件夹，加载会失败并报
-    「插件未安装或加载失败」。启动时的 sync_plugins 通常会纠正它，但懒加载/热重载路径
-    不该依赖「必须先跑过一次扫描」——这里兜底：路径不存在时，按
-    ``plugins/<类别>/<服务目录名>`` 重新定位（服务目录名从旧路径末段取，类别取记录字段）。
+    记录里的 ``plugin_path`` 是**相对 ``plugins/`` 的路径**（如 ``llm/deepseek``）——存绝对路径
+    会把程序目录钉死，用户把目录搬到别处就全部失效。为兼容**早期写过绝对路径**的老记录，
+    这里：相对值直接拼 ``PLUGINS_DIR``；绝对值仍照用，失效时按「类别 / 服务目录名」重定位
+    （老库由迁移脚本 ``m_1.1.0__to_1.2.0.py`` 统一改成相对）。
     """
-    path = Path(record.get("plugin_path") or "")
+    raw = str(record.get("plugin_path") or "").strip()
+    if not raw:
+        return PLUGINS_DIR
+    path = Path(raw)
+    if not path.is_absolute():
+        return PLUGINS_DIR / path
+    # —— 老记录：绝对值（迁移前遗留）——
     if (path / "plugin.py").exists():
         return path
     service = path.name

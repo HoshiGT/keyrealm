@@ -1343,7 +1343,7 @@ await window.pywebview.api.set_autostart(true)  // → { ok, enabled }；失败�
   // 服务运行状态
   status: { running: false, host: '127.0.0.1', port: 8765, active_tokens: 0, url: '' },
   permissions: [],           // [{ tool_name, description, enabled }]
-  token: null,               // { exists, id, token_prefix, created_at, last_used_at }
+  token: null,               // { exists, token_prefix }
   busy: false,               // 启动/停止进行中
 
   // 计算属性

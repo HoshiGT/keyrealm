@@ -31,7 +31,7 @@ from .crypto import decrypt, decrypt_dict, encrypt, encrypt_dict, mask_secret
 from .logger import LOG_DIR
 
 FORMAT = "credential-vault-backup"
-VERSION = 2      # v2 = **全量**：加 vault(salt/verify_token) / settings(全部) / schedules / mcp / plugins_disabled
+VERSION = 3      # v3：MCP Token 不再单列（它现在是 settings 里的两条键，随 settings 段搬运）
 
 # 不进 settings 段的键：
 # - `schema_version` 是**结构**版本，跟着库走不合适；
@@ -311,8 +311,8 @@ def build_backup(
             {"tool_name": p["tool_name"], "enabled": bool(p["enabled"])}
             for p in db.list_mcp_permissions()
         ]
-        active = db.get_active_mcp_token()
-        doc["mcp_tokens"] = [_token_doc(active)] if active else []
+        # MCP Token 不再单独成段：它现在就是 settings 里的两条键（`mcp_token_hash` / 前缀），
+        # 随下面的 settings 段一起搬运 —— 跨库还原后同一个 bearer token 继续可用。
         doc["plugins_disabled"] = plugin_manager.disabled_types()
     return doc
 
@@ -327,18 +327,6 @@ def _schedule_doc(s: dict) -> dict:
         "target_id": s.get("target_id"),
         "credential_ids": s.get("credential_ids") or [],
         "enabled": bool(s.get("enabled")),
-    }
-
-
-def _token_doc(t: dict) -> dict:
-    """MCP 活跃令牌的可搬运表示：**只带哈希**——同一 bearer token 在目标库继续可用，
-    但谁也无法从文件反推出原文。"""
-    return {
-        "name": t.get("name"),
-        "token_hash": t.get("token_hash"),
-        "token_prefix": t.get("token_prefix"),
-        "tools_allowed": t.get("tools_allowed") or [],
-        "expires_at": t.get("expires_at"),
     }
 
 
@@ -497,7 +485,6 @@ def import_backup(key: bytes, doc: dict, dedupe: bool = True, source: str = "",
         restored["settings"] = _import_settings(doc, src_key, key)
         restored["schedules"] = _import_schedules(doc)
         restored["mcp_permissions"] = _import_mcp_permissions(doc)
-        restored["mcp_tokens"] = _import_mcp_tokens(doc)
         restored["plugins_disabled"] = _import_plugins_disabled(doc)
 
     # 4) 落两份日志（无论成败都写完整日志；有失败才多写一份含明文的）
@@ -607,30 +594,6 @@ def _import_mcp_permissions(doc: dict) -> int:
         except Exception:  # noqa: BLE001
             continue
     return count
-
-
-def _import_mcp_tokens(doc: dict) -> int:
-    """恢复 MCP 活跃令牌；**只在目标库没有活跃令牌时**建，免得覆盖现有的。"""
-    if db.get_active_mcp_token():
-        return 0
-    count = 0
-    for t in doc.get("mcp_tokens") or []:
-        h = str((t or {}).get("token_hash") or "").strip()
-        if not h:
-            continue
-        try:
-            db.create_mcp_token(
-                name=str(t.get("name") or "（从备份恢复）"),
-                token_hash=h,
-                token_prefix=str(t.get("token_prefix") or h[:8]),
-                tools_allowed=t.get("tools_allowed") or [],
-                expires_at=t.get("expires_at"),
-            )
-            count += 1
-        except Exception:  # noqa: BLE001 - 哈希重复等
-            continue
-    return count
-
 
 def _import_plugins_disabled(doc: dict) -> int:
     types = doc.get("plugins_disabled")

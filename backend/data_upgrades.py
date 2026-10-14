@@ -6,10 +6,9 @@
 **表结构部分**由迁移脚本在更新交棒阶段用 SQL 完成；**数据部分**落到这里——因为凭据的敏感
 字段是**加密**的，交棒阶段（应用已退出）没有主密码，读不出也改不了那些值。
 
-**同一个 ``SCHEMA_VERSION`` 就是同一套数据结构**，不另立版本号。本模块只负责按这套版本
-把数据补到位：
-- 更新 / 换版后：解锁时比较 ``settings.data_schema_version`` 与 ``version.SCHEMA_VERSION``，
-  落后就把库里每条凭据过一遍规则（``api.run_data_upgrades``），跑完记下当前版本；
+**同一个 ``SCHEMA_VERSION`` 就是同一套数据结构**，不另立版本号。本模块只负责把数据补到位：
+- 更新 / 换版后：**解锁时**把库里每条凭据过一遍规则（``api.run_data_upgrades``）——
+  规则**幂等**，所以不记录"做到哪"，每次启动过一次即可（且只处理**有规则的类型**）；
 - 导入备份：落库前把老格式转成当前格式（``backup.import_backup``）。
 
 **规矩**：规则**只在这里维护**——插件应只描述**当前**格式、不写双格式兼容，框架其它地方
@@ -17,7 +16,7 @@
 """
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Optional
 
 # 规则：(credential_type 或 "*", 把老格式数据转成当前格式的函数)
 # 函数收到**解密后的完整 data**，返回升级后的 data（无变化就原样返回）。
@@ -51,3 +50,13 @@ def upgrade_credential(credential_type: str, data: dict) -> dict:
         if ct == "*" or ct == credential_type:
             out = rule(out)
     return out
+
+
+def rule_types() -> Optional[set[str]]:
+    """有升级规则的 ``credential_type`` 集合；含**通配规则**（``"*"``）时返回 ``None``（表示全部）。
+
+    调用方据此把待处理的凭据**限定在相关类型**上——没规则的插件条目连解密都不必要。
+    """
+    if any(ct == "*" for ct, _ in _RULES):
+        return None
+    return {ct for ct, _ in _RULES}

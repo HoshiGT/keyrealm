@@ -103,21 +103,6 @@ def init_db():
             updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
-        CREATE TABLE IF NOT EXISTS mcp_tokens (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            name          TEXT NOT NULL,
-            token_hash    TEXT NOT NULL UNIQUE,
-            token_prefix  TEXT NOT NULL,
-            tools_allowed TEXT DEFAULT '[]',
-            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_used_at  TIMESTAMP,
-            expires_at    TIMESTAMP,
-            revoked       INTEGER DEFAULT 0,
-            revoked_at    TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mcp_tokens_hash ON mcp_tokens(token_hash);
-
         CREATE TABLE IF NOT EXISTS schedules (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             name          TEXT NOT NULL,
@@ -594,81 +579,34 @@ def is_tool_enabled(tool_name: str) -> bool:
     return bool(row and row["enabled"])
 
 
-# ── mcp_tokens ────────────────────────────────────────────
-# MCP 只保留【单个活跃 Token】：轮换时先撤销已有活跃 Token，再签发新的。
+# ── MCP Token ─────────────────────────────────────────────
+# 全局**只有一个**活跃 Token，也不需要生命周期（撤销/过期/最后使用时间）——所以不再单开一张表，
+# 直接放 settings：只记 token 的 **hash** 与 **前缀**（前缀用于界面显示，hash 用于鉴权比对）。
 
-def get_active_mcp_token() -> Optional[dict]:
-    """返回当前活跃（未撤销且未过期）的 Token，取最新创建的一个；无则 None。"""
-    with _lock:
-        row = get_conn().execute(
-            """SELECT * FROM mcp_tokens
-               WHERE revoked=0 AND (expires_at IS NULL OR expires_at > ?)
-               ORDER BY created_at DESC, id DESC LIMIT 1""",
-            (_now(),),
-        ).fetchone()
-    if not row:
+MCP_TOKEN_HASH_KEY = "mcp_token_hash"
+MCP_TOKEN_PREFIX_KEY = "mcp_token_prefix"
+
+
+def get_mcp_token_record() -> Optional[dict]:
+    """当前 MCP Token 的 `{token_hash, token_prefix}`；未设置时 None。"""
+    token_hash = (get_setting(MCP_TOKEN_HASH_KEY, "") or "").strip()
+    if not token_hash:
         return None
-    d = dict(row)
-    d["tools_allowed"] = json.loads(d.get("tools_allowed") or "[]")
-    return d
+    return {
+        "token_hash": token_hash,
+        "token_prefix": get_setting(MCP_TOKEN_PREFIX_KEY, "") or "",
+    }
 
 
-def create_mcp_token(
-    name: str, token_hash: str, token_prefix: str,
-    tools_allowed: list[str] = None, expires_at: Optional[str] = None,
-) -> dict:
-    with _lock:
-        conn = get_conn()
-        cur = conn.execute(
-            """INSERT INTO mcp_tokens (name, token_hash, token_prefix, tools_allowed, created_at, expires_at)
-               VALUES (?,?,?,?,?,?)""",
-            (name, token_hash, token_prefix,
-             json.dumps(tools_allowed or [], ensure_ascii=False), _now(), expires_at),
-        )
-        conn.commit()
-        row = conn.execute("SELECT * FROM mcp_tokens WHERE id=?", (cur.lastrowid,)).fetchone()
-    d = dict(row)
-    d["tools_allowed"] = json.loads(d.get("tools_allowed") or "[]")
-    return d
+def set_mcp_token(token_hash: str, token_prefix: str) -> None:
+    """写入（或覆盖）唯一的 MCP Token。"""
+    set_setting(MCP_TOKEN_HASH_KEY, token_hash)
+    set_setting(MCP_TOKEN_PREFIX_KEY, token_prefix)
 
 
-def get_token_by_hash(token_hash: str) -> Optional[dict]:
-    with _lock:
-        row = get_conn().execute(
-            "SELECT * FROM mcp_tokens WHERE token_hash=? AND revoked=0", (token_hash,)
-        ).fetchone()
-    if not row:
-        return None
-    d = dict(row)
-    d["tools_allowed"] = json.loads(d.get("tools_allowed") or "[]")
-    return d
-
-
-def touch_token(token_hash: str):
-    with _lock:
-        conn = get_conn()
-        conn.execute("UPDATE mcp_tokens SET last_used_at=? WHERE token_hash=?", (_now(), token_hash))
-        conn.commit()
-
-
-def revoke_active_mcp_tokens() -> int:
-    """撤销所有活跃 Token（轮换用，保证全局至多一个活跃 Token）。返回撤销数量。"""
-    with _lock:
-        conn = get_conn()
-        cur = conn.execute(
-            "UPDATE mcp_tokens SET revoked=1, revoked_at=? WHERE revoked=0", (_now(),)
-        )
-        conn.commit()
-    return cur.rowcount or 0
-
-
-def count_active_tokens() -> int:
-    with _lock:
-        row = get_conn().execute(
-            "SELECT COUNT(*) as cnt FROM mcp_tokens WHERE revoked=0 AND (expires_at IS NULL OR expires_at > ?)",
-            (_now(),),
-        ).fetchone()
-    return row["cnt"] if row else 0
+def clear_mcp_token() -> None:
+    set_setting(MCP_TOKEN_HASH_KEY, "")
+    set_setting(MCP_TOKEN_PREFIX_KEY, "")
 
 
 # ── schedules ─────────────────────────────────────────────

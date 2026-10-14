@@ -8,7 +8,7 @@
 | 默认地址 | `http://localhost:8765/sse` |
 | 随应用启动 | 否（在「MCP 设置」页手动启动；启动后窗口最小化到托盘仍持续运行） |
 | 鉴权方式 | Bearer Token（必须） |
-| 权限控制 | 全局工具开关（界面唯一入口）；鉴权层另保留 Token 级 `tools_allowed` 子集，当前无配置入口 |
+| 权限控制 | 全局工具开关（唯一入口）；工具默认关闭，需在 MCP 设置页开启 |
 
 ---
 
@@ -45,8 +45,6 @@ Bearer Token 由 SSE 中间件校验，失败时在建立连接前直接返回 *
 // Token 无效或已被吊销
 {"error": "invalid_token", "message": "Token 无效或已撤销"}
 
-// Token 已过期（expires_at 早于当前时间）
-{"error": "token_expired", "message": "Token 已过期"}
 ```
 
 > **权限不足不是 HTTP 403**：它发生在工具调用内部。**返回的是可读的错误载荷**——刻意**不抛异常**，
@@ -59,8 +57,8 @@ Bearer Token 由 SSE 中间件校验，失败时在建立连接前直接返回 *
 >              Keyrealm →「设置 → MCP 服务 → 工具权限」勾选启用后重试。"}
 > ```
 >
-> `reason` 区分是哪一层拒绝：**`global_disabled`**（全局开关没开 → 去「设置 → MCP 服务 →
-> 工具权限」勾选）或 **`token_scope`**（当前 Token 的允许范围不含它 → 为该 Token 勾选或换 Token）。
+> `reason` 用来区分拒绝原因：**`global_disabled`**（全局开关没开 → 去「设置 → MCP 服务 →
+> 工具权限」勾选启用）。
 > 返回类型与各工具的声明**保持一致**（`dict` 工具返回该对象、列表工具返回 `[该对象]` 单元素数组），
 > 以免触发 MCP 的输出校验。
 
@@ -393,7 +391,7 @@ claude mcp add keyrealm \
     "icon": "logo.png",
     "category": "llm",
     "category_name": "LLM 模型",
-    "plugin_path": "plugins/llm/openai",
+    "plugin_path": "llm/openai",
     "enabled": 1,               // 0/1 整数（1=启用，0=禁用），不是布尔
     "batch_verify": 1,          // 0/1 整数（0=不参与批量验证）
     "installed_at": "2026-10-01T08:00:00Z",
@@ -559,14 +557,10 @@ claude mcp add keyrealm \
 ```
 工具调用请求
     │
-    ▼ 第一层：mcp_permissions 表（全局工具开关）
-    │   enabled=0 → 拒绝，无论 Token 如何配置
+    ▼ mcp_permissions 表（全局工具开关，MCP 的唯一权限层）
+    │   enabled=0 → 拒绝
     │
-    ▼ 第二层：Token.tools_allowed（Token 级范围）
-    │   空数组 [] = 继承全局；非空 = 只允许列表内工具
-    │   鉴权层保留该能力，但界面与 API 均无配置入口，现网恒为空 = 继承全局
-    │
-    ▼ 两层均通过 → 执行工具
+    ▼ 通过 → 执行工具
 ```
 
 ### 权限粒度
@@ -588,10 +582,10 @@ claude mcp add keyrealm \
 
 ### 未授权调用响应
 
-两层权限对应两种**不同形态**的失败，不要混淆：
+鉴权层与工具权限层对应两种**不同形态**的失败，不要混淆：
 
 - **Token 层（HTTP 401）**：连接建立前即被 SSE 中间件拒绝，返回 JSON，见上文
-  「鉴权失败响应」的 `missing_token` / `invalid_token` / `token_expired`。
+  「鉴权失败响应」的 `missing_token` / `invalid_token`。
 - **工具权限层**：工具**不抛异常**，而是原样返回一份**结构化错误载荷**。
   刻意如此——MCP 客户端会把异常正文压成一句「Error executing tool xxx」，**原因被吞掉**，
   用户只看到那句、不知道该去哪开权限；返回结构化结果，`message` 才能原样送到用户眼前。
@@ -609,9 +603,8 @@ claude mcp add keyrealm \
 
 | reason | 含义 |
 |--------|------|
-| `no_identity` | 认不出调用身份（Token 记录没传到工具层）；正常经 HTTP 调用不会出现 |
-| `global_disabled` | 全局开关没开（`mcp_permissions.enabled=0`）；Token 范围授了也没用 |
-| `token_scope` | 全局开着，但当前 Token 的 `tools_allowed` 不含它 |
+| `no_identity` | 请求没经过鉴权层（未经 Bearer 校验）；正常经 HTTP 调用不会出现 |
+| `global_disabled` | 全局开关没开（`mcp_permissions.enabled=0`） |
 
 注意这种拒绝**既不是**协议层错误，**也不是** `is_error=true` 的工具结果——它就是一次
 「调用成功」，正文里说明没执行。声明返回数组的工具（如 `vault_list_credentials`）会把这份

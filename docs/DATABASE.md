@@ -134,7 +134,7 @@ CREATE TABLE plugins (
     credential_type TEXT NOT NULL UNIQUE,  -- 插件唯一标识，如 "llm_openai"
     icon            TEXT DEFAULT '🔑',     -- emoji 或插件目录内图片文件名（如 logo.png）
     fields_schema   TEXT NOT NULL,         -- JSON：字段定义（来自 manifest.json）
-    plugin_path     TEXT NOT NULL,         -- 插件目录路径（plugins/<类别>/<服务>/）
+    plugin_path     TEXT NOT NULL,         -- **相对 plugins/ 的路径**（如 llm/openai）；绝对路径会被程序目录钉死
     category        TEXT DEFAULT '',       -- 类别目录名（llm / api / dns / …，空 = 根级平铺插件）
     category_name   TEXT DEFAULT '',       -- 类别显示名（来自 category.json）
     enabled         INTEGER DEFAULT 1,    -- plugins/.state.json 的只读镜像（不是功能闸门，见「迁移策略」）
@@ -264,24 +264,15 @@ CREATE TABLE mcp_permissions (
 
 ---
 
-### mcp_tokens — MCP 访问令牌
+### MCP Token —— 存在 `settings` 里（不再单开表）
 
-```sql
-CREATE TABLE mcp_tokens (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    name          TEXT NOT NULL,             -- Token 备注名，如 "Claude Desktop"
-    token_hash    TEXT NOT NULL UNIQUE,      -- SHA-256(token)，不存明文
-    token_prefix  TEXT NOT NULL,             -- Token 前 8 位，用于列表展示（如 "kr_a3f2"）
-    tools_allowed TEXT DEFAULT '[]',         -- JSON 数组：允许调用的工具名；空数组 = 继承全局权限
-    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_used_at  TIMESTAMP,
-    expires_at    TIMESTAMP,                 -- NULL = 永不过期
-    revoked       INTEGER DEFAULT 0,         -- 1 = 已吊销
-    revoked_at    TIMESTAMP
-);
+全局**只有一个** Token，也不需要生命周期（撤销 / 过期 / 最后使用时间），所以不单独建表，
+只往 `settings` 写两条键：
 
-CREATE INDEX idx_mcp_tokens_hash ON mcp_tokens(token_hash);
-```
+| key | 值 | 说明 |
+|---|---|---|
+| `mcp_token_hash` | `SHA-256(token)` | 鉴权比对用，**不存明文** |
+| `mcp_token_prefix` | Token 前 8 位 | 界面展示（如 `kr_a3f2`） |
 
 **Token 格式**：`kr_` + 32 位随机十六进制，共 35 字符。
 
@@ -296,18 +287,14 @@ Agent 请求 Header: Authorization: Bearer kr_a3f2...
     │
     ▼ SHA-256("kr_a3f2...") → token_hash
     │
-    ▼ SELECT * FROM mcp_tokens WHERE token_hash=? AND revoked=0
+    ▼ 与 settings.mcp_token_hash 常量时间比对（hmac.compare_digest）
     │
-    ├── 未找到 → 401
-    ├── expires_at < now() → 401（Token 已过期）
-    └── 找到 → 检查 tools_allowed ∩ mcp_permissions → 允许/拒绝
+    ├── 不匹配 → 401 invalid_token
+    └── 匹配 → 再看全局 mcp_permissions 是否开启该工具 → 允许 / 拒绝
 ```
 
-**tools_allowed 示例**：
-```json
-["vault_list_credentials", "vault_verify_credential", "vault_list_groups"]
-```
-> 空数组 `[]` 表示继承全局 `mcp_permissions` 中所有已开启的工具。
+> 工具权限**只有**全局 `mcp_permissions` 一层。早先的「Token 级范围（`tools_allowed`）」没有配置
+> 入口、恒为空，已随这张表一起删掉（见迁移 `m_1.1.0__to_1.2.0.py`）。
 > 当前界面与 API 均未提供设置该字段的入口，实际恒为 `[]`（= 继承全局）；鉴权层保留该能力。
 
 ---
@@ -347,8 +334,7 @@ groups
 
 plugins (credential_type ←→ credentials.credential_type)
 
-mcp_permissions (tool_name)          ← 全局工具开关
-mcp_tokens (tools_allowed JSON)      ← Token 级范围，与 mcp_permissions 取交集（无配置入口，恒为空）
+mcp_permissions (tool_name)          ← 全局工具开关（MCP 的唯一权限层）
 
 schedules (target_id → groups.id 或 NULL；credential_ids → 勾选的凭据 id 列表)
 ```

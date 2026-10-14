@@ -227,6 +227,10 @@ plugins/
 > （哪怕表结构没动）；老数据由 `backend/data_upgrades.py` 的规则在**导入备份**与**更新后解锁时**
 > 转成当前格式，插件只认当前形态即可。
 
+> **动了插件就要提升插件版本号**：改完 `manifest.json` / `plugin.py` 记得把 `version` 一起升
+> （如 `1.0.0 → 1.1.0`）——它是用户与排障时唯一能看出「这个插件是否已更新」的依据。
+> 改完重跑 `scripts/gen_mock_assets.py`（顺带当一次加载冒烟测试）。
+
 > **插件 logo 的来源与许可**：内置插件的品牌图标是**随包分发**的第三方商标图形，取自
 > [Simple Icons](https://simpleicons.org/)（CC0-1.0）、Iconify 的 `thesvg` 集合（MIT）、
 > **App Store 官方图标**（中文区 `itunes.apple.com/search?country=cn`，取 `artworkUrl512` 的高分辨率版；

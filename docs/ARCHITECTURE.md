@@ -411,33 +411,25 @@ Agent 发起 SSE 连接
     │
     ▼ HTTP Header: Authorization: Bearer kr_<32位hex>
     │
-    ▼ [MCP Server] 计算 SHA-256(token)，查询 mcp_tokens 表
+    ▼ [MCP Server] SHA-256(token)，与 settings.mcp_token_hash 常量时间比对
     │
-    ├── 未找到 / 已过期 / 已吊销 → 401 Unauthorized，拒绝连接
+    ├── 不匹配 → 401 Unauthorized，拒绝连接
     │
-    └── 找到有效 token
+    └── 通过
             │
-            ▼ 检查该 token 的 tools_allowed 范围
-            │
-            ▼ 每次工具调用前：检查全局 mcp_permissions 表 + token 范围
-            │
-            ▼ 更新 last_used_at
+            ▼ 每次工具调用前：检查全局 mcp_permissions 表
 ```
 
-**Token 格式**：`kr_` + 32 位随机十六进制（共 35 字符），数据库中只存 SHA-256 哈希，明文仅在创建 / 轮换时展示一次。
+**Token 格式**：`kr_` + 32 位随机十六进制（共 35 字符），只存 SHA-256 哈希，明文仅在创建 / 轮换时展示一次。
 
-MCP 全局只保留**一个活跃 Token**，且**默认即存在**（无则自动创建），仅提供「轮换」
-（作废旧 Token 并签发新 Token，明文仅展示一次）。
+MCP 全局只保留**一个** Token（不再单独建表，就存在 `settings` 的 `mcp_token_hash` / `mcp_token_prefix`
+两条键里），且**默认即存在**（无则自动创建），仅提供「轮换」（签发新 Token 覆盖旧的，明文仅展示一次）。
 
-**权限控制**：
-1. **全局工具开关**（`mcp_permissions` 表）：在 MCP 设置页统一控制，是唯一的权限配置入口
-2. **Token 级范围**（`mcp_tokens.tools_allowed`）：鉴权层仍支持按 Token 限定工具子集，
-   但界面不再暴露该配置——默认空值表示继承全局开关
+**权限控制**：只有**全局工具开关**一层（`mcp_permissions` 表，在 MCP 设置页统一控制）。
+早先的「Token 级范围」没有配置入口、恒为空，已随之删掉。
 
-调用需同时通过全局开关与 Token 范围（当前默认继承全局，等价于只受全局开关约束）。
-任一层的拒绝形态不同：Token 缺失/无效/过期由 SSE 中间件返回 **401 JSON**
-（`missing_token` / `invalid_token` / `token_expired`）；**工具权限**不足则由工具返回一份
-**结构化错误载荷**（`_perm_denied`，字段 `error="permission_denied"` + `reason` +
+调用未通过全局开关时，工具返回一份**结构化错误载荷**（`_perm_denied`，字段
+`error="permission_denied"` + `reason` +
 可照做处理的 `message`），**不抛异常**——异常正文会被客户端压成一句「Error executing
 tool xxx」，把「该去哪开权限」这个关键信息吞掉。
 
@@ -801,8 +793,8 @@ AI Agent（Claude Desktop / Cursor）
 | 内存中密钥泄露 | 密钥仅存于进程内存，不写文件；托盘"锁定"可主动清除 |
 | 无人值守时密钥常驻 | 「空闲自动锁定」按 `auto_lock_minutes` 在无操作一段时间后自动清除内存密钥（[§2.8](ARCHITECTURE.md)） |
 | MCP 未授权访问 | Bearer Token 鉴权，Token 哈希存储，支持吊销和过期时间 |
-| MCP Token 泄露 | 吊销 / 过期后立即失效；记录 last_used_at 便于审计 |
-| MCP 工具越权 | 双层权限取交集：全局工具开关（`mcp_permissions`，界面唯一入口）+ Token 级 `tools_allowed`（鉴权层保留，当前无配置入口，空值即继承全局） |
+| MCP Token 泄露 | 轮换后旧的立即失效（只存 SHA-256，不存明文） |
+| MCP 工具越权 | 全局工具开关（`mcp_permissions`，界面唯一入口）；工具默认关闭，需显式开启 |
 | 插件恶意代码 | 插件在独立命名空间加载，文档中明确信任边界 |
 | 验证请求泄露 Key | 验证逻辑由插件实现，Key 仅发送给对应厂商 API |
 | 后台运行时窗口未锁 | 托盘菜单提供"锁定"操作，清除内存密钥，需重新输入主密码 |

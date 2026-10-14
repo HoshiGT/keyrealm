@@ -5,10 +5,10 @@ MCP Server — SSE 传输，Bearer Token 鉴权
 from __future__ import annotations
 
 import asyncio
+import hmac
 import threading
 import time
 from contextvars import ContextVar
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
 # MCP 这一串依赖（mcp / starlette / uvicorn，连带 pydantic…）常驻约 58MB RSS，但本模块
@@ -27,8 +27,9 @@ from .crypto import decrypt_dict, hash_token
 _get_key_cb = None
 _event_cb = None
 
-# 每个请求的 token 记录，通过 ContextVar 在 ASGI → asyncio.to_thread 链中传播
-_current_token_var: ContextVar[Optional[dict]] = ContextVar("_current_token", default=None)
+# 本请求是否已通过 Bearer 鉴权，通过 ContextVar 在 ASGI → asyncio.to_thread 链中传播
+# （全局只有一个 Token，无需携带 token 记录本身——工具权限统一由「工具权限」全局开关决定）
+_authenticated_var: ContextVar[bool] = ContextVar("_mcp_authenticated", default=False)
 
 _server_thread: Optional[threading.Thread] = None
 _uvicorn_server: Optional[uvicorn.Server] = None
@@ -68,8 +69,8 @@ def _perm_denied(tool_name: str) -> Optional[dict]:
     返回类型与各工具的**声明保持一致**（dict 工具返回 dict、list 工具返回 ``[denied]``），
     免得触发 MCP 的输出校验。
     """
-    record = _current_token_var.get()
-    if record is None:
+    record = _authenticated_var.get()
+    if not record:
         return {"error": "permission_denied", "tool": tool_name, "reason": "no_identity",
                 "message": f"无法确认调用身份，未执行「{tool_name}」。"}
     if not db.is_tool_enabled(tool_name):
@@ -77,13 +78,6 @@ def _perm_denied(tool_name: str) -> Optional[dict]:
             "error": "permission_denied", "tool": tool_name, "reason": "global_disabled",
             "message": (f"工具「{tool_name}」未授权：它在 MCP 里默认就是**关闭**的（高危工具）。"
                         "请到 Keyrealm →「设置 → MCP 服务 → 工具权限」勾选启用后重试。"),
-        }
-    allowed = record.get("tools_allowed") or []
-    if allowed and tool_name not in allowed:
-        return {
-            "error": "permission_denied", "tool": tool_name, "reason": "token_scope",
-            "message": (f"工具「{tool_name}」未授权：当前 MCP Token 的允许范围不含它。"
-                        "请到「设置 → MCP 服务」为该 Token 勾选此工具，或改用允许范围更宽的 Token。"),
         }
     return None
 
@@ -512,28 +506,12 @@ def _make_asgi_app(mcp: MCPServer):
                 return JSONResponse({"error": "missing_token", "message": "需要 Bearer Token"}, status_code=401)
 
             token = auth[7:].strip()
-            token_hash = hash_token(token)
-            record = db.get_token_by_hash(token_hash)
+            record = db.get_mcp_token_record()
+            # 常量时间比较，别按字符逐位泄漏比对进度（Token 就是这里的唯一凭据）
+            if not record or not hmac.compare_digest(hash_token(token), record["token_hash"]):
+                return JSONResponse({"error": "invalid_token", "message": "Token 无效"}, status_code=401)
 
-            if not record:
-                return JSONResponse({"error": "invalid_token", "message": "Token 无效或已撤销"}, status_code=401)
-
-            # 检查过期
-            expires_at = record.get("expires_at")
-            if expires_at:
-                try:
-                    exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-                    if exp < datetime.now(timezone.utc):
-                        return JSONResponse({"error": "token_expired", "message": "Token 已过期"}, status_code=401)
-                except Exception:
-                    pass
-
-            # 更新最后使用时间（异步，不阻塞）
-            threading.Thread(target=db.touch_token, args=(token_hash,), daemon=True).start()
-
-            # 将 token 记录注入 request.state 与 ContextVar（工具内通过 ContextVar 读取）
-            request.state.mcp_token = record
-            _current_token_var.set(record)
+            _authenticated_var.set(True)
             return await call_next(request)
 
     sse_app = mcp.sse_app()

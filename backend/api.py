@@ -49,6 +49,9 @@ from .crypto import (
 
 # 内存中的 AES 密钥（解锁后存在，锁定后清除）
 _master_key: Optional[bytes] = None
+
+# 数据格式升级（见 backend/data_upgrades.py）在本进程内是否已跑过——规则幂等，跑一次就够
+_data_upgrades_done = False
 _key_lock = threading.Lock()
 
 # 哨兵：区分“未提供该参数”与“显式传 None（如清除分组）”
@@ -117,7 +120,7 @@ def get_tray_status() -> dict:
     return {
         "mcp_running": mcp_server.is_running(),
         "mcp_port": mcp_server.get_port(),
-        "active_tokens": db.count_active_tokens(),
+        "active_tokens": 1 if db.get_mcp_token_record() else 0,
         "is_locked": _get_key() is None,
     }
 
@@ -199,24 +202,29 @@ def _sensitive_keys(credential_type: str) -> set:
 
 
 def run_data_upgrades() -> dict:
-    """把库里遗留的**老格式凭据数据**升级到当前数据结构版本（幂等；同一版本不重复跑）。
+    """把库里遗留的**老格式凭据数据**升级到当前格式（幂等；本进程只跑一次）。
 
-    **判据就是 `SCHEMA_VERSION`**（不另立版本号）：`settings.data_schema_version` 落后于它时
-    才跑一次——也就是**数据结构变过**（含"只是凭据格式变了"那种，见 `m_1.0.0__to_1.1.0.py`）。
+    **必须在解锁后调用**：凭据的敏感字段是加密的，没有主密码读不出来——所以这一步做不到结构
+    迁移 `m_*.py` 里（那些跑在更新交棒阶段、应用已退出）。
 
-    **必须解锁后调用**：凭据的敏感字段是加密的，没有主密码读不出来——所以这一步做不到结构
-    迁移 `m_*.py` 里（那些跑在更新交棒阶段、应用已退出）。规则见 `backend/data_upgrades.py`；
-    导入备份在落库前走同一套规则。
+    **不记录"做到哪"**：规则本身幂等（同一个 `SCHEMA_VERSION` 就是同一套数据结构，见
+    `backend/data_upgrades.py`），所以每次启动过一次即可，并且只处理**有升级规则的类型**——
+    没有那类凭据就零成本跳过。导入备份在落库前走**同一套规则**，不依赖这里。
     """
-    target = version.SCHEMA_VERSION
-    cur = (db.get_setting("data_schema_version", "") or "").strip()
-    if cur == target:
-        return {"ok": True, "upgraded": 0, "from": cur, "to": target}
+    global _data_upgrades_done
+    if _data_upgrades_done:
+        return {"ok": True, "upgraded": 0, "skipped": True}
+    types = data_upgrades.rule_types()
+    if types is not None and not types:
+        _data_upgrades_done = True
+        return {"ok": True, "upgraded": 0}
     key = _get_key()
     if key is None:
         return {"ok": False, "message": "保险库未解锁，无法升级数据"}
+    creds = db.list_credentials() if types is None else db.list_credentials(
+        credential_types=sorted(types))
     upgraded = 0
-    for cred in db.list_credentials():
+    for cred in creds:
         ct = cred.get("credential_type") or ""
         blob = cred.get("data_encrypted")
         try:
@@ -233,8 +241,8 @@ def run_data_upgrades() -> dict:
             data_plain={k: v for k, v in new.items() if k not in sensitive},
         )
         upgraded += 1
-    db.set_setting("data_schema_version", target)
-    return {"ok": True, "upgraded": upgraded, "from": cur, "to": target}
+    _data_upgrades_done = True
+    return {"ok": True, "upgraded": upgraded}
 
 
 def lock_vault() -> dict:
@@ -904,7 +912,7 @@ def get_mcp_status() -> dict:
         "running": running,
         "host": mcp_server.get_host(),
         "port": mcp_server.get_port(),
-        "active_tokens": db.count_active_tokens(),
+        "active_tokens": 1 if db.get_mcp_token_record() else 0,
         "url": mcp_server.get_url() if running else "",
     }
 
@@ -979,39 +987,28 @@ def set_mcp_permission(tool_name: str, enabled: bool) -> dict:
 
 
 def _new_mcp_token() -> dict:
-    """生成并落库一个新的 MCP Token。工具范围统一继承「工具权限」全局开关，默认永不过期。"""
+    """生成并保存新的 MCP Token（全局只有一个；只存 hash 与前缀，不记时间）。"""
     token = generate_token()
     token_prefix = token[:8]
-    record = db.create_mcp_token(
-        name="default",
-        token_hash=hash_token(token),
-        token_prefix=token_prefix,
-        tools_allowed=[],
-        expires_at=None,
-    )
-    return {"record": record, "token": token, "token_prefix": token_prefix}
+    db.set_mcp_token(hash_token(token), token_prefix)
+    return {"token": token, "token_prefix": token_prefix}
 
 
 def ensure_mcp_token() -> Optional[dict]:
-    """确保存在一个活跃 Token（无则创建），返回活跃 Token 记录（不含明文）。"""
-    record = db.get_active_mcp_token()
+    """确保存在一个 Token（无则创建），返回记录（不含明文）。"""
+    record = db.get_mcp_token_record()
     if record:
         return record
-    return _new_mcp_token()["record"]
+    _new_mcp_token()
+    return db.get_mcp_token_record()
 
 
 def get_mcp_token() -> dict:
-    """返回当前活跃 Token 的元数据（不含明文）；无则自动创建一个。"""
+    """返回当前 Token 的元数据（不含明文）；无则自动创建一个。"""
     record = ensure_mcp_token()
     if not record:
         return {"exists": False}
-    return {
-        "exists": True,
-        "id": record["id"],
-        "token_prefix": record["token_prefix"],
-        "created_at": record.get("created_at"),
-        "last_used_at": record.get("last_used_at"),
-    }
+    return {"exists": True, "token_prefix": record["token_prefix"]}
 
 
 def _push_mcp_status():
@@ -1021,18 +1018,16 @@ def _push_mcp_status():
         "running": mcp_server.is_running(),
         "host": mcp_server.get_host(),
         "port": mcp_server.get_port(),
-        "active_tokens": db.count_active_tokens(),
+        "active_tokens": 1 if db.get_mcp_token_record() else 0,
     })
 
 
 def rotate_mcp_token() -> dict:
-    """轮换 MCP Token：撤销现有活跃 Token 并签发新的（明文仅返回一次）。"""
-    db.revoke_active_mcp_tokens()
+    """轮换 MCP Token：签发新的覆盖旧的（明文仅返回一次）。"""
     created = _new_mcp_token()
     _push_mcp_status()
     _log.info("已轮换 MCP Token（前缀 %s…）", created["token_prefix"])
     return {
-        "id": created["record"]["id"],
         "token": created["token"],          # 明文仅此一次
         "token_prefix": created["token_prefix"],
     }
