@@ -37,7 +37,7 @@ RASTER_EDGE = 64
 sys.path.insert(0, str(ROOT))
 
 from backend import icon_ink                      # noqa: E402
-from backend.plugin_base import load_plugin_module  # noqa: E402
+from backend.plugin_base import load_plugin_module, plain_text  # noqa: E402
 
 
 def _read_json(path: Path) -> dict:
@@ -131,7 +131,8 @@ def _add(plugins, icons, svc_dir, category, cat_name, cat_icon, enabled) -> None
         "name": mf.get("name") or svc_dir.name,
         "version": mf.get("version") or "1.0.0",
         "author": mf.get("author") or "Keyrealm",
-        "description": mf.get("description") or "",
+        # 前端不渲染 markdown：与生产下发同口径剥掉 `**加粗**`（见 backend/plugin_base.plain_text）
+        "description": plain_text(mf.get("description") or ""),
         "credential_type": ct,
         "icon": icon,
         # 深色主题下要不要垫浅色底：与后端同一套判据（backend/icon_ink.py）。
@@ -146,14 +147,14 @@ def _add(plugins, icons, svc_dir, category, cat_name, cat_icon, enabled) -> None
         "has_actions": has_actions,
         "installed_at": None,                     # 由 mock.js 填 daysAgo(30)，避免时间戳污染产物
         "credential_count": 0,                    # mock 在运行时按凭据现算
-        "fields_schema": mf.get("fields") or [],
+        "fields_schema": plain_text(mf.get("fields") or []),
     })
 
 
 def write_icons(icons: dict[str, str]) -> None:
     lines = [
         "// 内置插件 logo（data URL）。来源与 plugins/<类别>/<服务>/ 下的实际图标文件一致；",
-        "// 位图压到 64px、SVG 保留原文。**由 scripts/gen_mock_assets.py 生成，勿手工编辑。**",
+        "// 位图压到 64px、SVG 保留原文。由 scripts/gen_mock_assets.py 生成，勿手工编辑。",
         "// 仅供开发模式 Mock 后端离线展示；生产构建里 mock.js 被摇树移除，整份数据不会进包。",
         "export const PLUGIN_ICON_IMAGES = {",
     ]
@@ -167,7 +168,7 @@ def write_icons(icons: dict[str, str]) -> None:
 def write_plugins(plugins: list[dict]) -> None:
     lines = [
         "// 插件目录快照：与 plugins/ 目录逐条一致。",
-        "// **由 scripts/gen_mock_assets.py 生成，勿手工编辑**（加插件后重跑该脚本）。",
+        "// 由 scripts/gen_mock_assets.py 生成，勿手工编辑（加插件后重跑该脚本）。",
         "// 供开发模式 Mock 后端离线撑起插件管理页 / 凭据目录树 / 新建类型下拉。",
         "// 注意：不含 icon_image —— 那部分体积大且与 pluginIcons.js 重复，",
         "// 由 mock.js 按 credential_type 从 PLUGIN_ICON_IMAGES 现拼。",

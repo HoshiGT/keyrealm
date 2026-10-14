@@ -1679,7 +1679,7 @@ def apply_update(kind: str = "formal", *, root: Optional[Any] = None, frontend: 
     if not wait_for_app_exit(root=root, log=log):
         _write_status(root, {"phase": "failed", "ok": False, "kind": kind, "stages": stages,
                              "message": "等待应用退出超时"})
-        log("✗ 等待应用退出超时——更新中止，**未改动任何文件**。"
+        log("✗ 等待应用退出超时——更新中止，未改动任何文件。"
             "多半是程序没完全退出（托盘常驻/后台线程未停）或单实例锁没释放；"
             "请彻底退出程序后再试。")
         return {"ok": False, "message": "等待应用退出超时"}
@@ -1716,7 +1716,7 @@ def apply_update(kind: str = "formal", *, root: Optional[Any] = None, frontend: 
     final = _finish(root, kind, frm, result, stages, report=report)
     log(("✓ " if final.get("ok") else "✗ ") + str(final.get("message", "")))
     if not final.get("ok"):
-        log("（更新失败：本次**未替换程序文件**，原程序仍可用。"
+        log("（更新失败：本次未替换程序文件，原程序仍可用。"
             "详情见本次日志与「设置 → 更新 → 上次更新」。）")
     return final
 

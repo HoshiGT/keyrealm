@@ -8,6 +8,7 @@ import importlib.util
 import inspect
 import json
 import logging
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +35,24 @@ def _friendly_error(e: Exception) -> str:
 def _plugin_name(module: Any) -> str:
     """取插件的可读标识（用于日志），去掉内部模块名前缀。"""
     return getattr(module, "__name__", "?").replace("_vault_plugin_", "")
+
+
+# 前端**不渲染 markdown**（提示文本一律按纯文本显示），而插件作者常按 README 习惯写
+# `**加粗**`，界面上就会露出字面星号。这里在解析 manifest 时统一剥成纯文本（只留内容）。
+# 正则加 `(?!/)` 负向断言：`**/` 是 glob（如 `**/*.py`）而不是加粗标记，放行——
+# 即便同一段里同时出现 glob 与加粗，glob 也不会被误剥。
+_MD_BOLD = re.compile(r"\*\*(?!/)(.+?)\*\*", re.S)
+
+
+def plain_text(text: Any) -> Any:
+    """把 `**加粗**` 剥成纯文本；字符串以外的容器递归处理，其它类型原样返回。"""
+    if isinstance(text, str):
+        return _MD_BOLD.sub(r"\1", text) if "**" in text else text
+    if isinstance(text, list):
+        return [plain_text(x) for x in text]
+    if isinstance(text, dict):
+        return {k: plain_text(v) for k, v in text.items()}
+    return text
 
 
 # VerifyResult 是框架与插件**共用**的权威定义，住在 backend/plugin_sdk.py（插件唯一
@@ -103,14 +122,14 @@ class PluginManifest:
         for f in data.get("fields", []):
             fields.append(FieldSchema(
                 key=f["key"],
-                label=f["label"],
+                label=plain_text(f["label"]),
                 type=f.get("type", "text"),
                 required=f.get("required", False),
                 sensitive=f.get("sensitive", False),
                 default=f.get("default"),
-                placeholder=f.get("placeholder", ""),
-                options=f.get("options", []),
-                hint=f.get("hint", ""),
+                placeholder=plain_text(f.get("placeholder", "")),
+                options=plain_text(f.get("options", [])),
+                hint=plain_text(f.get("hint", "")),
                 preset=f.get("preset"),
                 show_if=f.get("show_if"),
             ))
@@ -119,7 +138,7 @@ class PluginManifest:
             version=data["version"],
             credential_type=data["credential_type"],
             author=data.get("author", ""),
-            description=data.get("description", ""),
+            description=plain_text(data.get("description", "")),
             icon=data.get("icon", "🔑"),
             fields=fields,
             batch_verify=bool(data.get("batch_verify", True)),

@@ -171,12 +171,13 @@ async function openLog(field) {
       </el-form>
 
       <el-alert type="info" :closable="false" show-icon class="tip">
-        加密备份的敏感字段保持密文、不落明文，但只能用同一主密码导入；
-        不加密备份为明文，可在不同主密码的库上导入。
-        <br />
-        「整库」会额外带上分组 / 代理 / 预设 / 定时计划 / 设置 / **保险库 KDF（盐）** / MCP / 插件启停，
-        并因此**自包含**——换台机器、或原库损坏丢失，导入它都能还原（来自别的保险库时会再问当时的主密码）；
-        「仅选中的凭据」只导出勾选的条目，导入时不会改动上述整库档内容。
+        <div>加密：敏感值保持密文，需同一主密码导入。</div>
+        <div>不加密：敏感值为明文，可在任意主密码的库上导入。</div>
+        <div>
+          「整库」：另含分组 / 代理 / 预设 / 定时计划 / 设置 / 保险库 KDF（盐）/ MCP / 插件启停，
+          自包含——换机器或原库损坏都能还原（来自别的保险库时会再问当时的主密码）。
+        </div>
+        <div>「仅选中」：只导出勾选的凭据，不涉及上述整库内容。</div>
       </el-alert>
 
       <div class="actions">
@@ -194,16 +195,16 @@ async function openLog(field) {
 
     <el-card shadow="never">
       <template #header><span>导入备份</span></template>
+      <p class="desc text-muted">选择备份文件，自动识别加密 / 明文。</p>
+      <p class="desc text-muted">导入按<strong>当前插件字段表</strong>填充，插件新增的字段留空。</p>
       <p class="desc text-muted">
-        选择备份文件导入，会自动识别加密 / 明文。导入按<strong>当前系统的插件字段表</strong>填充：
-        插件新增的字段留空即可；反之，插件未安装 / 已禁用、备份里出现当前插件不认识的字段、
-        必填字段在备份里没有着落（且插件也没给默认值）的条目，都会<strong>整条判失败</strong>而不入库。
+        插件未安装 / 已禁用、字段不认识、必填项无着落 → <strong>整条失败</strong>，不入库。
       </p>
       <p class="desc text-muted">
-        每次导入都会在 <code>data/logs/</code> 下留一份完整导入日志（含成功条目，敏感值已脱敏）；
-        若有失败，另生成一份失败日志（只含失败条目、<strong>保留明文</strong>，供人工比对补录）。
-        失败原因会在导入后弹窗逐条列出，并可一键打开日志。
+        每次导入在 <code>data/logs/</code> 留完整日志（敏感值已脱敏），有失败时另留失败日志
+        （含失败条目明文，供人工补录）。
       </p>
+      <p class="desc text-muted">失败原因导入后弹窗逐条列出，可一键打开日志。</p>
       <div class="actions">
         <el-button :icon="Upload" :loading="importing" @click="doImport">导入备份</el-button>
       </div>

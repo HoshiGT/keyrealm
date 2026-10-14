@@ -79,7 +79,7 @@
       "required": false,
       "sensitive": true,
       "placeholder": "rt.1...（可选）",
-      "hint": "可选。auth.json 里 tokens.refresh_token（形如 rt.1.…）。只读校验**不会**用它；填了之后「操作」里会多出「刷新 access_token」，由你手动点、用它在过期后换一组新令牌（会轮换 refresh_token 并自动写回本凭据）。",
+      "hint": "可选。auth.json 里 tokens.refresh_token（形如 rt.1.…）。只读校验不会用它；填了之后「操作」里会多出「刷新 access_token」，由你手动点、用它在过期后换一组新令牌（会轮换 refresh_token 并自动写回本凭据）。",
       "show_if": {
         "auth_mode": "chatgpt"
       }

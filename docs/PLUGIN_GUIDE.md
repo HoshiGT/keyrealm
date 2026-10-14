@@ -217,6 +217,10 @@ plugins/
 | `icon` | 服务显示图标。填 emoji（如 `🐋`）直接使用；也可填插件目录内的图片文件名（如 `"logo.png"`，支持 png/jpg/svg/webp/ico/gif），后端读取为 data URL 返回（`icon_image` 字段），前端优先展示图片，缺省回退 emoji `🔑`。图片形态下后端还会附一个 `icon_lift`（bool）——深色主题下该 logo 是否需要垫一层浅色底，由 `backend/icon_ink.py` 自动判定（位图取不透明像素 `max(r,g,b)` 的 p90、SVG 取 `fill`/`stroke` 声明的颜色，纯黑标为真），**作者无需关心** |
 | `batch_verify` | 是否参与批量验证，默认 `true`。**有写副作用**的插件应设为 `false`（如 `duckdns`——它的校验本身就是一次写解析）：前端在选中该类型时禁用「批量验证」按钮，只能逐条手动验证；后端批量时也会跳过这些类型并在结果里统计「跳过 N」 |
 
+> **提示文本按纯文本渲染**：`description` 与各字段的 `label` / `placeholder` / `hint` 前端**不解析 markdown**，
+> 直接写中文即可。写了 `**加粗**` 会在解析 manifest 时被自动剥成纯文本（`backend/plugin_base.plain_text`），
+> 别指望它变粗；glob 形式的 `**`（如 `**/*.py`）不受影响。
+
 > **插件 logo 的来源与许可**：内置插件的品牌图标是**随包分发**的第三方商标图形，取自
 > [Simple Icons](https://simpleicons.org/)（CC0-1.0）、Iconify 的 `thesvg` 集合（MIT）、
 > **App Store 官方图标**（中文区 `itunes.apple.com/search?country=cn`，取 `artworkUrl512` 的高分辨率版；
