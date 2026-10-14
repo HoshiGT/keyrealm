@@ -215,6 +215,8 @@ def ensure_schema_current() -> dict:
     disk = (db.get_setting("schema_version", "") or "").strip()
     if disk == version.SCHEMA_VERSION:
         return {"ok": True, "migrated": False, "version": disk}
+    _log.info("数据库结构落后于代码（磁盘 %s → 代码 %s），开始自动迁移",
+              disk or "（空）", version.SCHEMA_VERSION)
     # guard=False：应用自己就在跑，不能（也不需要）去抢单实例锁
     res = updater.run_migrations(apply=True, guard=False, to=version.SCHEMA_VERSION)
     res["migrated"] = bool(res.get("ok") and (res.get("applied") or res.get("steps")))

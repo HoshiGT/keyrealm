@@ -830,10 +830,13 @@ def run_migrations(*, root: Optional[Any] = None, apply: bool = False,
     frm = st["disk"]
     to = (to or "").strip() or st["app"]
     if not frm:
+        _log.info("数据库结构迁移：库尚未创建，无需迁移")
         return {"ok": True, "steps": [], "message": "数据库尚未创建，无需迁移"}
     if frm == to:
+        _log.info("数据库结构迁移：已是最新（%s），无需迁移", to)
         return {"ok": True, "steps": [], "message": f"数据库结构已是最新（{to}）"}
     if not _semver_gt(to, frm):
+        _log.info("数据库结构迁移：磁盘 %s 不低于目标 %s，跳过", frm, to)
         return {"ok": True, "steps": [],
                 "message": f"磁盘版本 {frm} 不低于目标版本 {to}，无需迁移"}
 
@@ -841,38 +844,56 @@ def run_migrations(*, root: Optional[Any] = None, apply: bool = False,
     labels = [f"{a}→{b}" for a, b, _ in steps]
     if not steps or steps[-1][1] != to:
         reached = steps[-1][1] if steps else frm
+        _log.error("✗ 数据库结构迁移链断档：从 %s 到 %s 缺脚本（已找到：%s）",
+                   frm, to, labels or "无")
         return {"ok": False, "steps": labels,
                 "message": f"迁移链断档：缺少从 {reached} 升级的脚本（需 m_{reached}__to_*.py，"
                            f"放在 scripts/migrations/ 或 .update-meta/migrations/）"}
     if not apply:
+        _log.info("数据库结构迁移演练：%s（共 %d 跳）",
+                  " → ".join([frm] + [b for _, b, _ in steps]), len(steps))
         return {"ok": True, "dry_run": True, "steps": labels,
                 "message": "演练：将逐级迁移 " + " → ".join([frm] + [b for _, b, _ in steps])}
 
     if guard and not single_instance.acquire():
+        _log.warning("数据库结构迁移被拒：应用正在运行")
         return {"ok": False, "message": "检测到应用正在运行，请先完全退出再更新数据库"}
 
     db_path = root / "data" / "credentials.db"
+    t0 = time.monotonic()
+    _log.info("=== 数据库结构迁移开始：%s → %s，共 %d 跳（库：%s）===", frm, to, len(steps), db_path)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     done: list[str] = []
     try:
-        for f, t, path in steps:
+        for i, (f, t, path) in enumerate(steps, 1):
+            _log.info("[%d/%d] %s → %s（脚本 %s）", i, len(steps), f, t, Path(path).name)
             if backup:
-                _snapshot_db(conn, db_path, f)
+                snap = _snapshot_db(conn, db_path, f)
+                _log.info("      已留快照：%s", snap.name)
             mod = _load_module(path)
+            try:                                  # 盘点只是只读预览，失败不该挡住迁移
+                _log.info("      盘点：%s", mod.preview(conn))
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("      preview 失败（不影响迁移）：%s", exc)
+            hop0 = time.monotonic()
             with conn:  # 事务：异常自动回滚该跳
                 mod.apply(conn)
                 conn.execute(
                     "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES "
                     "('schema_version', ?, ?)", (t, _now()))
             done.append(f"{f}→{t}")
-            _log.info("数据库迁移完成一跳：%s → %s", f, t)
+            _log.info("      ✓ 完成 %s → %s（%.2fs，版本号已推进到 %s）",
+                      f, t, time.monotonic() - hop0, t)
     except Exception as exc:  # noqa: BLE001 - 迁移失败要如实报，不吞
-        _log.exception("数据库迁移失败")
+        _log.exception("✗ 数据库结构迁移失败（已完成 %d/%d 跳：%s；该跳已回滚）",
+                       len(done), len(steps), done or "无")
         return {"ok": False, "steps": done, "db_path": str(db_path),
                 "message": f"迁移失败（已完成 {len(done)} 跳）：{exc}"}
     finally:
         conn.close()
+    _log.info("✓ 数据库结构迁移完成：%s → %s（%d 跳，耗时 %.2fs）",
+              frm, to, len(done), time.monotonic() - t0)
     return {"ok": True, "applied": done, "db_path": str(db_path),
             "message": f"数据库已逐级迁移：{frm} → {to}"}
 
