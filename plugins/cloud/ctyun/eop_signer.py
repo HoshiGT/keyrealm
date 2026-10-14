@@ -1,160 +1,81 @@
-"""天翼云 (CTyun, ctyun.cn) EOP 只读探针签名实现。
+r"""天翼云 (CTyun, ctyun.cn) EOP 只读探针签名实现。
 
-本模块是**经官方 SDK 源码逐字校准**的天翼云 EOP 签名（"eop" = 天翼云统一开放平台网关），
-用于构造一个只读探针：``GET /v4/region/list-regions``（资源池列表查询）。
-凭据有效时该接口返回本租户可见的资源池列表，不会产生任何写副作用。
+本模块是**经官方 Go SDK 源码逐字校准**的天翼云 EOP 签名（"eop" = 天翼云统一开放平台网关），
+用于构造一个只读探针：``GET /v4/region/list-regions``（资源池列表查询）。凭据有效时该接口
+返回本租户可见的资源池列表，不会产生任何写副作用。
 
 自包含：仅依赖标准库。
 
-============================================================================
-证据来源（校准基准）
-============================================================================
-天翼云**没有官方 Python SDK**（PyPI 上的 ``ctyun`` 是无关的库存管理包；GitHub 上
-``fatelei/pyctyun`` 是第三方）。官方 GitHub 组织 ``ctyun-it`` 提供的是 **Go SDK**
-与 Terraform Provider：
+校准基准：官方 Go SDK ``ctyun-it/ctyun-sdk-go`` 的 ``ctyun-sdk-core/request.go``
+（``GetSign`` / ``hmacSHA256`` / ``buildRequest``）与 ``ctyun-sdk-core/response.go``（成功判定）。
+天翼云**没有官方 Python SDK**（PyPI 的 ``ctyun`` 是无关的库存管理包），能对标的只有该 Go SDK
+与官方文档。
 
-  * 官方 Go SDK： https://github.com/ctyun-it/ctyun-sdk-go
-      - 签名实现在 ``ctyun-sdk-core/request.go`` 的 ``GetSign()``
-      - 成功判定在 ``ctyun-sdk-core/response.go``（``StatusCodeSuccessString = "800"``）
-      - 端点在 ``ctyun-sdk-endpoint/ctecs/const.go`` 与 ``.../ctecs/common/const.go``
-      - list-regions 定义在 ``ctyun-sdk-endpoint/ctecs/region_list.go`` 与
-        ``.../ctecs/common/region_list_regions.go``
-  * 官方文档（中国大陆站）：
-      - 资源池列表查询 https://www.ctyun.cn/document/10026730/10040588
-      - 认证鉴权 / 构造待签名字符串 / 构造动态密钥（同目录）
-  * 国际站（eSurfing，同源文档，可镜像抓取）：
-      - https://www.esurfingcloud.com/document/zh-cn/10027004/10028368 （构造待签名字符串）
-      - https://www.esurfingcloud.com/document/zh-cn/10027004/10028371 （构造动态密钥）
-
-关键源码片段（官方 Go SDK ``ctyun-sdk-core/request.go``）::
-
-    // GetSign 加签
-    func GetSign(query string, body []byte, tim time.Time, uuid string, credential Credential) string {
-        hash := sha256.New()
-        hash.Write(body)
-        sum := hash.Sum(nil)
-        calculateContentHash := hex.EncodeToString(sum)
-        date := tim.Format("20060102T150405Z")
-        sigture := fmt.Sprintf("ctyun-eop-request-id:%s\\neop-date:%s\\n\\n%s\\n%s", uuid, date, query, calculateContentHash)
-        singerDd := tim.Format("20060102")
-        kAk := hmacSHA256(credential.ak, string(hmacSHA256(date, credential.sk)))
-        kdate := hmacSHA256(singerDd, string(kAk))
-        signaSha256 := hmacSHA256(sigture, string(kdate))
-        Signature := base64.StdEncoding.EncodeToString(signaSha256)
-        signHeader := credential.ak + " Headers=ctyun-eop-request-id;eop-date Signature=" + Signature
-        return signHeader
-    }
-
-    // hmacSHA256 注意入参顺序：第一个参数是"消息"，第二个参数是"密钥"
-    func hmacSHA256(signature string, key string) []byte {
-        m := hmac.New(sha256.New, []byte(key))
-        m.Write([]byte(signature))
-        return m.Sum(nil)
-    }
-
-以及请求构造 ``buildRequest()`` ::
-
-    tim := time.Now()                          // 本地时间，非 UTC
-    eopDate := tim.Format("20060102T150405Z")  // 布局里的 Z 是字面量
-    id := uuid.NewString()
-    sign := GetSign(u.RawQuery, c.body, tim, id, c.credential)
-    headers.Add("ctyun-eop-request-id", id)
-    headers.Add("Eop-Authorization", sign)
-    headers.Add("Eop-date", eopDate)
-
-以及成功判定 ``ctyun-sdk-core/response.go`` ::
-
-    const StatusCodeSuccessString = "800"
-    func (c CtyunResponseModel) IsSuccess() bool {
-        return c.ParseStatusCode() == StatusCodeSuccessString  // statusCode == "800"
-    }
+逐字源码摘录（含 ``文件:行``）、接受测试与端点实测证据见
+``docs/SIGNER_CALIBRATION.md`` 第 1 节。
 
 ============================================================================
 钉死的结论
 ============================================================================
-1) 待签串（sigture）的确切拼装::
+1) 待签串（``\n`` 为字面换行）::
 
        "ctyun-eop-request-id:{uuid}\neop-date:{eop_date}\n\n{query}\n{body_sha256_hex}"
 
-   - header 段：`header_name:header_value`，按 header 名升序，以 `\n` 结尾。
-     本次只签两个强制头：``ctyun-eop-request-id``、``eop-date``（字典序 c<e）。
-   - header 段与 query 段之间是 **两个 `\\n`**（header 段尾部一个 + 分隔一个，
-     即一个空行）。官方文档示例的 header 段本身就带尾随 `\n`，再加分隔符即为 2 个。
-   - query 段与 body 哈希段之间是 **一个 `\\n`**。
-   - body 哈希 = ``sha256(原始 body).hexdigest()``（**小写 hex**）。空 body 时 =
+   - header 段按 key 升序、逐行 ``key:value\n``；header 段与 query 段之间是**一个空行**
+     （两个 ``\n``）；query 段与 body 段之间一个 ``\n``；
+   - **只签两个头**：``ctyun-eop-request-id``、``eop-date``；
+   - body 哈希 = ``sha256(原始 body).hexdigest()``（小写 hex）；空 body 时 =
      ``e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855``。
-   - query 段为空时该段就是空串，拼装仍是 `...\n\n\n{hash}`（不省略分隔符）。
 
-2) eop-date 时区 = **北京时区 (UTC+8)**，格式 ``%Y%m%dT%H%M%SZ``（尾部 Z 是字面量）。
-   依据：官方文档明确要求"北京时区的当前时间"；官方 Go SDK 用的是 ``time.Now()``
-   （**本地**时间，未调 ``.UTC()``），其 ``"20060102T150405Z"`` 布局里的 ``Z`` 没有跟
-   ``07:00``，因此只是字面量字符。天翼云的机器/CI 都在北京时区，所以 ``now()`` 就等于
-   北京墙上时间。反证：若服务端按 UTC 解析并校验，官方 SDK 在任何中国机器上都恒定偏移
-   8 小时、永远签名失败——不可能。故服务端把 eop-date 当**北京时区**理解。
+2) ``eop-date`` 取**北京时区 (UTC+8)**，格式 ``%Y%m%dT%H%M%SZ``（尾部 Z 是字面量，不是 UTC 标记）。
+   依据：官方 Go SDK 用 ``time.Now()``（本地时间，未调 ``.UTC()``），而布局串里的 ``Z`` 没跟
+   ``07:00``。反证：若服务端按 UTC 解析，官方 SDK 在任何中国机器上都恒定偏移 8 小时、永远签名
+   失败——不可能。故服务端把 eop-date 当**北京时区**理解。
 
 3) 密钥派生链（逐字正确）::
 
-       ktime = HMAC-SHA256(key=sk,   msg=eop_date)        # 完整 "20211221T163614Z"
-       kAk   = HMAC-SHA256(key=ktime,msg=ak)              # ktime 用原始字节
-       kdate = HMAC-SHA256(key=kAk,  msg=yyyymmdd)        # 仅日期部分 "20211221"
-       sig   = Base64( HMAC-SHA256(key=kdate, msg=sigture) )
+       ktime = HMAC-SHA256(key=sk,    msg=eop_date)     # 完整 "20211221T163614Z"
+       kAk   = HMAC-SHA256(key=ktime, msg=ak)
+       kdate = HMAC-SHA256(key=kAk,   msg=yyyymmdd)     # 仅日期部分 "20211221"
+       sig   = Base64( HMAC-SHA256(key=kdate, msg=待签串) )
 
-   签名编码是 **base64**（标准表，带 `=` 填充），不是 hex。
+   签名编码是 **base64**（标准表，带 ``=`` 填充），不是 hex。
 
-4) Eop-Authorization 头格式（无前缀词）::
+4) ``Eop-Authorization`` 头（无前缀词）::
 
        Eop-Authorization: {ak} Headers=ctyun-eop-request-id;eop-date Signature={base64}
 
-   注意：国际站某页文档写成 "ctyun-eop-ak Header=... Signature=..."，那是文档笔误；
-   官方 Go SDK 源码是裸 ``{ak}`` + 复数 ``Headers=``，以源码为准。
+   注意：国际站某页文档写成 ``ctyun-eop-ak Header=...``，那是文档笔误；官方 Go SDK 源码是裸
+   ``{ak}`` + 复数 ``Headers=``，以源码为准。
 
-5) 成功判定：**body 的 ``statusCode == "800"``（JSON 里可能是 int 800 或字符串 "800"）**，
-   且 HTTP 状态码为 2xx。仅 HTTP 200 不足以判定成功。HTTP 401 表示鉴权失败。
+5) 成功判定：body 的 ``statusCode == "800"``（JSON 里可能是 int 800 或字符串 "800"）**且**
+   HTTP 为 2xx。仅 HTTP 200 不足以判定成功。HTTP 401 表示鉴权失败。
 
 ============================================================================
 端点结论（天翼云没有统一的 global 域名，各产线各自一个）
 ============================================================================
 - ECS/资源池产线（ctecs）**有 global 汇聚域名**：``ctecs-global.ctapi.ctyun.cn``
-  （官方 Go SDK ``ctecs/const.go``: ``UrlProdCtecs = "ctecs-global.ctapi.ctyun.cn"``）。
-  ``GET /v4/region/list-regions`` 正是走这个域名。
-- **实测确认**（用无效 AK 发起真实只读请求）::
+  （官方 Go SDK ``ctecs/const.go``: ``UrlProdCtecs``）。``GET /v4/region/list-regions`` 走它。
+- **实测确认**（用无效 AK 发起真实只读请求）：HTTP 401，body ``eopErrCode=10002``、
+  ``message="ctyun-EOP: Invalid APP ID in request:cannot find consumer:<AK>"``。host 解析到
+  天翼云 WAF（``ctyunsafewaf`` / ``ctbcdn``），请求被正确路由到 EOP 网关并解析出 AK，说明
+  端点存活、请求形态与签名流程正确。（完整响应体见 ``docs/SIGNER_CALIBRATION.md``。）
+- ``regionId``：**list-regions 不需要 regionId**。官方 SDK 只加可选查询参数 ``regionName``
+  （资源池名称，可留空）；``regionID`` 只出现在**响应**里。（对比：``/v4/region/get-zones``
+  才需要查询参数 ``regionID``，注意大小写。）
 
-      GET https://ctecs-global.ctapi.ctyun.cn/v4/region/list-regions   → HTTP 401
-      {"eopErrCode":"10002","statusCode":"CTAPI_10002","code":"10002",
-       "message":"ctyun-EOP: Invalid APP ID in request:cannot find consumer:<AK>", ...}
+鉴权错误码：``eopErrCode 10000`` → HTTP 404（接口不存在）；``10002`` → HTTP 401（AK 在 EOP
+系统中不存在）；``10003`` → HTTP 403（SK 错误 / 签名算法不符）。``interpret()`` 据此把 401/403
+或 eopErrCode ∈ {10002,10003} 归为 ``bad_cred``，并尽量区分"AK 不存在"与"签名失败"。
 
-  host 解析到天翼云 WAF（203.176.94.86，CNAME 至 ctyunsafewaf/ctbcdn）。请求被正确
-  路由到 EOP 网关并解析出 AK（"cannot find consumer:<AK>"），说明端点存活、请求形态
-  正确。兄弟产线域名（``ctiam-global`` / ``ctvpc-global`` / ``ctebs-global``）同源存活，
-  但对 ``/v4/region/list-regions`` 返回 404（"API Not Found"），佐证该接口归 ctecs。
-- 区域型端点形如 ``{product}-{regionCode}.ctapi.ctyun.cn``（例：国际站"云电脑"
-  文档给的 ``ecpc-<regionCode>.ctapi.ctyun.cn``）。list-regions 是全局调用，
-  用 global 域名即可，**不需要按区域拼接**。
-- ``regionId``：**list-regions 不需要 regionId**。官方 SDK 只加可选查询参数
-  ``regionName``（资源池名称，可以留空）；``regionID`` 只出现在**响应**里。
-  （对比：``/v4/region/get-zones`` 才需要查询参数 ``regionID``，注意大小写。）
+未确定项：成功响应里 ``statusCode`` 的确切类型/取值仅由官方 Go SDK 反推为 ``800``，**未经真实
+凭据验证**；``{region}`` 端点模板属**推测性支持**（官方 SDK 中未出现该形态）；除
+``GET /v4/region/list-regions`` 外，其余接口的响应体字段层次与入参形态未经实测。
 
-============================================================================
-鉴权错误码（官方《请求错误码(OpenAPI)》+ 实测）
-============================================================================
-  eopErrCode 10000 → HTTP 404  ctyunEOP: API Not Found（接口不存在）
-  eopErrCode 10002 → HTTP 401  Invalid APP ID in request（AK 在 EOP 系统中不存在）
-  eopErrCode 10003 → HTTP 403  签名鉴权失败（SK 错误/签名算法不符）
-
-因此 ``interpret()`` 把 401/403 或 eopErrCode ∈ {10002,10003} 归为 ``bad_cred``，
-并尽量区分"AK 不存在"与"签名失败"。
-
-============================================================================
-未确定项
-============================================================================
-- 成功响应里 ``statusCode`` 的确切类型/取值仅由官方 Go SDK 反推为 ``800``
-  （``IsSuccess() == (statusCode == "800")``）——本模块按 (int|str) 800 判定，
-  并兼容网关可能加的 ``CTAPI_`` 前缀。**未经真实凭据的成功响应验证**。
-- 若某些区域/租户要求用区域型端点（非 global），本模块支持 endpoint 模板占位符
-  ``{region}``（用 region_id 填充），但该形态未在官方 SDK 中出现，属推测性支持。
-- 官方 China 站文档页 (www.ctyun.cn/document/...) 需 JS 渲染，直接抓取得到 404 壳；
-  本模块的文档依据来自国际站镜像 (esurfingcloud.com/document/zh-cn/10027004/*)
-  与官方 Go SDK 源码。
+参考文档:
+  资源池列表查询 https://www.ctyun.cn/document/10026730/10040588
+  构造待签名字符串 https://www.esurfingcloud.com/document/zh-cn/10027004/10028368
+  构造动态密钥   https://www.esurfingcloud.com/document/zh-cn/10027004/10028371
 """
 
 from __future__ import annotations

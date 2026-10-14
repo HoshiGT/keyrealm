@@ -1,59 +1,24 @@
 # coding=utf-8
-"""
+r"""
 京东云 (JD Cloud) 只读凭据探针 —— 签名实现经官方 SDK 源码校准。
 
 签名方案: JDCLOUD3-HMAC-SHA256（SDK 内部方法名 signV3），结构与 AWS SigV4 同形。
 
-校准来源（离线解包，非记忆、非二手博客）:
-    pip download jdcloud-sdk        # PyPI 版本 1.6.346（当前最新）
-    解包后 jdcloud_sdk/core/signer.py / const.py / jdcloudresponse.py
+校准基准: 离线解包官方 Python SDK ``pip download jdcloud-sdk`` → PyPI **1.6.346**（非记忆、
+非二手博客），比对 ``jdcloud_sdk/core/`` 下的 ``signer.py`` / ``const.py`` / ``jdcloudresponse.py``。
 
-  证据行 1 —— kDate 派生密钥前缀（signer.py 第 171 行，逐字摘录）:
-      k_date = self.__sign((const.JDCLOUD3 + key).encode('utf-8'), date_stamp)
-  证据行 2 —— 常量定义（const.py 第 17-22 行，逐字摘录）:
-      JDCLOUD2 = 'JDCLOUD2'
-      JDCLOUD3 = 'JDCLOUD3'
-      JDCLOUD_ALGORITHM = 'JDCLOUD2-HMAC-SHA256'
-      JDCLOUD3_ALGORITHM = 'JDCLOUD3-HMAC-SHA256'
-      JDCLOUD_REQUEST = 'jdcloud2_request'
-      JDCLOUD3_REQUEST = 'jdcloud3_request'
-  证据行 3 —— 四段派生链（signer.py 第 170-175 行，逐字摘录）:
-      def __get_signature_key(self, key, date_stamp, region_name, service_name):
-          k_date = self.__sign((const.JDCLOUD3 + key).encode('utf-8'), date_stamp)
-          k_region = self.__sign(k_date, region_name)
-          k_service = self.__sign(k_region, service_name)
-          k_signing = self.__sign(k_service, const.JDCLOUD3_REQUEST)
-          return k_signing
-  证据行 4 —— 待签串与凭证作用域（signer.py 第 70-92 行，逐字摘录）:
-      algorithm = const.JDCLOUD3_ALGORITHM
-      credential_scope = (date_str + '/' + region + '/' + service + '/' + const.JDCLOUD3_REQUEST)
-      string_to_sign = (algorithm + '\\n' + jdcloud_date + '\\n' + credential_scope + '\\n'
-                        + self.__sha256_hash(canonical_request))
-      ...
-      authorization_header = (
-              algorithm + ' ' +
-              'Credential=' + credential.access_key + '/' + credential_scope + ', ' +
-              'SignedHeaders=' + signed_headers + ', ' +
-              'Signature=' + signature)
-  证据行 5 —— 错误体解析（jdcloudresponse.py 第 33-45 行，逐字摘录）:
-      request_id = resp_dict.get('requestId')
-      error = resp_dict.get('error')
-      if request_id and error:
-          self.error = ErrorResponse(error.get('status'), error.get('code'), error.get('message'))
-      result = resp_dict.get('result')
+逐字源码摘录（含 ``文件:行``）见 ``docs/SIGNER_CALIBRATION.md`` 第 2 节。
 
-关于「kDate 前缀到底是 JDCLOUD2 还是 JDCLOUD3」的结论:
-  * 现行方案（本次采用的）是 **JDCLOUD3**，即 kDate 的 HMAC key = "JDCLOUD3" + secret_key。
-    依据: PyPI 1.6.346 源码、GitHub master、readthedocs /en/latest/ 三处一致。
-  * "JDCLOUD2" 是**已被废弃的旧版签名方案**（算法名 JDCLOUD2-HMAC-SHA256，
-    作用域后缀 jdcloud2_request）。readthedocs 的 `/en/pydoc2/` 页面是**陈旧文档**，
-    仍停留在旧方案，会误导（该页确为 `const.JDCLOUD2 + key`）。
-  * 全新下载的 1.6.346 中函数名仍叫 signV3、常量叫 JDCLOUD3，二者指同一套现行算法。
+关键结论:
+  * 采用 **JDCLOUD3**（现行方案）: kDate 的 HMAC key = ``"JDCLOUD3" + secret_key``，作用域
+    后缀 ``jdcloud3_request``，算法标识 ``JDCLOUD3-HMAC-SHA256``。
+  * ``"JDCLOUD2"`` 是**已废弃的旧版签名方案**；readthedocs 的 ``/en/pydoc2/`` 是陈旧文档
+    （确为 ``const.JDCLOUD2 + key``），**不采用**。函数名仍叫 signV3、常量叫 JDCLOUD3，
+    二者指同一套现行算法。
+  * 自测（模块底部 ``__main__``）直接复放 SDK 自带单元测试 ``signer_test.py`` 的
+    「固定 AK/SK/时间戳 → 期望 Authorization」向量，离线即可跑，无需网络。
 
-自测（模块底部 __main__）直接复放 SDK 自带单元测试 signer_test.py 中的
-「固定 AK/SK/时间戳 → 期望 Authorization」向量，离线即可跑，无需网络。
-
-本文件在探针版基础上做了三处**增量**扩展（签名核心 / interpret / 自测向量未改动）：
+本文件在探针版基础上做了三处**增量**扩展（签名核心 / interpret / 自测向量未改动）:
 
 1. ``_PROBES`` 由「两个 IAM 探针」扩成一张**多服务只读接口表**，每条补 ``service`` /
    ``endpoint`` / ``revision`` / ``region_path`` 四个键。规格逐条取自对应服务的
@@ -76,9 +41,9 @@
 
 参考文档:
   https://github.com/jdcloud-api/jdcloud-sdk-python           (官方 SDK 仓库)
+  https://docs.jdcloud.com/cn/iam/signature                   (签名算法)
   https://docs.jdcloud.com/cn/iam/accesskey-management        (AccessKey 管理)
   https://docs.jdcloud.com/cn/iam/api/describeuseraccesskeys  (IAM 接口)
-  https://docs.jdcloud.com/cn/cloud-physical-server/api/describeregiones (CPS 地域)
   https://docs.jdcloud.com/cn/virtual-machines/api/describeinstances     (云主机)
   https://docs.jdcloud.com/cn/cloud-disk-service/api/describedisks       (云硬盘)
 """

@@ -4,6 +4,8 @@
 按官方 Python SDK `volcengine/volc-sdk-python` 的 ``volcengine/auth/SignerV4.py`` 逐行对齐，
 并由官方示例 ``example/DemoSignOnly.py`` 的固定向量校准（模块末尾自测可跑）。
 
+本仓库未留存该 SDK 快照；重新校准步骤与结论摘要见 ``docs/SIGNER_CALIBRATION.md`` 第 4 节。
+
 本模块**只负责产出** ``(method, url, headers, body)``，**不发任何请求** ——
 实际发送必须由插件用 ``backend.plugin_sdk.make_client()`` 完成（只有它才带得上
 当前凭据配置的代理）。签名器自己建 client 会绕过凭据级代理设置。

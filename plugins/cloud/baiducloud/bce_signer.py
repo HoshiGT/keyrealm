@@ -13,6 +13,8 @@ b1979d1e63240b88ef8c68c0456800e0d9ae31bf, SDK_VERSION=0.9.79）中的：
 
 只依赖标准库。
 
+逐字源码摘录（含 ``文件:行``）见 ``docs/SIGNER_CALIBRATION.md`` 第 5 节。
+
 依赖：stdlib
 参考文档：
 - 生成认证字符串：https://cloud.baidu.com/doc/Reference/s/njwvz1yfu

@@ -2,6 +2,8 @@
 
 经「官方 SDK 源码」与「官方文档」双向校准，不自造算法。
 
+逐字源码摘录（含 ``文件:行``）见 ``docs/SIGNER_CALIBRATION.md`` 第 3 节。
+
 证据来源
 --------
 1. 官方 SDK ``ucloud/ucloud-sdk-python3`` @ commit ``cc58bf1`` (v0.11.145, 2026-10-09)
