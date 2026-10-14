@@ -1,8 +1,8 @@
 """百度文心 API Key 验证插件（plugins/llm/ 类别下的独立子插件）。
 
 协议：POST {base}/oauth/2.0/token（client_credentials）。
-凭证为 **API Key + Secret Key 两个独立字段**。本插件**只认当前格式**；老数据
-（把两者拼成一个字段）由导入备份与更新流程升级，不在运行时兼容。
+凭证为 **API Key + Secret Key 两个独立字段，两个都必填**。本插件**只认当前格式**；老数据
+（把两者拼成一个字段）由 `backend/data_upgrades.py` 在**导入备份**与**更新后解锁**时自动转换。
 
 参考文档：https://cloud.baidu.com/doc/WENXINWORKSHOP/index.html
 """
@@ -30,9 +30,9 @@ PROTOCOL = "wenxin"
 def _creds(data: dict) -> tuple[str, str]:
     """取 (client_id, client_secret)。
 
-    插件**只认当前格式**：两个独立字段 ``api_key`` / ``secret_key``。老格式
-    （``API_KEY|SECRET_KEY`` 拼在一个字段里）不在这里兼容——那是**一次性的数据升级**，
-    由导入备份与更新流程把旧数据转成本格式（见 ``backend/data_upgrades.py``）。
+    插件**只认当前格式**：两个独立字段 ``api_key`` / ``secret_key``（都必填）。老格式
+    （``API_KEY|SECRET_KEY`` 拼在一个字段里）不在这里兼容——那是**数据结构变化**，由
+    ``backend/data_upgrades.py`` 在导入备份 / 更新后自动转成当前格式。
     """
     return (data.get("api_key") or "").strip(), (data.get("secret_key") or "").strip()
 
