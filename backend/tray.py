@@ -143,7 +143,7 @@ def start_tray(
     quit_cb: Callable,
     get_status_cb: Callable,
 ):
-    """启动系统托盘。**Windows / Linux 用后台守护线程；macOS 必须挂到主循环上**（见下）。"""
+    """启动系统托盘。**Windows 用后台守护线程；macOS / Linux 必须挂到主循环上**（见下）。"""
     global _tray_icon, _tray_thread
     global _show_window_cb, _lock_vault_cb, _quit_cb, _get_status_cb
 
@@ -199,6 +199,20 @@ def start_tray(
             _tray_icon = icon
         except Exception as exc:  # noqa: BLE001 - 托盘起不来不该拖垮应用
             _log.warning("macOS 托盘启动失败，应用照常运行但没有菜单栏图标：%s", exc)
+        return
+
+    if sys.platform.startswith("linux"):
+        # Linux 同理**不能**放进后台线程：pystray 的 AppIndicator / GTK 后端 `_run()` 会在该线程
+        # 里跑 `GLib.MainLoop`，占住默认 GLib main context；随后主线程 pywebview（GTK 后端）的
+        # `g_application_run()` 拿不到 context（GLib-GIO-CRITICAL），`webview.start()` 立刻返回，
+        # 表现同 macOS 的「启动即退出」（Ubuntu 24.04 实测）。`run_detached()` 只做初始化，
+        # 图标/菜单更新经 GLib.idle_add 投递到 pywebview 随后启动的 GTK 主循环执行。
+        # 必须在主线程、`webview.start()` 之前调用（main.py 正是如此）。
+        try:
+            icon.run_detached()
+            _tray_icon = icon
+        except Exception as exc:  # noqa: BLE001 - 托盘起不来不该拖垮应用
+            _log.warning("Linux 托盘启动失败，应用照常运行但没有托盘图标：%s", exc)
         return
 
     _tray_icon = icon
