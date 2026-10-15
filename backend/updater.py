@@ -32,11 +32,13 @@
 from __future__ import annotations
 
 import ast
+import base64
 import errno
 import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -659,7 +661,8 @@ def remote_info(*, branch: str = DEFAULT_BRANCH, root: Optional[Any] = None,
         return {"ok": False, "error": "network",
                 "message": f"无法访问远端仓库：{_short(ls.stderr) or '未知错误'}" + _git_fail_hint(ls.stderr)}
     line = (ls.stdout or "").strip().splitlines()
-    commit = line[0].split()[0][:7] if line and line[0].split() else ""
+    sha = line[0].split()[0] if line and line[0].split() else ""
+    commit = sha[:7]
     if not commit:
         return {"ok": False, "error": "branch", "message": f"远端没有分支 {branch}"}
 
@@ -674,7 +677,7 @@ def remote_info(*, branch: str = DEFAULT_BRANCH, root: Optional[Any] = None,
         text = vfile.read_text(encoding="utf-8", errors="replace") if vfile.is_file() else ""
         app, schema = _read_version_module(text)
         return {"ok": True, "version": app or "", "schema_version": schema or "",
-                "commit": commit, "via": "git"}
+                "commit": commit, "commit_full": sha, "via": "git"}
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "network", "message": "拉取远端源码超时" + _NET_HINT}
     except Exception as exc:  # noqa: BLE001 - 检查边界，绝不抛
@@ -702,6 +705,191 @@ def compare(kind: str, local: dict, remote: dict) -> dict:
     return {"has_update": False, "reason": "已是最新正式版"}
 
 
+# ── 更新内容（检查到新版本时给界面展示）────────────────────
+# 「检查更新」发现有新版时，顺带取回**这次更新带来什么**：
+# - 正式版：目标标签上 ``CHANGELOG.md`` 里该版本的段落（本仓库的更新日志惯例）；
+#   拿不到再退回该 Release 的说明正文。
+# - 测试版：当前 commit → 远端 commit 之间的提交标题（GitHub compare API）。
+# **取不到不致命**：只是「拿不到更新内容」，不影响检查结果本身，故整段吞异常。
+_GH_API = f"https://api.github.com/repos/{REPO_SLUG}"
+_NOTES_TIMEOUT = 20.0
+_NOTES_MAX_COMMITS = 100     # 提交列表上限；超出只展示最近 N 条（总数照常报）
+
+
+def _gh_json(path: str, *, token: str = "", timeout: float = _NOTES_TIMEOUT) -> dict:
+    """GET ``api.github.com/repos/<slug><path>``（走更新代理）。失败收敛成 ``{"ok": False, ...}``。"""
+    try:
+        import httpx
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "message": "缺少 httpx"}
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "keyrealm-updater"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        with httpx.Client(proxy=update_proxy(), timeout=timeout,
+                          follow_redirects=True, trust_env=False) as client:
+            resp = client.get(f"{_GH_API}{path}", headers=headers)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"访问 GitHub 失败：{type(exc).__name__}"}
+    if resp.status_code != 200:
+        return {"ok": False, "message": f"GitHub 返回 HTTP {resp.status_code}"}
+    try:
+        return {"ok": True, "data": resp.json()}
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "message": "GitHub 返回的不是 JSON"}
+
+
+def _plain_inline(text: str) -> str:
+    """去掉行内 markdown（链接 / 粗体 / 行内代码），留纯文本供界面直接显示。"""
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)   # [文字](链接) → 文字
+    return text.replace("**", "").replace("`", "").strip()
+
+
+def _sections_from_lines(lines: list[str]) -> list[dict]:
+    """把 markdown 行切成 ``[{"title", "items"}]``：``###`` 起小节、``- `` 起条目、续行并入上一条。"""
+    sections: list[dict] = []
+
+    def _ensure() -> dict:
+        if not sections:
+            sections.append({"title": "", "items": []})
+        return sections[-1]
+
+    cur: Optional[dict] = None
+    for raw in lines:
+        line = raw.rstrip()
+        if line.startswith("### "):
+            cur = {"title": _plain_inline(line[4:]), "items": []}
+            sections.append(cur)
+            continue
+        if not line.strip():
+            continue
+        if line.lstrip().startswith(("- ", "* ")):
+            cur = _ensure() if cur is None else cur
+            cur["items"].append(_plain_inline(line.lstrip()[2:]))
+            continue
+        # 非条目行：缩进的续行并入上一条；否则当作独立条目
+        if cur and cur["items"] and raw[:1] in (" ", "\t"):
+            cur["items"][-1] += " " + _plain_inline(line)
+        else:
+            cur = _ensure() if cur is None else cur
+            cur["items"].append(_plain_inline(line))
+    return [s for s in sections if s["items"] or s["title"]]
+
+
+def parse_changelog_section(text: str, version: str) -> list[dict]:
+    """从 CHANGELOG.md 全文里取出 ``## [<version>]`` 那一段，切成分节结构；找不到返回 ``[]``。
+
+    标题行容忍 ``## [1.4.2] - 2026-10-15`` 与 ``## 1.4.2`` 两种写法；取到下一个 ``## `` 为止。
+    """
+    want = str(version).strip().lstrip("vV")
+    body: list[str] = []
+    inside = False
+    for raw in (text or "").splitlines():
+        if raw.startswith("## "):
+            if inside:
+                break
+            m = re.match(r"^##\s*\[?v?([0-9][^\s\]]*)", raw)
+            inside = bool(m) and m.group(1) == want
+            continue
+        if inside:
+            body.append(raw)
+    return _sections_from_lines(body)
+
+
+def _notes_release(latest: dict, token: str) -> dict:
+    """正式版：目标版本在远端 CHANGELOG 里的段落；退回该 Release 的说明正文。"""
+    ver = str(latest.get("version") or "").strip()
+    if not ver:
+        return {"ok": False, "message": "缺少目标版本号"}
+    got = _gh_json(f"/contents/CHANGELOG.md?ref=v{ver}", token=token)
+    markdown = ""
+    if got.get("ok"):
+        raw = (got.get("data") or {}).get("content") or ""
+        try:
+            markdown = base64.b64decode(raw).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            markdown = ""
+    sections = parse_changelog_section(markdown, ver) if markdown else []
+    if sections:
+        return {"ok": True, "kind": "release", "version": ver, "sections": sections}
+    rel = _gh_json(f"/releases/tags/v{ver}", token=token)
+    if rel.get("ok"):
+        body = str((rel.get("data") or {}).get("body") or "").strip()
+        if body:
+            return {"ok": True, "kind": "release", "version": ver,
+                    "sections": _sections_from_lines(body.splitlines())}
+    return {"ok": False, "message": f"未能取到 v{ver} 的更新说明（CHANGELOG 与 Release 说明都为空）"}
+
+
+def _resolve_full_sha(short: str, token: str) -> str:
+    """把短 sha 解析成全 sha。compare 端点**只认全 sha**（给 7 位短 sha 会 404）。取不到返回空串。"""
+    text = str(short or "").strip()
+    if len(text) >= 40:
+        return text
+    if not text:
+        return ""
+    got = _gh_json(f"/commits/{text}", token=token)
+    if not got.get("ok"):
+        return ""
+    return str((got.get("data") or {}).get("sha") or "").strip()
+
+
+def _notes_commits(current: dict, latest: dict, token: str) -> dict:
+    """测试版：当前 commit → 远端 commit 之间的提交标题（GitHub compare API）。
+
+    两边都得是**全 sha**：远端那个由 ``remote_info`` 顺带带回（``commit_full``），
+    本地这个现查一次——项目各处存的是 7 位短 sha。
+    """
+    base_short = str(current.get("commit") or "").replace("-dirty", "").strip()
+    head_short = str(latest.get("commit") or "").replace("-dirty", "").strip()
+    if not base_short or not head_short:
+        return {"ok": False, "message": "缺少本地 / 远端提交号，无法列出提交"}
+    if base_short == head_short:
+        return {"ok": True, "kind": "commits", "commits": [], "total": 0}
+    base = _resolve_full_sha(base_short, token)
+    if not base:
+        return {"ok": False, "message": f"解析本地提交 {base_short} 失败（它可能不在远端仓库里）"}
+    head = str(latest.get("commit_full") or "").strip() or _resolve_full_sha(head_short, token)
+    if not head:
+        return {"ok": False, "message": f"解析远端提交 {head_short} 失败"}
+    if base == head:
+        return {"ok": True, "kind": "commits", "commits": [], "total": 0}
+    got = _gh_json(f"/compare/{base}...{head}", token=token)
+    if not got.get("ok"):
+        return {"ok": False, "message": got.get("message") or "取提交列表失败"}
+    data = got.get("data") or {}
+    commits: list[dict] = []
+    for item in (data.get("commits") or []):
+        message = str(((item.get("commit") or {}).get("message")) or "")
+        subject = message.splitlines()[0].strip() if message else ""
+        commits.append({"sha": str(item.get("sha") or "")[:7], "subject": subject})
+    total = int(data.get("total_commits") or len(commits))
+    # compare 是「由旧到新」，界面按「最新在前」更顺眼
+    return {"ok": True, "kind": "commits", "total": total,
+            "commits": list(reversed(commits[-_NOTES_MAX_COMMITS:]))}
+
+
+def update_notes(kind: str, current: dict, latest: dict, *, token: Optional[str] = None) -> dict:
+    """取「本次更新带来什么」的展示内容：正式版看 CHANGELOG 段落，测试版看提交列表。
+
+    取不到返回 ``{"ok": False, "message": ...}``——**只影响展示**，不影响检查结果。
+    """
+    try:
+        tok = _resolve_token(token)
+        if kind == "test":
+            return _notes_commits(current, latest, tok)
+        return _notes_release(latest, tok)
+    except Exception as exc:  # noqa: BLE001 - 展示用内容，绝不拖垮检查
+        return {"ok": False, "message": f"获取更新内容失败：{type(exc).__name__}"}
+
+
+def _attach_notes(result: dict, kind: str, local: dict) -> dict:
+    """发现有新版本时挂上 ``notes``（取不到就挂 ``{"ok": False}``，不影响其余字段）。"""
+    if result.get("has_update"):
+        result["notes"] = update_notes(kind, local, result.get("latest") or {})
+    return result
+
+
 def check_update(kind: str = "formal", *, branch: str = DEFAULT_BRANCH,
                  timeout: float = 30, root: Optional[Any] = None) -> dict:
     kind = kind if kind in CHANNELS else "formal"
@@ -718,14 +906,14 @@ def check_update(kind: str = "formal", *, branch: str = DEFAULT_BRANCH,
         ver = rel["version"]
         has = _semver_gt(ver, local["version"])
         reason = (f"远端正式版更高（{local['version']} → {ver}）" if has else "已是最新正式版")
-        return {
+        return _attach_notes({
             "ok": True, "kind": kind, "has_update": has, "reason": reason,
             "current": local,
             "latest": {"version": ver, "commit": "", "schema_version": ""},
             "asset": release_asset_name(ver), "platform": platform_pkg(),
             "db_change": bool(dbst.get("needs_migration")), "db_chain": dbst.get("chain", []),
             "source_ok": local["source_ok"], "proxy": proxy,
-        }
+        }, kind, local)
 
     # 测试版：沿用源码口径（跟 main 的版本号 + commit），更新时从源码构建。
     remote = remote_info(branch=branch, root=root, timeout=timeout)
@@ -733,15 +921,16 @@ def check_update(kind: str = "formal", *, branch: str = DEFAULT_BRANCH,
         return {"ok": False, "kind": kind, "current": local,
                 "error": remote.get("error"), "message": remote.get("message"), "proxy": proxy}
     cmp = compare(kind, local, remote)
-    return {
+    return _attach_notes({
         "ok": True, "kind": kind,
         "has_update": cmp["has_update"], "reason": cmp["reason"],
         "current": local,
         "latest": {"version": remote.get("version", ""), "commit": remote.get("commit", ""),
+                   "commit_full": remote.get("commit_full", ""),
                    "schema_version": remote.get("schema_version", "")},
         "db_change": bool(dbst.get("needs_migration")), "db_chain": dbst.get("chain", []),
         "source_ok": local["source_ok"], "proxy": proxy,
-    }
+    }, kind, local)
 
 
 # ── 通道（正式/测试）持久化 ───────────────────────────────

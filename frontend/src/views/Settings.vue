@@ -848,210 +848,6 @@ onMounted(() => refreshAll(false))
     </el-card>
 
     <el-card shadow="never">
-      <template #header><span>更新</span></template>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">自动检测更新</div>
-          <div class="setting-desc">
-            启动后后台查一次新版本，有则弹通知；关掉后仍可手动「检查更新」。
-          </div>
-        </div>
-        <el-switch
-          v-model="updateAutoCheck"
-          :loading="updateAutoCheckSaving"
-          @change="applyUpdateAutoCheck"
-        />
-      </div>
-
-      <el-divider />
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">更新渠道</div>
-          <div class="setting-desc">
-            正式版：下载预编译包替换当前程序；测试版：从源码重新构建。
-          </div>
-        </div>
-        <el-radio-group v-model="updateChannel" @change="applyUpdateChannel">
-          <el-radio-button value="formal">正式版</el-radio-button>
-          <el-radio-button value="test">测试版</el-radio-button>
-        </el-radio-group>
-      </div>
-
-      <el-divider />
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">更新代理</div>
-          <div class="setting-desc">
-            更新与构建走哪个出口；直连 GitHub 不通时在这里选一个代理。
-          </div>
-          <div v-if="updateProxySpec !== 'direct'" class="setting-path">
-            当前出网：{{ updateProxyResolved || '直连（未配置代理）' }}
-          </div>
-        </div>
-        <el-select v-model="updateProxySpec" class="proxy-input" @change="applyUpdateProxy">
-          <el-option value="global" label="跟随全局默认" />
-          <el-option value="direct" label="直连（不使用代理）" />
-          <el-option
-            v-for="item in proxyStore.items"
-            :key="item.id"
-            :value="item.id"
-            :label="`${item.name}（${item.url}）`"
-          />
-        </el-select>
-      </div>
-
-      <el-divider />
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">访问令牌</div>
-          <div class="setting-desc">
-            私有仓库填 GitHub PAT（Contents: read）；公开仓库留空。令牌加密保存，明文不落库。
-          </div>
-          <div v-if="updateTokenConfigured" class="setting-path">
-            已配置：{{ updateTokenMask }}
-          </div>
-        </div>
-        <div class="token-input">
-          <el-input
-            v-model="updateTokenInput"
-            type="password"
-            show-password
-            clearable
-            placeholder="github_pat_… 或 ghp_…"
-            @keyup.enter="saveUpdateToken"
-          />
-          <el-button type="primary" :loading="updateTokenSaving" @click="saveUpdateToken">保存</el-button>
-          <el-button v-if="updateTokenConfigured" @click="clearUpdateToken">清除</el-button>
-        </div>
-      </div>
-
-      <el-divider />
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">检查更新</div>
-          <div class="setting-desc">
-            <template v-if="updateResult && updateResult.ok">
-              当前版本 {{ updateResult.current && updateResult.current.version }}
-              （{{ updateResult.current && updateResult.current.commit }}）。
-            </template>
-            <template v-else>
-              检查 GitHub 上是否有新版本（只读，不改动本机）。
-            </template>
-          </div>
-          <div v-if="updateResult && updateResult.ok" class="setting-path">
-            出网：{{ updateResult.proxy ? updateResult.proxy : '直连（未配置代理）' }}
-          </div>
-        </div>
-        <el-button :icon="Refresh" :loading="updateChecking" @click="checkUpdate">检查更新</el-button>
-      </div>
-
-      <el-alert
-        v-if="updateResult"
-        class="update-alert"
-        :type="updateResult.ok === false ? 'warning'
-          : (updateResult.has_update ? 'info' : 'success')"
-        :title="updateResult.ok === false
-          ? (updateResult.message || '检查更新失败')
-          : (updateResult.has_update ? updateFoundTitle : '已是最新版本')"
-        :closable="false"
-        show-icon
-      >
-        <template v-if="updateResult.ok">
-          <div>{{ updateResult.reason }}</div>
-          <div v-if="updateResult.kind === 'test' && updateResult.latest && updateResult.latest.commit">
-            远端提交：{{ updateResult.latest.commit }}
-            <span v-if="updateResult.current && updateResult.current.commit">
-              （本地 {{ updateResult.current.commit }}）
-            </span>
-          </div>
-          <div v-if="updateResult.db_change">
-            数据库结构将逐级迁移：{{ (updateResult.db_chain || []).join(' → ') }}
-          </div>
-          <div v-if="updateResult.kind === 'formal' && updateResult.asset">
-            将下载：{{ updateResult.asset }}
-          </div>
-          <div v-if="updateResult.has_update" class="update-action">
-            <el-button type="primary" :loading="updating" @click="doUpdate">立即更新</el-button>
-          </div>
-        </template>
-      </el-alert>
-
-      <el-alert
-        v-if="updating"
-        class="update-alert"
-        type="warning"
-        :title="!updatePrepareTask || updatePrepareTask.status === 'running'
-          ? '正在准备更新（准备好后程序会自动关闭并重启）'
-          : '准备完成，程序即将关闭以完成安装/构建…'"
-        :closable="false"
-        show-icon
-      >
-        <div v-if="updatePrepareTask" class="prepare-line">
-          <el-progress
-            class="prepare-bar"
-            :percentage="preparePercent"
-            :indeterminate="prepareIndeterminate"
-            :show-text="!prepareIndeterminate"
-          />
-          <span class="prepare-text">{{ updatePrepareTask.text || updatePrepareTask.title }}</span>
-        </div>
-        <div class="update-action">
-          <el-button
-            v-if="updatePrepareTask && updatePrepareTask.status === 'running'"
-            size="small"
-            @click="cancelUpdate"
-          >取消</el-button>
-        </div>
-      </el-alert>
-
-      <el-alert
-        v-if="updateFailed"
-        class="update-alert"
-        type="error"
-        :title="`更新失败：${updateFailed}`"
-        show-icon
-        @close="updateFailed = ''"
-      />
-
-      <el-alert
-        v-if="dbMigration && dbMigration.needs_migration"
-        class="update-alert"
-        type="info"
-        :title="`数据库结构需要更新：${dbMigration.disk} → ${dbMigration.app}`"
-        :closable="false"
-        show-icon
-      >
-        <div>
-          解锁时会自动逐级迁移（{{ (dbMigration.chain || []).join(' → ') }}）。
-          若这条一直显示，说明自动迁移没成功，请看 <code>data/logs/</code> 下的日志。
-        </div>
-      </el-alert>
-
-      <el-alert
-        v-if="lastUpdateVisible"
-        class="update-alert"
-        :type="updateLastStatus.ok ? 'success' : 'warning'"
-        :title="`上次更新：${updateLastStatus.message || ''}${updateTransition(updateLastStatus)}`"
-        show-icon
-        @close="dismissUpdateStatus"
-      >
-        <div v-if="(updateLastStatus.report || []).length" class="report-list">
-          <div v-for="(s, i) in updateLastStatus.report" :key="i" class="report-item">
-            <span :class="s.ok ? 'report-ok' : 'report-bad'">{{ s.ok ? '✓' : '✗' }}</span>
-            <span class="report-stage">{{ stageLabel(s.stage) }}</span>
-            <span class="report-msg">{{ s.message }}</span>
-          </div>
-        </div>
-        <div v-if="updateLastStatus.log" class="setting-path">日志：{{ updateLastStatus.log }}</div>
-      </el-alert>
-    </el-card>
-
-    <el-card shadow="never">
       <template #header><span>网络与代理</span></template>
 
       <!-- 全局默认代理：凭据没单独指定时用它 -->
@@ -1194,6 +990,248 @@ onMounted(() => refreshAll(false))
       </template>
     </el-card>
 
+    <el-card shadow="never">
+      <template #header><span>更新</span></template>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">自动检测更新</div>
+          <div class="setting-desc">
+            启动后后台查一次新版本，有则弹通知；关掉后仍可手动「检查更新」。
+          </div>
+        </div>
+        <el-switch
+          v-model="updateAutoCheck"
+          :loading="updateAutoCheckSaving"
+          @change="applyUpdateAutoCheck"
+        />
+      </div>
+
+      <el-divider />
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">更新渠道</div>
+          <div class="setting-desc">
+            正式版：下载预编译包替换当前程序；测试版：从源码重新构建。
+          </div>
+        </div>
+        <el-radio-group v-model="updateChannel" @change="applyUpdateChannel">
+          <el-radio-button value="formal">正式版</el-radio-button>
+          <el-radio-button value="test">测试版</el-radio-button>
+        </el-radio-group>
+      </div>
+
+      <el-divider />
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">更新代理</div>
+          <div class="setting-desc">
+            更新与构建走哪个出口；直连 GitHub 不通时在这里选一个代理。
+          </div>
+          <div v-if="updateProxySpec !== 'direct'" class="setting-path">
+            当前出网：{{ updateProxyResolved || '直连（未配置代理）' }}
+          </div>
+        </div>
+        <el-select v-model="updateProxySpec" class="proxy-input" @change="applyUpdateProxy">
+          <el-option value="global" label="跟随全局默认" />
+          <el-option value="direct" label="直连（不使用代理）" />
+          <el-option
+            v-for="item in proxyStore.items"
+            :key="item.id"
+            :value="item.id"
+            :label="`${item.name}（${item.url}）`"
+          />
+        </el-select>
+      </div>
+
+      <el-divider />
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">访问令牌</div>
+          <div class="setting-desc">
+            私有仓库填 GitHub PAT（Contents: read）；公开仓库留空。令牌加密保存，明文不落库。
+          </div>
+          <div v-if="updateTokenConfigured" class="setting-path">
+            已配置：{{ updateTokenMask }}
+          </div>
+        </div>
+        <div class="token-input">
+          <el-input
+            v-model="updateTokenInput"
+            type="password"
+            show-password
+            clearable
+            placeholder="github_pat_… 或 ghp_…"
+            @keyup.enter="saveUpdateToken"
+          />
+          <el-button type="primary" :loading="updateTokenSaving" @click="saveUpdateToken">保存</el-button>
+          <el-button v-if="updateTokenConfigured" @click="clearUpdateToken">清除</el-button>
+        </div>
+      </div>
+
+      <el-divider />
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">检查更新</div>
+          <div class="setting-desc">
+            <template v-if="updateResult && updateResult.ok">
+              当前版本 {{ updateResult.current && updateResult.current.version }}
+              （{{ updateResult.current && updateResult.current.commit }}）。
+            </template>
+            <template v-else>
+              检查 GitHub 上是否有新版本（只读，不改动本机）。
+            </template>
+          </div>
+          <div v-if="updateResult && updateResult.ok" class="setting-path">
+            出网：{{ updateResult.proxy ? updateResult.proxy : '直连（未配置代理）' }}
+          </div>
+        </div>
+        <el-button :icon="Refresh" :loading="updateChecking" @click="checkUpdate">检查更新</el-button>
+      </div>
+
+      <el-alert
+        v-if="updateResult"
+        class="update-alert"
+        :type="updateResult.ok === false ? 'warning'
+          : (updateResult.has_update ? 'info' : 'success')"
+        :title="updateResult.ok === false
+          ? (updateResult.message || '检查更新失败')
+          : (updateResult.has_update ? updateFoundTitle : '已是最新版本')"
+        :closable="false"
+        show-icon
+      >
+        <template v-if="updateResult.ok">
+          <div>{{ updateResult.reason }}</div>
+          <div v-if="updateResult.kind === 'test' && updateResult.latest && updateResult.latest.commit">
+            远端提交：{{ updateResult.latest.commit }}
+            <span v-if="updateResult.current && updateResult.current.commit">
+              （本地 {{ updateResult.current.commit }}）
+            </span>
+          </div>
+          <div v-if="updateResult.db_change">
+            数据库结构将逐级迁移：{{ (updateResult.db_chain || []).join(' → ') }}
+          </div>
+          <div v-if="updateResult.kind === 'formal' && updateResult.asset">
+            将下载：{{ updateResult.asset }}
+          </div>
+
+          <!-- 本次更新带来什么：正式版 = 目标版本的 CHANGELOG 段落；测试版 = 当前→远端之间的提交 -->
+          <div v-if="updateResult.has_update && updateResult.notes" class="update-notes">
+            <template v-if="updateResult.notes.ok">
+              <div class="notes-head">
+                {{
+                  updateResult.notes.kind === 'release'
+                    ? `更新内容（v${updateResult.notes.version}）`
+                    : `本次更新带来 ${updateResult.notes.total || (updateResult.notes.commits || []).length} 个提交`
+                }}
+              </div>
+              <div class="notes-body">
+                <template v-if="updateResult.notes.kind === 'release'">
+                  <div
+                    v-for="(sec, si) in updateResult.notes.sections || []"
+                    :key="si"
+                    class="notes-section"
+                  >
+                    <div class="notes-section-title">{{ sec.title }}</div>
+                    <ul class="notes-list">
+                      <li v-for="(item, ii) in sec.items || []" :key="ii">{{ item }}</li>
+                    </ul>
+                  </div>
+                </template>
+                <template v-else>
+                  <ul class="notes-list notes-commits">
+                    <li v-for="(c, ci) in updateResult.notes.commits || []" :key="ci">
+                      <code>{{ c.sha }}</code>
+                      <span>{{ c.subject }}</span>
+                    </li>
+                  </ul>
+                </template>
+              </div>
+            </template>
+            <div v-else class="notes-error">
+              未能获取更新内容：{{ updateResult.notes.message }}
+            </div>
+          </div>
+          <div v-if="updateResult.has_update" class="update-action">
+            <el-button type="primary" :loading="updating" @click="doUpdate">立即更新</el-button>
+          </div>
+        </template>
+      </el-alert>
+
+      <el-alert
+        v-if="updating"
+        class="update-alert"
+        type="warning"
+        :title="!updatePrepareTask || updatePrepareTask.status === 'running'
+          ? '正在准备更新（准备好后程序会自动关闭并重启）'
+          : '准备完成，程序即将关闭以完成安装/构建…'"
+        :closable="false"
+        show-icon
+      >
+        <div v-if="updatePrepareTask" class="prepare-line">
+          <el-progress
+            class="prepare-bar"
+            :percentage="preparePercent"
+            :indeterminate="prepareIndeterminate"
+            :show-text="!prepareIndeterminate"
+          />
+          <span class="prepare-text">{{ updatePrepareTask.text || updatePrepareTask.title }}</span>
+        </div>
+        <div class="update-action">
+          <el-button
+            v-if="updatePrepareTask && updatePrepareTask.status === 'running'"
+            size="small"
+            @click="cancelUpdate"
+          >取消</el-button>
+        </div>
+      </el-alert>
+
+      <el-alert
+        v-if="updateFailed"
+        class="update-alert"
+        type="error"
+        :title="`更新失败：${updateFailed}`"
+        show-icon
+        @close="updateFailed = ''"
+      />
+
+      <el-alert
+        v-if="dbMigration && dbMigration.needs_migration"
+        class="update-alert"
+        type="info"
+        :title="`数据库结构需要更新：${dbMigration.disk} → ${dbMigration.app}`"
+        :closable="false"
+        show-icon
+      >
+        <div>
+          解锁时会自动逐级迁移（{{ (dbMigration.chain || []).join(' → ') }}）。
+          若这条一直显示，说明自动迁移没成功，请看 <code>data/logs/</code> 下的日志。
+        </div>
+      </el-alert>
+
+      <el-alert
+        v-if="lastUpdateVisible"
+        class="update-alert"
+        :type="updateLastStatus.ok ? 'success' : 'warning'"
+        :title="`上次更新：${updateLastStatus.message || ''}${updateTransition(updateLastStatus)}`"
+        show-icon
+        @close="dismissUpdateStatus"
+      >
+        <div v-if="(updateLastStatus.report || []).length" class="report-list">
+          <div v-for="(s, i) in updateLastStatus.report" :key="i" class="report-item">
+            <span :class="s.ok ? 'report-ok' : 'report-bad'">{{ s.ok ? '✓' : '✗' }}</span>
+            <span class="report-stage">{{ stageLabel(s.stage) }}</span>
+            <span class="report-msg">{{ s.message }}</span>
+          </div>
+        </div>
+        <div v-if="updateLastStatus.log" class="setting-path">日志：{{ updateLastStatus.log }}</div>
+      </el-alert>
+    </el-card>
+
     <!-- 新增 / 编辑代理 -->
     <el-dialog
       v-model="proxyDialog"
@@ -1321,6 +1359,52 @@ onMounted(() => refreshAll(false))
 
 .update-action {
   margin-top: 8px;
+}
+
+/* 更新内容：正式版 = CHANGELOG 段落；测试版 = 提交列表 */
+.update-notes {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #ebeef5;
+}
+
+.notes-head {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.notes-body {
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.notes-section {
+  margin-bottom: 6px;
+}
+
+.notes-section-title {
+  font-weight: 600;
+  color: #606266;
+}
+
+.notes-list {
+  margin: 2px 0 6px;
+  padding-left: 18px;
+  line-height: 1.6;
+}
+
+.notes-commits li {
+  display: flex;
+  gap: 8px;
+}
+
+.notes-commits code {
+  flex: none;
+  color: #909399;
+}
+
+.notes-error {
+  color: #909399;
 }
 
 .strength {
