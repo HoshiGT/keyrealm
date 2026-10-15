@@ -464,8 +464,10 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
 **实现**：`pystray` 库（跨平台，Windows/macOS/Linux 均支持），但**两个平台的起法不同**：
 
 - **Windows / Linux**：后台守护线程跑 `Icon.run()`（这两个平台的后端允许脱离主线程）。
-- **macOS**：**必须**在主线程用 `Icon.run_detached(darwin_nsapplication=…)` 把它挂到 pywebview
-  的 Cocoa 主循环上。pystray 的 darwin 后端 `_run()` 里直接是 `NSApplication.sharedApplication().run()`
+- **macOS**：**必须**把共享的 `NSApplication` 在**构造 Icon 时**传进去
+  （`pystray.Icon(…, darwin_nsapplication=NSApplication.sharedApplication())` —— 平台专属选项
+  走**构造函数**，**不是** `run_detached()` 的参数），再在主线程调 `run_detached()`（非阻塞），
+  把托盘挂到 pywebview 的 Cocoa 主循环上。pystray 的 darwin 后端 `_run()` 里直接是 `NSApplication.sharedApplication().run()`
   ——那是 Cocoa 的**主事件循环**；放进线程 = 由那个线程占住主循环，随后主线程的 `webview.start()`
   拿不到控制权会立刻返回，表现为**「应用启动一两秒后自己退出」**（曾实际发生）。
 

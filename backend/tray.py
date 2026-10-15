@@ -160,24 +160,42 @@ def start_tray(
         _log.info("已设置 KEYREALM_NO_TRAY：跳过系统托盘")
         return
 
-    icon = pystray.Icon(
-        name="Keyrealm",
-        icon=_make_icon_image(_get_icon_color()),
-        title="Keyrealm",
-        menu=_build_menu(),
-    )
+    # macOS 的 NSApplication 要在**构造 Icon 时**传进去（pystray 的平台专属选项走构造函数，
+    # 不是 `run_detached()` 的参数）。不同版本对这个选项的支持不一样，故先备好再建图标。
+    icon_kwargs: dict = {}
+    if sys.platform == "darwin":
+        try:
+            from AppKit import NSApplication          # pyobjc，随 pywebview 一并装上
+            icon_kwargs["darwin_nsapplication"] = NSApplication.sharedApplication()
+        except Exception as exc:  # noqa: BLE001 - 拿不到就干脆不显示托盘，别冒险
+            _log.warning("macOS 上拿不到 NSApplication，跳过系统托盘（应用照常运行）：%s", exc)
+            return
+
+    try:
+        icon = pystray.Icon(
+            name="Keyrealm",
+            icon=_make_icon_image(_get_icon_color()),
+            title="Keyrealm",
+            menu=_build_menu(),
+            **icon_kwargs,
+        )
+    except TypeError as exc:
+        # 旧版 pystray 不认 `darwin_nsapplication`；而旧版 `run_detached()` 的语义是
+        # 「另起线程跑 run()」——正是把 Cocoa 主循环抢走、让应用秒退的那个坑。
+        # **宁可没有托盘**，也不能再赌一次。
+        _log.warning("当前 pystray 不支持 macOS 托盘集成，跳过系统托盘（应用照常运行）：%s", exc)
+        return
 
     if sys.platform == "darwin":
         # macOS **不能**把 pystray 放进后台线程：它的 darwin 后端 `_run()` 里直接是
         # `NSApplication.sharedApplication().run()`——那是 Cocoa 的**主事件循环**。
         # 放进线程 = 由那个线程占住主循环，随后主线程的 `webview.start()` 拿不到控制权、
         # 会立刻返回，表现为「应用启动一两秒后自己退出」（Windows / Linux 的后端能在后台
-        # 线程里跑，所以只有 macOS 坏）。正解是 pystray 自己的集成方式：
-        # `run_detached(darwin_nsapplication=…)`——在**主线程、进入 pywebview 主循环之前**
-        # 把托盘挂上去，两个循环共用一个 NSApplication。
+        # 线程里跑，所以只有 macOS 坏）。正解是把托盘挂到 pywebview 的主循环上：
+        # 构造时传入那个共享的 NSApplication，再 `run_detached()`（非阻塞）——
+        # 由 pywebview 随后启动的循环来驱动托盘。
         try:
-            from AppKit import NSApplication      # pyobjc，随 pywebview 一并装上
-            icon.run_detached(darwin_nsapplication=NSApplication.sharedApplication())
+            icon.run_detached()
             _tray_icon = icon
         except Exception as exc:  # noqa: BLE001 - 托盘起不来不该拖垮应用
             _log.warning("macOS 托盘启动失败，应用照常运行但没有菜单栏图标：%s", exc)
