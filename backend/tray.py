@@ -1,15 +1,23 @@
 """
 系统托盘
-pystray 后台守护线程，窗口关闭 → 隐藏到托盘
+pystray 后台守护线程（**macOS 例外**：见 `start_tray`，darwin 后端会自己跑 Cocoa 主循环，
+必须用 `run_detached()` 挂到 pywebview 的循环上，绝不能放进线程）。
+窗口关闭 → 隐藏到托盘
 图标颜色：🟢运行+活跃Token 🔵运行空闲 🔴停止/错误 ⚪锁定
 """
 from __future__ import annotations
 
+import os
+import sys
 import threading
 from typing import Callable, Optional
 
 import pystray
 from PIL import Image, ImageDraw
+
+from . import logger
+
+_log = logger.get_logger(__name__)
 
 _tray_icon: Optional[pystray.Icon] = None
 _tray_thread: Optional[threading.Thread] = None
@@ -135,7 +143,7 @@ def start_tray(
     quit_cb: Callable,
     get_status_cb: Callable,
 ):
-    """启动托盘（守护线程）"""
+    """启动系统托盘。**Windows / Linux 用后台守护线程；macOS 必须挂到主循环上**（见下）。"""
     global _tray_icon, _tray_thread
     global _show_window_cb, _lock_vault_cb, _quit_cb, _get_status_cb
 
@@ -147,15 +155,42 @@ def start_tray(
     if _tray_icon:
         return
 
-    _tray_icon = pystray.Icon(
+    # 逃生阀：排障用——怀疑托盘导致启动异常时，一次运行就能把它排除。
+    if os.environ.get("KEYREALM_NO_TRAY"):
+        _log.info("已设置 KEYREALM_NO_TRAY：跳过系统托盘")
+        return
+
+    icon = pystray.Icon(
         name="Keyrealm",
         icon=_make_icon_image(_get_icon_color()),
         title="Keyrealm",
         menu=_build_menu(),
     )
 
+    if sys.platform == "darwin":
+        # macOS **不能**把 pystray 放进后台线程：它的 darwin 后端 `_run()` 里直接是
+        # `NSApplication.sharedApplication().run()`——那是 Cocoa 的**主事件循环**。
+        # 放进线程 = 由那个线程占住主循环，随后主线程的 `webview.start()` 拿不到控制权、
+        # 会立刻返回，表现为「应用启动一两秒后自己退出」（Windows / Linux 的后端能在后台
+        # 线程里跑，所以只有 macOS 坏）。正解是 pystray 自己的集成方式：
+        # `run_detached(darwin_nsapplication=…)`——在**主线程、进入 pywebview 主循环之前**
+        # 把托盘挂上去，两个循环共用一个 NSApplication。
+        try:
+            from AppKit import NSApplication      # pyobjc，随 pywebview 一并装上
+            icon.run_detached(darwin_nsapplication=NSApplication.sharedApplication())
+            _tray_icon = icon
+        except Exception as exc:  # noqa: BLE001 - 托盘起不来不该拖垮应用
+            _log.warning("macOS 托盘启动失败，应用照常运行但没有菜单栏图标：%s", exc)
+        return
+
+    _tray_icon = icon
     _tray_thread = threading.Thread(target=_tray_icon.run, daemon=True)
     _tray_thread.start()
+
+
+def available() -> bool:
+    """托盘是否真的挂上了。**为 False 时不能「隐藏到托盘」**——窗口藏了就没办法叫回来。"""
+    return _tray_icon is not None
 
 
 def update_tray():

@@ -461,7 +461,16 @@ window.evaluate_js("window.dispatchEvent(new CustomEvent('vault:updated', {detai
 
 **职责**：窗口最小化到托盘后保持后台运行，MCP Server 和调度器持续工作。
 
-**实现**：`pystray` 库（跨平台，Windows/macOS/Linux 均支持）。
+**实现**：`pystray` 库（跨平台，Windows/macOS/Linux 均支持），但**两个平台的起法不同**：
+
+- **Windows / Linux**：后台守护线程跑 `Icon.run()`（这两个平台的后端允许脱离主线程）。
+- **macOS**：**必须**在主线程用 `Icon.run_detached(darwin_nsapplication=…)` 把它挂到 pywebview
+  的 Cocoa 主循环上。pystray 的 darwin 后端 `_run()` 里直接是 `NSApplication.sharedApplication().run()`
+  ——那是 Cocoa 的**主事件循环**；放进线程 = 由那个线程占住主循环，随后主线程的 `webview.start()`
+  拿不到控制权会立刻返回，表现为**「应用启动一两秒后自己退出」**（曾实际发生）。
+
+托盘若没起来（macOS 挂载失败等），`tray.available()` 为假，此时**关闭窗口改为直接退出**——
+不能让窗口藏起来却没有托盘可以叫回。排障可用环境变量 `KEYREALM_NO_TRAY=1` 一次运行跳过托盘。
 
 **托盘图标状态**：
 

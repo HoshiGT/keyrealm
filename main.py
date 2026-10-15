@@ -403,8 +403,11 @@ def _hide_to_tray():
     """隐藏窗口到系统托盘（后台运行）。**不弹任何提示**——缩到托盘是常规操作，弹一次反而吵。
 
     轻量模式开启时顺带释放界面文档（见 _release_page）：托盘常驻期间前端不再占内存。
+
+    **托盘没挂上时直接不隐藏**（`tray.available()` 为假）：否则窗口藏起来却没有托盘可以
+    叫回，用户只能去杀进程。
     """
-    if _window is None:
+    if _window is None or not tray.available():
         return
     try:
         _window.hide()
@@ -507,6 +510,11 @@ def _on_closing():
         _shutdown_services()
         return True  # 允许关闭，应用随之退出
     if action == "background":
+        if not tray.available():
+            # 托盘没起来（如 macOS 上启动失败 / KEYREALM_NO_TRAY）：不能「隐藏」——
+            # 窗口藏了就没法叫回来，直接退出更安全。
+            _shutdown_services()
+            return True
         _hide_to_tray()
         return False  # 阻止关闭，驻留托盘
     # ask：先阻止本次关闭，通知前端弹窗让用户选择。
