@@ -108,7 +108,7 @@
 
 ## 下载与安装
 
-### Windows / macOS
+### Windows / macOS / Linux
 
 从 [Releases](../../releases) 下载对应平台的压缩包，解压后直接运行，免安装。
 
@@ -121,7 +121,11 @@
 
 ### Linux
 
-暂无预编译包，需从源码运行，见 [CONTRIBUTING.md](CONTRIBUTING.md) 的开发环境一节。
+从 [Releases](../../releases) 下载 `Keyrealm-<版本>-linux-x64.zip`，解压后运行 `./Keyrealm`
+（在 Ubuntu 22.04 上构建，需 glibc ≥ 2.35；若无执行权限先 `chmod +x Keyrealm`）。
+界面基于 GTK3 + WebKit2GTK 4.1，系统托盘需桌面环境支持 AppIndicator（GNOME 需装 AppIndicator 扩展）。
+若预编译包在你的发行版上无法启动，可仍按 [CONTRIBUTING.md](CONTRIBUTING.md) 的开发环境一节从源码运行
+（需先装系统包 `gir1.2-webkit2-4.1` 等及 `pip install PyGObject`）。
 
 ---
 

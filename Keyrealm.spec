@@ -227,6 +227,23 @@ hiddenimports += [
     "backend.tray",
 ]
 
+# Linux：pywebview 走 GTK 后端（WebKit2GTK），pystray 走 AppIndicator 后端，二者都经 PyGObject（gi）
+# 动态 import，静态分析看不全，这里显式补上；并钉住 typelib 版本，免得构建机同时装了 GTK4 时被收错。
+_hooksconfig = {}
+if sys.platform.startswith("linux"):
+    hiddenimports += [
+        "gi",
+        "gi.repository.Gtk",
+        "gi.repository.Gdk",
+        "gi.repository.GLib",
+        "gi.repository.GObject",
+        "gi.repository.WebKit2",
+        "gi.repository.AyatanaAppIndicator3",
+        "webview.platforms.gtk",
+        "pystray._appindicator",
+    ]
+    _hooksconfig = {"gi": {"module-versions": {"Gtk": "3.0", "Gdk": "3.0", "WebKit2": "4.1"}}}
+
 a = Analysis(
     [str(ROOT / "main.py")],
     pathex=[str(ROOT)],
@@ -234,7 +251,7 @@ a = Analysis(
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
-    hooksconfig={},
+    hooksconfig=_hooksconfig,
     runtime_hooks=[],
     # plugins/data/tests/docs 均为外部内容或开发资源，不进包
     excludes=["plugins", "data", "tests", "docs", "pytest", "PyInstaller"],
