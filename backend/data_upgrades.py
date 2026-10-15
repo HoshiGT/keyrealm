@@ -43,6 +43,16 @@ def _wenxin_split_key(data: dict) -> dict:
     return {**data, "api_key": client_id.strip(), "secret_key": secret.strip()}
 
 
+@_rule("mail_smtp")
+def _smtp_drop_legacy_tls(data: dict) -> dict:
+    """邮箱 1.1.0 起「允许旧版 TLS」并入框架的「TLS 版本」下拉（保留键 ``_tls_version``）：
+    删掉旧的 ``allow_legacy_tls``——不再由它决定。原先勾过的人，改在凭据的「TLS 版本」里
+    固定成 ``1.1`` / ``1.0``（旧版握手失败的报错也会这样引导）。幂等：键不在就原样返回。"""
+    if "allow_legacy_tls" not in data:
+        return data
+    return {k: v for k, v in data.items() if k != "allow_legacy_tls"}
+
+
 def upgrade_credential(credential_type: str, data: dict) -> dict:
     """把一条凭据的数据升级到**当前格式**（幂等）。没有适用规则时原样返回。"""
     out = data or {}

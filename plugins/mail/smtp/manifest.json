@@ -1,6 +1,6 @@
 {
   "name": "通用 SMTP 邮箱",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "credential_type": "mail_smtp",
   "author": "Keyrealm",
   "description": "通过 SMTP 登录验证邮箱账号与授权码（Gmail / QQ / 163 / 126 等）",
@@ -42,13 +42,6 @@
       "type": "checkbox",
       "required": false,
       "default": true
-    },
-    {
-      "key": "allow_legacy_tls",
-      "label": "允许旧版 TLS",
-      "type": "checkbox",
-      "required": false,
-      "hint": "服务器不支持 TLS 1.2+ 时才勾选（否则报握手失败）。TLS 1.0/1.1 已弃用，勾选后凭据走在更弱的信道上——只对确认可信的服务器开启。"
     },
     {
       "key": "notes",

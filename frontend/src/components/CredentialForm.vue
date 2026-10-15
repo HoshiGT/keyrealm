@@ -109,7 +109,10 @@ function schemaDefaults(list, source = {}) {
 
 const proxyMode = ref('global')
 const proxyId = ref(null)
-// 该插件的请求是否走代理（mail_smtp 用标准库 smtplib，不走 HTTP 代理，显示此项只会误导）
+// 该插件的请求是否受框架的「代理 / TLS 版本」管辖（决定要不要显示这两项）。
+// 注意：邮箱虽然用标准库 smtplib，但它读 plugin_sdk.proxy() 穿 SOCKS / HTTP CONNECT 隧道、
+// 也用 plugin_sdk.ssl_context() 取框架的 TLS 版本——**两项都适用**，故照常显示。
+// 只有真正无出网请求的插件才会经后端 USES_PROXY=False 把它们隐藏（目前仓库里没有这类插件）。
 const usesProxy = ref(true)
 // 后端按「子模块预设 > 上层模块预设 > 全局」算好的实际出口，用于下拉里那项的括注
 const inheritedProxy = ref('')
@@ -478,7 +481,8 @@ async function submit() {
         <TlsSelect v-model="tlsVersion" :inherit-hint="inheritedTls" :versions="tlsVersions" />
         <div class="field-hint">
           该凭据验证时用哪个 TLS 版本，优先级同上。<strong>auto</strong> 先按标准协商，
-          仅当握手失败才回退 TLS 1.2 重试；只认 TLS 1.2 的老网关可直接选固定版本。
+          仅当握手失败才回退 TLS 1.2 重试。只开<b>旧版 TLS</b> 的老服务器（如老邮件服务器）
+          请直接选<strong>固定 1.1 / 1.0</strong>。
         </div>
       </el-form-item>
 

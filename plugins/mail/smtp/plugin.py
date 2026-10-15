@@ -11,10 +11,12 @@
   - 网易 126 : smtp.126.com     465 SSL
 非 SSL 端口通常为 587（STARTTLS），25 端口为明文（不推荐）。
 
-**TLS 版本**：默认最低 **TLS 1.2**。部分老邮件服务器只开 **TLS 1.1**（已被 RFC 8996 弃用），
-会被服务端回 `TLSV1_ALERT_PROTOCOL_VERSION`，表现为「SSL/TLS 握手失败」——看着像凭据问题、
-其实是协议谈不拢。此时在凭据里勾选「**允许旧版 TLS**」（字段 `allow_legacy_tls`）再验证。
-默认**不开**：降级会让授权码走在更弱的信道上，须由用户确认服务器可信后自行开启。
+**TLS 版本**：交给框架的「TLS 版本」策略统一决定（凭据 > 插件预设 > 类别预设 > 全局默认），
+本插件用 `plugin_sdk.ssl_context()` 复用同一套（见 `backend/tls_store.py`）。默认 `auto` =
+最低 **TLS 1.2**、**不降级**。部分老邮件服务器只开 **TLS 1.1**（已被 RFC 8996 弃用），会被服务端回
+`TLSV1_ALERT_PROTOCOL_VERSION`，表现为「SSL/TLS 握手失败」——看着像凭据问题、其实是协议谈不拢，
+此时把该凭据的「TLS 版本」固定成 **1.1**（或 1.0）再验证。降级会让授权码走在更弱的信道上，
+须确认服务器可信后再改。
 
 验证方式：按 ssl 开关选择加密通道后调用 login()。
   登录成功            → valid
@@ -38,10 +40,9 @@ import re
 import smtplib
 import socket
 import ssl
-import warnings
 from typing import Any, Optional
 
-from backend.plugin_sdk import VerifyResult, guarded
+from backend.plugin_sdk import VerifyResult, guarded, ssl_context
 from mail_common import TunneledIMAP4, TunneledIMAP4_SSL, TunneledSMTP, TunneledSMTP_SSL, timeout
 
 SERVICE_NAME = "通用 SMTP 邮箱"
@@ -99,13 +100,15 @@ def _safe_quit(server: Optional[smtplib.SMTP]) -> None:
         pass
 
 
-# ── TLS 上下文（决定最低可协商的 TLS 版本）──────────────────
-# 部分老邮件服务器只支持 **TLS 1.1**（已被 RFC 8996 弃用），而 Python 3.10+
-# 的默认最低版本是 **TLS 1.2** → 服务端直接回 `TLSV1_ALERT_PROTOCOL_VERSION`，表现为
-# 「SSL/TLS 握手失败」，看着像凭据问题、其实是协议版本谈不拢。
-# 该类服务器上，只提 1.3/1.0 被拒、**1.1 成功**、默认策略（≥1.2）失败。
-# 故给出**显式开关**（凭据字段 `allow_legacy_tls`），默认不开——
-# 降级会让授权码走在更弱的信道上，必须由用户确认服务器可信后自行开启。
+# ── TLS 上下文：复用框架的「TLS 版本」策略 ──────────────────
+# 本插件**不自己造 TLS 开关**：邮箱走标准库 smtplib / imaplib 的裸 TCP，用不了
+# make_client()，但可以拿 `plugin_sdk.ssl_context()` 复用框架同一套策略
+# （凭据 > 插件预设 > 类别预设 > 全局默认，见 backend/tls_store.py）。
+# 要连只开 TLS 1.0/1.1 的老服务器，把该凭据的「TLS 版本」固定成 1.1 / 1.0 即可——
+# 框架在固定旧版时会自动放宽 OpenSSL 安全级别，旧套件才协商得出来。
+#
+# 证书校验：与 smtplib / imaplib 默认**行为一致（不校验）**——改成校验会让大量自签名 /
+# 内网邮箱服务器从「能用」变成「验证失败」。故统一 ssl_context(verify=False)。
 _LEGACY_TLS_MARKERS = (
     "TLSV1_ALERT_PROTOCOL_VERSION",   # 服务端明确回「协议版本不行」
     "UNSUPPORTED_PROTOCOL",           # 本地 OpenSSL 直接拒发
@@ -115,64 +118,27 @@ _LEGACY_TLS_MARKERS = (
 
 
 def _looks_like_legacy_tls(exc: Exception) -> bool:
-    """是不是「对面是只开旧版 TLS/旧套件的老服务器」——据此才给得出可操作的提示与重试。
+    """是不是「对面是只开旧版 TLS/旧套件的老服务器」——据此才给得出可操作的提示。
 
     **刻意把 `HANDSHAKE_FAILURE` 也算进来**：同一台只开 TLS 1.1 的服务器，在不同 OpenSSL
     构建上抛的告警不一样（Linux 上是 `TLSV1_ALERT_PROTOCOL_VERSION`，Windows 构建上是
-    `SSLV3_ALERT_HANDSHAKE_FAILURE`）。只认前者会导致 Windows 上**永远不重试**。
+    `SSLV3_ALERT_HANDSHAKE_FAILURE`）。只认前者会导致 Windows 上**永远给不出提示**。
     """
     text = str(exc).upper()
     return any(marker in text for marker in _LEGACY_TLS_MARKERS)
 
 
-def _ssl_context(legacy: bool) -> ssl.SSLContext:
-    """建 TLS 上下文：与 smtplib / imaplib 的默认**行为一致**（不校验证书），只调最低版本。
-
-    **刻意不校验证书**：改成 `create_default_context()` 会让大量自签名 / 内网邮箱服务器
-    从「能用」变成「验证失败」，那是另一个功能变更，不该混在这次修复里。
-    ``legacy=True`` 时把最低版本放宽到 TLS 1.0（覆盖只开 1.1 的老服务器），**并一并降低
-    OpenSSL 安全级别**——只开 TLS 1.1 的老服务器提供的套件（如 `AES256-SHA`）在默认
-    `SECLEVEL=2` 下可能被挡掉，服务端会回 `sslv3 alert handshake failure`。
-    这一点**跨构建不一致**：同为「放宽版本」的上下文，Linux(OpenSSL 3.6)
-    能协商出 `AES256-SHA`，而 Windows 构建上却握手失败，故 legacy 模式统一加 `@SECLEVEL=0`。
-    """
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    if legacy:
-        with warnings.catch_warnings():
-            # Python 3.14 起 TLSv1 会发 DeprecationWarning——这里正是**有意**要用它。
-            warnings.simplefilter("ignore", DeprecationWarning)
-            ctx.minimum_version = ssl.TLSVersion.TLSv1
-        try:
-            ctx.set_ciphers("DEFAULT@SECLEVEL=0")
-        except ssl.SSLError:
-            pass   # 个别 OpenSSL 不认 @SECLEVEL 语法：保持默认密码表即可
-    return ctx
+def _tls_hint() -> str:
+    """旧版 TLS 谈不拢时的统一提示：指路到框架的「TLS 版本」。"""
+    return ("该服务器多半只开了已被 RFC 8996 弃用的 TLS 1.0/1.1。把凭据（或所属插件 / "
+            "类别 / 全局设置）的「TLS 版本」固定成 1.1（或 1.0）后再验证——降级会让授权码 "
+            "走在更弱的信道上，确认服务器可信再改。")
 
 
-def _connect_smtp_ssl(host: str, port: int, legacy_allowed: bool):
-    """隐式 SSL 建连，返回 ``(server, note)``。
-
-    先按默认（≥TLS 1.2）连；**只有在用户已勾选允许旧版 TLS、且失败确属版本谈不拢时**，
-    才降级重试一次，并把「已降级」写进 note 由调用方回显——**绝不静默降级**。
-    """
-    try:
-        return TunneledSMTP_SSL(host, port, timeout=timeout(),
-                                context=_ssl_context(False)), ""
-    except ssl.SSLError as exc:
-        if legacy_allowed and _looks_like_legacy_tls(exc):
-            server = TunneledSMTP_SSL(host, port, timeout=timeout(),
-                                      context=_ssl_context(True))
-            # 把**实际协商到的版本/套件**回显出来，让用户看清链路有多弱（别只说「已降级」）
-            try:
-                ver, cipher = server.sock.version(), server.sock.cipher()[0]
-                note = f"（注意：该服务器只支持旧版 TLS，已协商 {ver} / {cipher}）"
-            except Exception:  # noqa: BLE001
-                note = "（注意：该服务器仅支持已弃用的 TLS 1.0/1.1，连接已降级）"
-            return server, note
-        raise
+def _connect_smtp_ssl(host: str, port: int):
+    """隐式 SSL 建连；TLS 版本按框架策略（``ssl_context()``）。"""
+    return TunneledSMTP_SSL(host, port, timeout=timeout(),
+                            context=ssl_context(verify=False))
 
 
 def _verify_smtp(data: dict) -> VerifyResult:
@@ -190,18 +156,16 @@ def _verify_smtp(data: dict) -> VerifyResult:
     if not password:
         return VerifyResult(status="invalid", message="授权码 / 应用专用密码为空")
 
-    legacy = _as_bool(data.get("allow_legacy_tls"), False)
-    tls_note = ""
     server: Optional[smtplib.SMTP] = None
     try:
         # 建连阶段：区分 SMTP 协议错误、SSL 错误、网络/超时错误
         try:
             if use_ssl:
-                server, tls_note = _connect_smtp_ssl(host, port, legacy)
+                server = _connect_smtp_ssl(host, port)
             else:
                 server = TunneledSMTP(host, port, timeout=timeout())
                 server.ehlo()
-                server.starttls(context=_ssl_context(legacy))
+                server.starttls(context=ssl_context(verify=False))
                 server.ehlo()
         except TimeoutError:
             return VerifyResult(status="error", message=f"连接超时（{int(timeout())} 秒）")
@@ -210,16 +174,9 @@ def _verify_smtp(data: dict) -> VerifyResult:
         except smtplib.SMTPException as exc:
             return VerifyResult(status="error", message=f"SMTP 连接失败: {exc}")
         except ssl.SSLError as exc:
-            if _looks_like_legacy_tls(exc) and not legacy:
-                return VerifyResult(status="error", message=(
-                    "SSL/TLS 握手失败：该服务器不支持 TLS 1.2+"
-                    "（多半只开了已被 RFC 8996 弃用的 TLS 1.0/1.1）。"
-                    "确认该服务器可信后，勾选凭据里的「允许旧版 TLS」再验证。"))
-            if legacy:
-                # 已允许旧版 TLS 仍失败 → 与服务端没有共同套件（老服务器套件太旧）
-                return VerifyResult(status="error", message=(
-                    "SSL/TLS 握手失败：已放宽到旧版 TLS，但仍与服务器谈不出共同的密码套件"
-                    "（该服务器只提供过时套件）。该服务器可能已无法安全验证。"))
+            if _looks_like_legacy_tls(exc):
+                return VerifyResult(status="error",
+                                    message=f"SSL/TLS 握手失败：{_tls_hint()}")
             return VerifyResult(status="error", message=f"SSL/TLS 握手失败: {exc}")
         except socket.gaierror as exc:
             return VerifyResult(status="error", message=f"无法解析服务器地址: {exc}")
@@ -239,7 +196,7 @@ def _verify_smtp(data: dict) -> VerifyResult:
 
         return VerifyResult(
             status="valid",
-            message=f"凭证有效：SMTP 登录成功{tls_note}",
+            message="凭证有效：SMTP 登录成功",
             # 附加信息只放「邮箱账号」与「SMTP 服务器」——端口是配置细节，不占附加信息的位置
             account_info={"smtp_account": username, "smtp_server": host},
         )
@@ -386,11 +343,10 @@ def _safe_imap_close(conn: Optional[imaplib.IMAP4]) -> None:
         pass
 
 
-def _connect_imap(host: str, port: int, password: str, wait: float, legacy: bool = False):
+def _connect_imap(host: str, port: int, password: str, wait: float):
     """建立 IMAP 连接，返回 ``(conn, errors)``。
 
-    ``legacy=True`` 时放宽最低 TLS 版本——与 SMTP 的「允许旧版 TLS」同一开关、
-    同一理由（见 `_ssl_context`）。
+    TLS 版本按框架策略（``ssl_context()``，与 SMTP 同一套「TLS 版本」设置）。
 
     993 是 IMAP over SSL 的惯用端口，直接走 ``IMAP4_SSL``；其它端口常见为 STARTTLS
     （143 等），先试 ``IMAP4`` + ``starttls()``，不行再回落 ``IMAP4_SSL``（也有服务器
@@ -401,13 +357,13 @@ def _connect_imap(host: str, port: int, password: str, wait: float, legacy: bool
 
     def note(label: str, exc: Exception) -> None:
         reason = _redact(_err_text(exc) or type(exc).__name__, password)
-        if _looks_like_legacy_tls(exc) and not legacy:
-            reason += "（该服务器不支持 TLS 1.2+，可勾选「允许旧版 TLS」后重试）"
+        if _looks_like_legacy_tls(exc):
+            reason += "（该服务器多半只开旧版 TLS，可在「TLS 版本」里固定成 1.1 / 1.0 后重试）"
         errors.append(f"{label}：{reason}")
 
     if port == IMAP_DEFAULT_PORT:
         try:
-            return TunneledIMAP4_SSL(host, port, timeout=wait, ssl_context=_ssl_context(legacy)), errors
+            return TunneledIMAP4_SSL(host, port, timeout=wait, ssl_context=ssl_context(verify=False)), errors
         except Exception as exc:  # noqa: BLE001
             note(f"SSL {port}", exc)
             return None, errors
@@ -418,14 +374,14 @@ def _connect_imap(host: str, port: int, password: str, wait: float, legacy: bool
         note(f"明文 {port}", exc)
     else:
         try:
-            conn.starttls(ssl_context=_ssl_context(legacy))
+            conn.starttls(ssl_context=ssl_context(verify=False))
             return conn, errors
         except Exception as exc:  # noqa: BLE001
             note(f"STARTTLS {port}", exc)
             _safe_imap_close(conn)
 
     try:
-        return imaplib.IMAP4_SSL(host, port, timeout=wait, ssl_context=_ssl_context(legacy)), errors
+        return imaplib.IMAP4_SSL(host, port, timeout=wait, ssl_context=ssl_context(verify=False)), errors
     except Exception as exc:  # noqa: BLE001
         note(f"SSL {port}", exc)
     return None, errors
@@ -671,8 +627,7 @@ def _run_inbox(params: dict, data: dict) -> dict:
         count = 20
     folder = _as_text(params.get("folder")) or "INBOX"
 
-    conn, errors = _connect_imap(host, port, password, _imap_wait(),
-                                 _as_bool(data.get("allow_legacy_tls"), False))
+    conn, errors = _connect_imap(host, port, password, _imap_wait())
     if conn is None:
         return {"ok": False, "error": "连接 IMAP 失败：" + "；".join(errors)}
     try:
@@ -746,8 +701,7 @@ def _run_read_mail(params: dict, data: dict) -> dict:
     if not uid:
         return {"ok": False, "error": "缺少邮件序号，请从「查看收件箱」行内「看正文」进入"}
 
-    conn, errors = _connect_imap(host, port, password, _imap_wait(),
-                                 _as_bool(data.get("allow_legacy_tls"), False))
+    conn, errors = _connect_imap(host, port, password, _imap_wait())
     if conn is None:
         return {"ok": False, "error": "连接 IMAP 失败：" + "；".join(errors)}
     try:

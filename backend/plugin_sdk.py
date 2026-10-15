@@ -1,7 +1,8 @@
 """插件 SDK：框架向插件暴露的**唯一**接口层。
 
 提供：结果类型 `VerifyResult`；日志 `log`/`log_debug`；代理 `proxy` 与客户端 `make_client`；
-TLS 版本策略 `tls_version()`（`auto`/`1.0`/`1.1`/`1.2`/`1.3`，`make_client` 自动应用）；
+TLS 版本策略 `tls_version()` 与 `ssl_context()`（`auto`/`1.0`/`1.1`/`1.2`/`1.3`；`make_client`
+自动应用，**走裸 TCP 的插件**（如邮箱的 smtplib / imaplib）用 `ssl_context()` 复用同一策略）；
 响应解析 `safe_json`/`body_snippet`；异常兜底 `guarded`；超时 `TIMEOUT`（默认值）与
 `timeout()`（实际生效值，读 `VAULT_TIMEOUT`）；写/列表辅助 `download_to_file`/`first_list`；
 脱敏 `mask_secret`（写日志/提示时用，**不要自己切字符串**）。
@@ -152,6 +153,11 @@ _PINNED_VERSIONS = {
 }
 _VALID_MODES = ("auto", *_PINNED_VERSIONS)
 
+# 「旧版」两个固定档：固定它们时要**一并放宽 OpenSSL 安全级别**，否则老服务器提供的
+# 套件（如 AES256-SHA）在默认 SECLEVEL=2 下被挡掉，服务端回 sslv3 alert handshake
+# failure——「固定成 1.1 却仍然握手失败」，等于这个档位形同虚设。
+_LEGACY_PINS = ("1.0", "1.1")
+
 # OpenSSL 3 起不再默认允许「对端不支持 RFC 5746 安全重协商」的握手，于是**任何会改写
 # ServerHello 的前置中间设备**（企业网关、部分代理客户端）都会让握手死在
 # `UNSAFE_LEGACY_RENEGOTIATION_DISABLED`。这里恢复 OpenSSL 1.1 的默认行为——只放宽
@@ -187,6 +193,16 @@ def _ssl_context(pinned: Optional[str], verify) -> ssl.SSLContext:
         context.verify_mode = ssl.CERT_NONE
     if pinned in _PINNED_VERSIONS:
         context.minimum_version = context.maximum_version = _PINNED_VERSIONS[pinned]
+        if pinned in _LEGACY_PINS:
+            try:
+                context.set_ciphers("DEFAULT@SECLEVEL=0")
+            except ssl.SSLError:
+                pass   # 个别 OpenSSL 不认 @SECLEVEL 语法：保持默认密码表即可
+    else:
+        # auto：**显式**把下限钉在 TLS 1.2。`create_default_context()` 自己不定下限
+        # （minimum_version 停在 SSLv3 这个符号值），实际下限全看构建里的 OpenSSL——
+        # 「auto = 标准协商、失败回退 1.2」这句文档得靠它才成立，也免得某个构建悄悄放行更旧的协议。
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.options |= _OP_LEGACY_SERVER_CONNECT
     return context
 
@@ -271,6 +287,25 @@ def make_client(follow_redirects: bool = True,
         follow_redirects=follow_redirects,
         transport=transport,
     )
+
+
+def ssl_context(verify: Optional[bool] = None) -> ssl.SSLContext:
+    """按当前 TLS 版本策略（``tls_version()``）建一个 SSL 上下文。
+
+    给**不走 httpx** 的插件复用同一套策略：它们用不了 ``make_client()``，但可以拿本函数
+    拿到「按 凭据 > 插件预设 > 类别预设 > 全局默认 解析出的 TLS 版本」建好的上下文。
+    典型是邮箱——标准库 ``smtplib`` / ``imaplib`` 走裸 TCP，只认一个 ``ssl_context``。
+
+    ``verify=False`` 关证书校验（自签 / 内网自建），语义同 ``make_client(verify=False)``；
+    ``None`` = 默认校验。
+
+    与 ``auto`` 的差别：``auto``（默认）就是「按标准协商（≥TLS 1.2）、**不降级**」——
+    要连只开 TLS 1.0/1.1 的老服务器，把「TLS 版本」固定成 ``1.0`` / ``1.1``（该档位会自动
+    放宽 OpenSSL 安全级别，否则旧套件协商不出来）。
+    """
+    mode = tls_version()
+    pinned = mode if mode in _PINNED_VERSIONS else None
+    return _ssl_context(pinned, verify=False if verify is False else True)
 
 
 def safe_json(response: httpx.Response) -> Optional[dict]:

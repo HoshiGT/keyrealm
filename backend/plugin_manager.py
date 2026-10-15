@@ -594,10 +594,12 @@ def plugin_uses_proxy(credential_type: str) -> bool:
 
     不能用「模块里有没有 `make_client`」判定——那会漏掉**间接**发请求的插件：例如经
     `llm_protocols` 的 `probe_openai_chat` / `chat_completion` 发请求的，会被误判为
-    「不走代理」而隐藏该选项。
+    「不走代理」而隐藏该选项。同理，走裸 TCP 的邮箱（`smtplib` / `imaplib`）**也仍走代理**：
+    它用 `mail_common` 的自建 socket 读 `plugin_sdk.proxy()`、穿 SOCKS / HTTP CONNECT 隧道。
 
-    真正不支持 HTTP 代理的插件（走标准库 `smtplib` / 无出网请求的）在**模块级显式**声明
-    `USES_PROXY = False` 即可排除，例如 `mail_smtp`、`im_wechat_ilink`。
+    真正**无出网请求**的插件在**模块级显式**声明 `USES_PROXY = False` 即可排除
+    （见 `docs/PLUGIN_GUIDE.md` §2.5）。**目前仓库里没有任何插件这样做**——别照着旧版本
+    的注释去给邮箱 / 微信 iLink 加这个声明，那会把有用的「使用代理」选项藏掉。
     """
     module = get_module(credential_type)
     if module is None:
