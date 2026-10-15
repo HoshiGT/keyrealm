@@ -24,6 +24,10 @@ SCOPE_PLUGIN = "plugin"
 # 与 manifest 字段无关、但允许预设的保留键
 _RESERVED_KEYS = {KEY_MODE, KEY_ID, KEY_TLS}
 
+# 公开只读视图：这些键**属于凭据数据但不来自任何 manifest 字段**，凡「按字段表比对」的
+# 校验（如备份导入的未知字段检查）都必须先把它们豁免，否则会把正常的保留键当成脏数据。
+RESERVED_KEYS = frozenset(_RESERVED_KEYS)
+
 
 def _iter_fields(record: dict):
     for field in record.get("fields_schema") or []:

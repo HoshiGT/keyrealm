@@ -9,7 +9,9 @@
 
 1. 插件**存在且启用**——缺插件或插件被禁用都不导（禁用即功能闸门关闭，导进去也用不了）；
 2. 备份里的字段**都能在当前插件里找到**——多出未知字段说明两边同构性已经不成立，
-   与其猜它的含义，不如让用户自己看一眼；
+   与其猜它的含义，不如让用户自己看一眼。**保留键例外**（`_proxy_mode` / `_proxy_id` /
+   `_tls_version`，见 `preset_store.RESERVED_KEYS`）：它们是凭据数据的一部分、却不由任何
+   manifest 字段声明，不豁免的话**每条经表单存过的凭据都会因 `_proxy_mode` 被判失败**；
 3. 插件的**必填字段在备份里有着落**——备份里没有、且插件也没给默认值的必填项，
    填进去就是一条注定验证失败的凭据。反之，插件新增的**选填**字段一律留空，
    这正是「库扩增后新列留空」的落点。
@@ -27,6 +29,7 @@ from typing import Any, Optional
 from . import data_upgrades
 from . import database as db
 from . import plugin_manager
+from . import preset_store
 from .crypto import decrypt, decrypt_dict, encrypt, encrypt_dict, mask_secret
 from .logger import LOG_DIR
 
@@ -96,7 +99,7 @@ def _field_visible(field: dict, values: dict) -> bool:
 def _prepare_entry(schema: list, data: dict) -> tuple:
     """按当前插件的字段表规整一条备份数据，返回 ``(effective, errors)``。
 
-    - 备份里有、字段表里没有的键 → 记错误（未知字段）；
+    - 备份里有、字段表里没有的键 → 记错误（未知字段）；**保留键除外**（见下）；
     - 字段表里有、备份里没有的键 → 留空；**必填项**若带 default 则用 default 补上
       （插件后加的「模式选择」这类字段就是这种形态：备份里没有，但默认值让它依然可用）；
     - 补完默认值后再逐个核对必填项，仍为空的就是错误。
@@ -106,7 +109,8 @@ def _prepare_entry(schema: list, data: dict) -> tuple:
     keys = {f.get("key") for f in schema if f.get("key")}
     errors: list[str] = []
 
-    unknown = sorted(k for k in data if k not in keys)
+    # 保留键（代理 / TLS 版本）不是 manifest 字段，但确实属于凭据数据——从「未知字段」里豁免。
+    unknown = sorted(k for k in data if k not in keys and k not in preset_store.RESERVED_KEYS)
     if unknown:
         errors.append("备份中的字段在当前插件中不存在：" + "、".join(unknown))
 
