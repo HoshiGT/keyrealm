@@ -201,7 +201,7 @@ def unlock(password: str) -> dict:
                       up["upgraded"], up.get("from"), up.get("to"))
     except Exception:  # noqa: BLE001 - 数据升级失败不该影响解锁
         _log.exception("凭据数据升级失败（不影响解锁）")
-    # 解锁后补跑一次「自动检测更新」——启动时应用还没解锁，私有仓库的检查多半没成
+    # 解锁后补跑一次「自动检测更新」——启动时应用还没解锁、访问令牌尚未注入，那次检查可能没成
     start_auto_update_check()
     return {"ok": True, "message": "解锁成功"}
 
@@ -1714,8 +1714,8 @@ def set_update_proxy(mode: str, proxy_id: str = "") -> dict:
     return updater.set_update_proxy(mode, proxy_id)
 
 
-# ── 更新访问令牌（私有仓库）───────────────────────────────
-# 本仓库若为私有，匿名访问 GitHub 会以「要用户名」失败（检查 TLS 报 401/403、公开资产 URL 报 404）。
+# ── 更新访问令牌（可选）───────────────────────────────────
+# 本仓库已公开，匿名也能检查与更新；填令牌是为认证 GitHub API（提速率上限）与「仓库又转回私有」的情形。
 # 令牌用**主密码加密**后存 settings（与凭据同口径）；明文只在本进程 env 与内存里。
 # 一旦注入 env，updater 的 git / 下载，以及「交棒」起的更新子进程都会自动带上（见 updater.ENV_TOKEN）。
 
@@ -1723,7 +1723,7 @@ def _sync_update_token(force: bool = False) -> str:
     """把已存的令牌解密后注入本进程 env（幂等）；返回当前生效的令牌（无则 ``""``）。
 
     ``force=True`` 时忽略 env 里的现值，重新按 settings 解析（保存/清除令牌后调用）。
-    未解锁 / 未配置 / 解密失败都不抛错——更新退化为「匿名走公开仓库」，只是对私有仓库会失败。
+    未解锁 / 未配置 / 解密失败都不抛错——更新退化为「匿名访问」，对公开仓库照常可用（只受匿名限流）。
     """
     if not force:
         cur = os.environ.get(updater.ENV_TOKEN, "")
@@ -1777,7 +1777,7 @@ _update_task_id: Optional[str] = None
 
 # ── 自动检测更新（启动时查一次）───────────────────────────
 # 「自动检测更新」默认开启：应用启动（以及首次解锁）后**在后台查一次**，发现新版本就通知前端。
-# 未解锁时拿不到私有仓库的访问令牌，检查多半失败——此时**不标记完成**，留待 unlock() 后再试一次。
+# 未解锁时拿不到访问令牌；公开仓库即便没有令牌也能查，但解锁后（令牌注入）再补一次更稳，故此时**不标记完成**。
 
 # ── 检查更新（后台任务 + 结果持久化）────────────────────────
 # 「检查更新」与「自动检测更新」共用同一台机器：**同一时刻只跑一个**；结果写
@@ -1839,7 +1839,7 @@ def _run_check(source: str) -> None:
     with _check_lock:
         tid = _check_state["task_id"]
     try:
-        _sync_update_token()          # 私有仓库要令牌（解锁后才拿得到）
+        _sync_update_token()          # 注入令牌（走认证请求；解锁后才拿得到）
         res = updater.check_update(updater.get_channel())
     except Exception as exc:  # noqa: BLE001 - 检查边界兜底，绝不抛
         _log.warning("检查更新异常：%s", type(exc).__name__)
@@ -1928,7 +1928,7 @@ def start_update(kind: str = "formal", restart: bool = True, terminal: str = "au
     if _update_task_id and (tasks.get(_update_task_id) or {}).get("status") == tasks.RUNNING:
         return {"ok": False, "message": "已有更新准备在进行中，请稍候或先取消"}
 
-    _sync_update_token()   # 私有仓库下载需要令牌（注入 env，交棒子进程会继承）
+    _sync_update_token()   # 注入令牌（注入 env，交棒子进程会继承）
 
     label = "正式版" if kind == "formal" else "测试版"
     task = tasks.create("update", f"准备更新（{label}）")

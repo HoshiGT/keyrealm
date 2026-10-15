@@ -459,7 +459,7 @@ async function applyUpdateProxy(value) {
   }
 }
 
-// 访问令牌（私有仓库）：后端加密保存，前端只拿掩码；不回显明文。
+// 访问令牌（可选：认证 GitHub API 提速率上限；仓库转私有时必需）：后端加密保存，前端只拿掩码；不回显明文。
 const updateTokenConfigured = ref(false)
 const updateTokenMask = ref('')
 const updateTokenInput = ref('')
@@ -503,7 +503,7 @@ async function saveUpdateToken() {
 async function clearUpdateToken() {
   try {
     await ElMessageBox.confirm(
-      '清除后，对私有仓库的检查与更新将恢复为匿名访问（会失败）。是否继续？',
+      '清除后，检查与更新将恢复为匿名访问——仓库公开时照常可用，只是会走 GitHub API 的匿名限流。是否继续？',
       '清除访问令牌',
       { type: 'warning', confirmButtonText: '清除', cancelButtonText: '取消' },
     )
@@ -1052,7 +1052,7 @@ onMounted(() => refreshAll(false))
         <div class="setting-info">
           <div class="setting-label">访问令牌</div>
           <div class="setting-desc">
-            私有仓库填 GitHub PAT（Contents: read）；公开仓库留空。令牌加密保存，明文不落库。
+            可选。仓库已公开，不填也能检查与更新；填了走 GitHub API，认证后速率上限更高、不易被匿名限流；仓库若转私有则必须填。令牌加密保存，明文不落库。
           </div>
           <div v-if="updateTokenConfigured" class="setting-path">
             已配置：{{ updateTokenMask }}

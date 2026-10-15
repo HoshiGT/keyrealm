@@ -204,7 +204,7 @@ def _restored_proxy_env() -> Optional[dict]:
     return env
 
 
-# 私有仓库：GitHub 访问令牌（PAT）。
+# GitHub 访问令牌（PAT）：**可选**——认证后 API 速率上限更高；仓库转为私有时必需。
 # 取值优先级：显式入参 > 环境变量 ``ENV_TOKEN``。应用内由 ``backend/api.py`` 解密 settings 后
 # 写入本进程 env（见 ``api._sync_update_token``）；四个独立脚本（``scripts/*.py``）直接读环境变量。
 # 令牌**绝不**进 URL / argv（会出现在 ``ps`` 与错误信息里），只经 env 传给 git。
@@ -245,7 +245,7 @@ _PYI_ENV = {"PYINSTALLER_RESET_ENVIRONMENT": "1"}
 
 
 def _child_env(extra: Optional[dict] = None, token: Optional[str] = None) -> dict:
-    """子进程环境 = 当前环境 + 隔离 PyInstaller 临时目录 + 更新代理 + 私有仓库认证（+ 额外项）。"""
+    """子进程环境 = 当前环境 + 隔离 PyInstaller 临时目录 + 更新代理 + 访问令牌认证（+ 额外项）。"""
     return {**os.environ, **_PYI_ENV, **proxy_env(), **_git_auth_env(token), **(extra or {})}
 
 
@@ -391,7 +391,7 @@ def release_asset_url(ver: str) -> str:
     """按 CI 的命名约定拼出 Release 资产下载地址（无需 GitHub API，也就没有速率限制）。
 
     ``KEYREALM_UPDATE_ASSET_BASE`` 可覆盖基址（默认 GitHub 的 ``releases/download``），
-    便于离线自测下载段（指向本地静态服务）。私有仓库仍需令牌走 API，见 ``download_release_asset``。
+    便于离线自测下载段（指向本地静态服务）。**私有**仓库才需要令牌走 API；公开仓库直接走公开下载 URL，见 ``download_release_asset``。
     """
     tag = ver if ver.startswith("v") else f"v{ver}"
     base = os.environ.get("KEYREALM_UPDATE_ASSET_BASE", "").strip().rstrip("/")
@@ -438,8 +438,8 @@ def download_release_asset(ver: str, dest: Path, *, token: Optional[str] = None,
                            should_cancel: Optional[Callable[[], bool]] = None) -> dict:
     """下载某正式版的预编译包到 ``dest``（**流式**，可报进度、可取消）。
 
-    - **有令牌**（私有仓库）：走 GitHub API 的资产端点——先 `/releases/tags/<tag>` 找到同名资产，
-      再 `/releases/assets/<id>` 带 `Accept: application/octet-stream` 取字节。公开下载 URL 对私有仓库会 **404**。
+    - **有令牌**：走 GitHub API 的资产端点——先 `/releases/tags/<tag>` 找到同名资产，
+      再 `/releases/assets/<id>` 带 `Accept: application/octet-stream` 取字节（认证后不受匿名限流）。
     - **无令牌**（公开仓库）：直接用 `releases/download/<tag>/<asset>` 公开 URL（基址可经
       ``KEYREALM_UPDATE_ASSET_BASE`` 覆盖，便于离线自测）。
     两者都走「更新代理」，先写 `.part` 再原子替换。``progress_cb(done, total)`` 按块回调
@@ -631,8 +631,8 @@ def _git(args: list[str], cwd: Optional[Path] = None, timeout: float = 60,
 
 
 _NET_HINT = "；若本机访问 GitHub 需要代理，请在「设置 → 网络与代理」配置默认代理（更新会复用该代理）后重试"
-# 私有仓库：匿名访问 GitHub 会以「要用户名」失败，这时该提示去填访问令牌
-_AUTH_HINT = "；若是私有仓库，请到「设置 → 更新 → 访问令牌」填一个 PAT（Contents: read）后重试"
+# 鉴权失败时的追加提示：本仓库已公开，报鉴权错多半是「又转回私有」或令牌失效
+_AUTH_HINT = "；若仓库已转为私有（或令牌失效），请到「设置 → 更新 → 访问令牌」填一个 PAT（Contents: read）后重试"
 
 
 def _git_fail_hint(stderr: str) -> str:
